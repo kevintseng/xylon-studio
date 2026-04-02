@@ -8,9 +8,11 @@ AI 驅動的晶片設計自動化平台。
 
 ## 展示
 
-<video src="https://github.com/kevintseng/xylon-studio/releases/download/v0.2.0/demo.mp4" width="100%" controls autoplay loop muted playsinline></video>
-
-> 本地建構：`cd demo-video && npm install && npm run render` | [影片原始碼](demo-video/)
+> **20 秒平台導覽** — 設計龍、驗證龍、歷史紀錄與工作區。
+>
+> 本地建構影片：`cd demo-video && npm install && npm run render`
+>
+> 影片原始碼請見 [demo-video/](demo-video/)。
 
 ---
 
