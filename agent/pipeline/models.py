@@ -114,6 +114,8 @@ class PipelineConfig:
 @dataclass
 class TestScenario:
     """A single test scenario within a test plan."""
+    __test__ = False  # Prevent pytest collection
+
     name: str
     description: str
     category: str  # "functional", "edge_case", "reset", "protocol", "boundary"
@@ -136,6 +138,7 @@ class TestPlan:
         coverage_goals: Recommended coverage targets
         raw_llm_output: Original LLM response for debugging
     """
+    __test__ = False  # Prevent pytest collection
     module_name: str
     port_analysis: Dict[str, Any]
     scenarios: List[TestScenario]

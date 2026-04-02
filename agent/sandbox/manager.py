@@ -15,6 +15,7 @@ Usage:
 
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -179,7 +180,6 @@ class SandboxManager:
             }
         finally:
             # Clean up local temp files
-            import shutil
             shutil.rmtree(work_dir, ignore_errors=True)
 
     def synthesize_verilog(self, verilog_file: str, output_file: str = None) -> dict:

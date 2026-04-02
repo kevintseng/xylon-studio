@@ -244,10 +244,9 @@ def test_extract_uncovered_lines():
 
 def test_parse_coverage_data_none():
     report = _parse_coverage_data(None)
-    assert report is not None
-    assert report.score == 0.0
+    assert report is None
 
 
 def test_parse_coverage_data_failed():
     report = _parse_coverage_data({"success": False, "raw_report": ""})
-    assert report.score == 0.0
+    assert report is None

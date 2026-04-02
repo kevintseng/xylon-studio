@@ -116,14 +116,7 @@ def _parse_coverage_data(coverage_data: dict | None) -> CoverageReport | None:
     """
     if not coverage_data or not coverage_data.get("success"):
         logger.warning("No coverage data available")
-        return CoverageReport(
-            line_coverage=0.0,
-            toggle_coverage=0.0,
-            branch_coverage=0.0,
-            score=0.0,
-            uncovered_lines=[],
-            raw_output=coverage_data.get("raw_report", "") if coverage_data else "",
-        )
+        return None
 
     raw_report = coverage_data.get("raw_report", "")
     summary = coverage_data.get("summary", "")

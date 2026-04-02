@@ -31,6 +31,7 @@ class PipelineRequest(BaseModel):
     testbench_code: Optional[str] = Field(
         None,
         description="Testbench source code (optional — if None and llm_provider set, auto-generated)",
+        max_length=500_000,
     )
     coverage_target: float = Field(
         0.8,
