@@ -2,7 +2,7 @@
 
 AI-driven chip design automation platform.
 
-📖 **[繁體中文](README.zh-TW.md)**
+🌐 **[xylonstud.io](https://xylonstud.io)** | 📖 **[繁體中文](README.zh-TW.md)**
 
 ---
 

@@ -371,3 +371,4 @@ scripts/prepare-dgx*.sh
 # ====================
 .git/
 .gitattributes
+.gstack/

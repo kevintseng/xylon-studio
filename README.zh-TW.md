@@ -2,7 +2,7 @@
 
 AI 驅動的晶片設計自動化平台。
 
-📖 **[English](README.md)** | **繁體中文**
+🌐 **[xylonstud.io](https://xylonstud.io)** | 📖 **[English](README.md)** | **繁體中文**
 
 ---
 
