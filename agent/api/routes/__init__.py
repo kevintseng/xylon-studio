@@ -2,6 +2,6 @@
 API Routes for XylonStudio.
 """
 
-from agent.api.routes import design, verification
+from agent.api.routes import design, verification, pipeline
 
-__all__ = ['design', 'verification']
+__all__ = ['design', 'verification', 'pipeline']

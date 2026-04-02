@@ -284,17 +284,10 @@ backup/
 !docs/
 
 # ====================
-# TESTS & DEVELOPMENT FILES (不上傳到 GitHub)
+# TESTS & DEVELOPMENT FILES
 # ====================
-# Test files and directories
-agent/tests/
-web/__tests__/
-test_*.py
-*_test.py
-*.test.ts
-*.test.tsx
-*.spec.ts
-*.spec.tsx
+# Note: agent/tests/ and test files ARE tracked in git.
+# Only exclude generated test artifacts.
 jest.config.js
 jest.setup.js
 web/jest.setup.js

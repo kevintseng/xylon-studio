@@ -15,7 +15,9 @@ Usage:
 
 import logging
 import os
+import subprocess
 import sys
+import tempfile
 from agent.sandbox.executor import SandboxExecutor, ExecutionError
 
 # Configure logging
@@ -120,6 +122,66 @@ class SandboxManager:
                 'duration_seconds': 0,
             }
 
+    def lint_verilog_string(self, verilog_code: str) -> dict:
+        """
+        Lint Verilog from a code string.
+
+        Writes the code to a temp file, copies it into the container,
+        runs lint, and cleans up.
+
+        Args:
+            verilog_code: Verilog source code as a string
+
+        Returns:
+            dict with success, warnings, errors (same as lint_verilog)
+        """
+        work_dir = tempfile.mkdtemp(prefix="xylon-lint-")
+        temp_file = os.path.join(work_dir, "design.v")
+
+        try:
+            with open(temp_file, "w", encoding="utf-8") as f:
+                f.write(verilog_code)
+
+            container_path = f"/tmp/xylon-work/{os.path.basename(work_dir)}/design.v"
+
+            # Create directory in container and copy file
+            subprocess.run(
+                ["docker", "exec", self.verilator_container,
+                 "mkdir", "-p", os.path.dirname(container_path)],
+                capture_output=True, timeout=10, check=False,
+            )
+            subprocess.run(
+                ["docker", "cp", temp_file,
+                 f"{self.verilator_container}:{container_path}"],
+                capture_output=True, timeout=10, check=True,
+            )
+
+            result = self.lint_verilog(container_path)
+
+            # Clean up container file
+            subprocess.run(
+                ["docker", "exec", self.verilator_container,
+                 "rm", "-rf", os.path.dirname(container_path)],
+                capture_output=True, timeout=10, check=False,
+            )
+
+            return result
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to copy file to container: {e}")
+            return {
+                "success": False,
+                "warnings": [],
+                "errors": [f"Container file transfer failed: {e}"],
+                "stdout": "",
+                "stderr": str(e),
+                "duration_seconds": 0,
+            }
+        finally:
+            # Clean up local temp files
+            import shutil
+            shutil.rmtree(work_dir, ignore_errors=True)
+
     def synthesize_verilog(self, verilog_file: str, output_file: str = None) -> dict:
         """
         Synthesize Verilog using Yosys.
@@ -180,7 +242,10 @@ class SandboxManager:
                 'duration_seconds': 0,
             }
 
-    def run_verilator_sim(self, rtl_file: str, tb_file: str, timeout: int = 60) -> dict:
+    def run_verilator_sim(
+        self, rtl_file: str, tb_file: str,
+        timeout: int = 60, coverage: bool = False,
+    ) -> dict:
         """
         Run Verilator simulation with testbench.
 
@@ -188,41 +253,44 @@ class SandboxManager:
             rtl_file: Path to RTL .v file
             tb_file: Path to testbench .sv file
             timeout: Simulation timeout in seconds
+            coverage: Enable Verilator coverage collection (--coverage)
 
         Returns:
-            dict with simulation results (stdout, stderr, vcd_file)
+            dict with simulation results (stdout, stderr, vcd_file,
+            and coverage_data if coverage=True)
 
         Example:
             manager = SandboxManager()
             result = manager.run_verilator_sim(
                 "/tmp/adder.v",
-                "/tmp/tb_adder.sv"
+                "/tmp/tb_adder.sv",
+                coverage=True
             )
             if result['success']:
-                print(result['stdout'])
+                print(result['coverage_data'])
         """
-        logger.info(f"Running simulation: RTL={rtl_file}, TB={tb_file}")
+        logger.info(f"Running simulation: RTL={rtl_file}, TB={tb_file}, coverage={coverage}")
 
         # Extract module name from RTL file
-        import re
         module_name = os.path.splitext(os.path.basename(rtl_file))[0]
 
         # Build Verilator command for simulation
-        # 1. Verilate to C++
-        # 2. Compile with g++
-        # 3. Run simulation
         try:
             # Step 1: Verilate
+            verilate_cmd = [
+                "verilator",
+                "--cc",              # Generate C++ files
+                "--exe",             # Build executable
+                "--build",           # Build automatically
+                "-Wall",             # All warnings
+            ]
+            if coverage:
+                verilate_cmd.append("--coverage")
+
+            verilate_cmd.extend([rtl_file, tb_file])
+
             verilate_result = self.verilator.execute(
-                [
-                    "verilator",
-                    "--cc",              # Generate C++ files
-                    "--exe",             # Build executable
-                    "--build",           # Build automatically
-                    "-Wall",             # All warnings
-                    rtl_file,
-                    tb_file
-                ],
+                verilate_cmd,
                 timeout=timeout
             )
 
@@ -232,6 +300,7 @@ class SandboxManager:
                     'stdout': verilate_result.stdout,
                     'stderr': verilate_result.stderr,
                     'vcd_file': None,
+                    'coverage_data': None,
                     'duration_seconds': verilate_result.duration_seconds
                 }
 
@@ -248,11 +317,17 @@ class SandboxManager:
             if os.path.exists(vcd_pattern):
                 vcd_file = vcd_pattern
 
+            # Step 3: Collect coverage data if enabled
+            coverage_data = None
+            if coverage and run_result.success:
+                coverage_data = self._collect_coverage_data(module_name, timeout)
+
             return {
                 'success': run_result.success,
                 'stdout': run_result.stdout,
                 'stderr': run_result.stderr,
                 'vcd_file': vcd_file,
+                'coverage_data': coverage_data,
                 'duration_seconds': run_result.duration_seconds
             }
 
@@ -263,7 +338,54 @@ class SandboxManager:
                 'stdout': e.stdout,
                 'stderr': e.stderr,
                 'vcd_file': None,
+                'coverage_data': None,
                 'duration_seconds': 0
+            }
+
+    def _collect_coverage_data(self, module_name: str, timeout: int) -> dict:
+        """
+        Collect and parse Verilator coverage data after simulation.
+
+        Verilator writes coverage to ./coverage.dat by default.
+        We use verilator_coverage to generate a human-readable report.
+
+        Args:
+            module_name: Module name for file lookup
+            timeout: Timeout for coverage collection commands
+
+        Returns:
+            dict with line_coverage, toggle_coverage, branch_coverage, raw_report
+        """
+        try:
+            # Run verilator_coverage to generate annotated report
+            cov_result = self.verilator.execute(
+                ["verilator_coverage", "--annotate", "coverage_annotated",
+                 "coverage.dat"],
+                timeout=timeout // 4
+            )
+
+            raw_report = cov_result.stdout + "\n" + cov_result.stderr
+
+            # Parse coverage summary from verilator_coverage output
+            # Also try reading the annotated output for detailed info
+            summary_result = self.verilator.execute(
+                ["verilator_coverage", "--annotate-min", "1", "coverage.dat"],
+                timeout=timeout // 4
+            )
+
+            return {
+                "raw_report": raw_report,
+                "summary": summary_result.stdout,
+                "success": cov_result.success,
+            }
+
+        except ExecutionError as e:
+            logger.warning(f"Coverage collection failed: {e.message}")
+            return {
+                "raw_report": "",
+                "summary": "",
+                "success": False,
+                "error": e.message,
             }
 
     def _parse_gate_count(self, yosys_output: str) -> int:
