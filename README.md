@@ -6,6 +6,16 @@ AI-driven chip design automation platform.
 
 ---
 
+## Demo
+
+> **20-second platform walkthrough** — Design Dragon, Verification Dragon, History & Workspace.
+>
+> Build the demo video locally: `cd demo-video && npm install && npm run render`
+>
+> See [demo-video/](demo-video/) for the Remotion source.
+
+---
+
 ## Overview
 
 XylonStudio automates chip design workflows using AI agents and open-source EDA tools.

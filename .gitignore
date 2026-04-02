@@ -343,6 +343,13 @@ SESSION-SUMMARY-*.md
 CLOUDFLARE-EMAIL-QUICK-SETUP.md
 WORKLOG.md
 
+# UX audit reports
+*_UX_AUDIT_*.md
+*_AUDIT_*.md
+
+# Browser automation temp data
+.playwright-mcp/
+
 # Security audit reports (internal use only)
 SECURITY-AUDIT-REPORT.md
 SECURITY-CHECK-SUMMARY.md
