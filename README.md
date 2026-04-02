@@ -8,11 +8,9 @@ AI-driven chip design automation platform.
 
 ## Demo
 
-> **20-second platform walkthrough** — Design Dragon, Verification Dragon, History & Workspace.
->
-> Build the demo video locally: `cd demo-video && npm install && npm run render`
->
-> See [demo-video/](demo-video/) for the Remotion source.
+<video src="https://github.com/kevintseng/xylon-studio/releases/download/v0.2.0/demo.mp4" width="100%" controls autoplay loop muted playsinline></video>
+
+> Build locally: `cd demo-video && npm install && npm run render` | [Remotion source](demo-video/)
 
 ---
 
