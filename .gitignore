@@ -1,0 +1,366 @@
+# ===================================================================
+# XylonStudio .gitignore
+# Purpose: Protect proprietary assets and sensitive information
+# Strategy: Monorepo with open source core + closed source enterprise
+# ===================================================================
+
+# ====================
+# PROPRIETARY DIRECTORY (閉源核心)
+# ====================
+# This directory contains all closed-source intellectual property
+proprietary/
+
+# ====================
+# SENSITIVE CREDENTIALS & KEYS
+# ====================
+# API keys, tokens, secrets
+*.key
+*.pem
+*.cert
+*.crt
+*.p12
+*.pfx
+.env
+.env.*
+!.env.example
+secrets.yaml
+secrets.json
+credentials.json
+auth.json
+
+# DGX Spark access credentials
+dgx-*.key
+dgx-*.pem
+ssh-config-dgx
+
+# Cloud provider credentials
+gcp-*.json
+aws-credentials
+azure-*.json
+
+# Database connection strings
+database.url
+db-connection.conf
+
+# LLM API keys (OpenAI, Anthropic, etc.)
+openai.key
+anthropic.key
+claude.key
+
+# ====================
+# CUSTOMER DATA & PROPRIETARY DESIGNS
+# ====================
+# User-submitted chip designs (contains IP)
+customer-data/
+user-designs/
+submissions/
+
+# Proprietary example designs (non-public)
+examples/proprietary/
+examples/enterprise/
+
+# Generated designs (may contain customer IP)
+designs/*.v
+designs/*.sv
+designs/*.json
+!designs/examples/  # Allow example designs
+
+# ====================
+# MODEL WEIGHTS & TRAINING DATA
+# ====================
+# Fine-tuned models
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.h5
+*.onnx
+*.pb
+
+# Training datasets
+datasets/
+training-data/
+fine-tuning-data/
+
+# Model checkpoints
+checkpoints/
+model-weights/
+models/
+
+# LoRA/QLoRA adapters
+adapters/
+lora-weights/
+
+# ====================
+# EDA TOOL OUTPUTS (Large Binary Files)
+# ====================
+# Synthesis outputs
+*.blif
+*.edif
+*.json.gz
+*.v.synth
+eda-scripts/output/
+
+# Place & Route outputs
+*.def
+*.lef
+*.odb
+*.db
+*.sdc
+
+# Verification outputs
+*.vcd
+*.fsdb
+*.wlf
+*.dump
+
+# DRC/LVS reports
+*.mag
+*.ext
+*.spice.raw
+
+# ====================
+# BUILD ARTIFACTS
+# ====================
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+# lib/ - Removed to allow web/lib/ (Python build libs are in build/dist/ anyway)
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+
+# Node.js / Next.js
+node_modules/
+.next/
+out/
+.vercel
+.turbo
+*.tsbuildinfo
+next-env.d.ts
+!web/lib/  # Allow Next.js lib directory
+
+# ====================
+# DEVELOPMENT ENVIRONMENT
+# ====================
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+agent/venv/
+
+# IDE settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Docker volumes (may contain sensitive data)
+docker-volumes/
+.docker/
+
+# Logs (may contain sensitive runtime info)
+*.log
+logs/
+*.log.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# ====================
+# DATABASE & CACHE
+# ====================
+# PostgreSQL
+*.sql.dump
+*.pgdump
+
+# Redis
+dump.rdb
+
+# SQLite
+*.db
+*.sqlite
+*.sqlite3
+
+# Cache
+cache/
+
+# ====================
+# MONITORING & TELEMETRY (May Contain PII)
+# ====================
+# Prometheus data
+prometheus-data/
+
+# Grafana dashboards (may contain customer names)
+grafana/provisioning/dashboards/*.json
+!grafana/provisioning/dashboards/template-*.json
+
+# ====================
+# TESTING ARTIFACTS
+# ====================
+# Coverage reports
+.coverage
+coverage/
+htmlcov/
+*.cover
+.pytest_cache/
+.tox/
+
+# Test outputs
+test-results/
+test-reports/
+
+# ====================
+# TEMPORARY FILES
+# ====================
+# OS temp files
+.tmp/
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+
+# Design temporary files (generated during testing)
+/tmp/*.v
+/tmp/*.sv
+
+# ====================
+# DOCUMENTATION ARTIFACTS
+# ====================
+# Compiled docs (regenerate from source)
+docs/_build/
+docs/.doctrees/
+
+# ====================
+# BACKUP FILES
+# ====================
+*.backup
+*.old
+*-backup
+backup/
+
+# ====================
+# ALLOWED FILES (Explicit Exceptions)
+# ====================
+# Example designs (educational only)
+!examples/adder/
+!examples/barrel_shifter/
+!examples/risc-v-alu/
+
+# Template files
+!.env.example
+!secrets.example.yaml
+
+# Public documentation
+!docs/
+
+# ====================
+# TESTS & DEVELOPMENT FILES (不上傳到 GitHub)
+# ====================
+# Test files and directories
+agent/tests/
+web/__tests__/
+test_*.py
+*_test.py
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+jest.config.js
+jest.setup.js
+web/jest.setup.js
+pytest.ini
+.coverage
+htmlcov/
+
+# Development scripts
+scripts/
+requirements-test.txt
+requirements-sandbox.txt
+
+# Internal infrastructure modules (require Redis/Celery/Docker)
+agent/tasks/
+agent/workflows/
+agent/Dockerfile
+
+# Internal Docker configurations
+docker-compose.dgx.yml
+docker-compose.eda-sandbox.yml
+docker-compose.workflow.yml
+Dockerfile.celery
+Dockerfile.sandbox-manager
+
+# ====================
+# PROJECT MANAGEMENT & INTERNAL DOCS (內部文件)
+# ====================
+# Development instructions for AI assistants (not part of codebase)
+CLAUDE.md
+AGENTS.md
+
+# Internal design and architecture documents
+ARCHITECTURE.md
+LICENSE-COMMERCIAL.md
+LICENSE-FAQ.md
+docs/BDD-SPECIFICATIONS.md
+docs/ARCHITECTURE-IMPROVEMENTS-ROADMAP.md
+docs/SECURITY-DESIGN.md
+docs/DEPLOYMENT.md
+docs/SYSTEM-DESIGN.md
+docs/WORKFLOW-ENGINE-DESIGN.md
+docs/llm-strategy-by-stage.md
+
+# Session summaries and internal notes
+SESSION-SUMMARY-*.md
+CLOUDFLARE-EMAIL-QUICK-SETUP.md
+WORKLOG.md
+
+# Security audit reports (internal use only)
+SECURITY-AUDIT-REPORT.md
+SECURITY-CHECK-SUMMARY.md
+
+# Infrastructure setup scripts (contain account IDs and personal info)
+scripts/setup-cloudflare-email.sh
+scripts/setup-email-simple.py
+scripts/CLOUDFLARE-EMAIL-SETUP.md
+scripts/start-dgx.sh
+
+# Internal deployment guides (contain server names, IPs, SSH configs)
+GETTING-STARTED.md
+DGX94-QUICK-REF.md
+docs/deployment-*.md
+scripts/prepare-dgx*.sh
+
+# ====================
+# GIT METADATA
+# ====================
+.git/
+.gitattributes
