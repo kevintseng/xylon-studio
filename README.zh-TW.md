@@ -6,6 +6,16 @@ AI 驅動的晶片設計自動化平台。
 
 ---
 
+## 展示
+
+> **20 秒平台導覽** — 設計龍、驗證龍、歷史紀錄與工作區。
+>
+> 本地建構影片：`cd demo-video && npm install && npm run render`
+>
+> 影片原始碼請見 [demo-video/](demo-video/)。
+
+---
+
 ## 概述
 
 XylonStudio 使用 AI 代理和開源 EDA 工具自動化晶片設計流程。
@@ -162,9 +172,23 @@ npm run dev
 
 ## 授權
 
-XylonStudio 採用 **MIT License** 授權。
+XylonStudio 採用**雙授權模式**：
+
+### 開源核心（MIT License）
+核心平台（本儲存庫）採用 **MIT License** 授權：
+- ✅ 可自由使用、修改和散布
+- ✅ 允許商業用途
+- ✅ 對企業或託管服務無限制
+- ✅ 最低要求的開源授權
 
 詳見 [LICENSE](LICENSE)。
+
+### 專有企業功能
+進階企業功能採用另外的商業授權：
+- 進階優化演算法
+- 企業級安全功能
+- 多租戶架構
+- 優先支援與 SLA
 
 ---
 

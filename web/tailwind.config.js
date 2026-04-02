@@ -56,6 +56,21 @@ module.exports = {
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
       },
+      animation: {
+        "circuit-sweep": "circuit-sweep 10s ease-in-out infinite",
+        "signal-blink": "signal-blink 3s ease-in-out infinite",
+      },
+      keyframes: {
+        "circuit-sweep": {
+          "0%, 100%": { transform: "translate(-30%, -20%)" },
+          "50%": { transform: "translate(30%, 20%)" },
+        },
+        "signal-blink": {
+          "0%, 100%": { opacity: "0" },
+          "15%, 25%": { opacity: "1" },
+          "40%": { opacity: "0" },
+        },
+      },
     },
   },
   plugins: [],
