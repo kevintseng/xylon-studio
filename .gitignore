@@ -11,6 +11,12 @@
 proprietary/
 
 # ====================
+# DEMO ASSETS (本地開發用，不上傳)
+# ====================
+# Screenshots, videos, and demo tooling — binary assets don't belong in git
+demo/
+
+# ====================
 # SENSITIVE CREDENTIALS & KEYS
 # ====================
 # API keys, tokens, secrets
