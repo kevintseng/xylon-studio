@@ -74,10 +74,12 @@ class VerificationDragon(Dragon[RTLCode, TestReport]):
         super().__init__(llm_endpoint)
 
         # LLM gateway for testbench generation
+        vllm_base_url = llm_endpoint if llm_endpoint.endswith('/v1') else f"{llm_endpoint}/v1"
+        llm_model = os.getenv('VLLM_MODEL') or os.getenv('LLM_MODEL', 'Qwen/Qwen2.5-Coder-32B-Instruct')
         self.llm_gateway = LLMGateway(
             primary_provider=LLMProvider.VLLM,
             backends={
-                LLMProvider.VLLM: VLLMBackend(base_url=llm_endpoint)
+                LLMProvider.VLLM: VLLMBackend(base_url=vllm_base_url, model=llm_model)
             }
         )
 
@@ -298,9 +300,9 @@ class VerificationDragon(Dragon[RTLCode, TestReport]):
             max_tokens=3000,
             temperature=0.3  # Low temperature for deterministic testbenches
         )
-        self._llm_tokens += response.get('tokens_used', 0)
+        self._llm_tokens += response.input_tokens + response.output_tokens
 
-        testbench_code = response['text']
+        testbench_code = response.text
 
         # Clean up LLM output (remove markdown code blocks if present)
         testbench_code = self._clean_llm_output(testbench_code)
@@ -355,6 +357,9 @@ Requirements:
 Output ONLY the SystemVerilog testbench code, no explanations.
 """
 
+        # Disable thinking mode for models that support it (e.g., Qwen 3.5)
+        if os.getenv('LLM_NO_THINK', '').lower() in ('1', 'true', 'yes'):
+            prompt += "\n/no_think"
         return prompt
 
     def _clean_llm_output(self, code: str) -> str:

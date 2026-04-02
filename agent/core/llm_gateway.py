@@ -264,8 +264,18 @@ class VLLMBackend(LLMBackend):
 
         latency_ms = (time.time() - start_time) * 1000
 
+        msg = response.choices[0].message
+        text = msg.content or ""
+        if not text:
+            # Thinking models (e.g., Qwen 3.5) may return reasoning_content
+            # but empty content. This means the model only produced internal
+            # reasoning without a final answer — do NOT use reasoning as output,
+            # as it contains "let me think..." text, not valid code.
+            logger.warning("LLM returned empty content (model may be in thinking mode). "
+                           "Set LLM_NO_THINK=true or append /no_think to disable.")
+
         return LLMResponse(
-            text=response.choices[0].message.content,
+            text=text,
             provider=self.provider,
             model=self.model,
             input_tokens=response.usage.prompt_tokens,

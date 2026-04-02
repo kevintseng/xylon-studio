@@ -73,13 +73,13 @@ class DesignDragon(Dragon[DesignSpec, RTLCode]):
         super().__init__(llm_endpoint)
         self.max_iterations = max_iterations
 
-        # Initialize LLM Gateway with vLLM backend
-        # Endpoint format: "http://localhost:8000" -> vLLM expects "http://localhost:8000/v1"
+        # Initialize LLM Gateway with vLLM/Ollama-compatible backend
         vllm_base_url = llm_endpoint if llm_endpoint.endswith('/v1') else f"{llm_endpoint}/v1"
+        llm_model = os.getenv('VLLM_MODEL') or os.getenv('LLM_MODEL', 'Qwen/Qwen2.5-Coder-32B-Instruct')
         self.llm_gateway = LLMGateway(
             primary_provider=LLMProvider.VLLM,
             backends={
-                LLMProvider.VLLM: VLLMBackend(base_url=vllm_base_url)
+                LLMProvider.VLLM: VLLMBackend(base_url=vllm_base_url, model=llm_model)
             }
         )
 
@@ -347,7 +347,11 @@ class DesignDragon(Dragon[DesignSpec, RTLCode]):
                 ""
             ])
 
-        return "\n".join(prompt_parts)
+        prompt = "\n".join(prompt_parts)
+        # Disable thinking mode for models that support it (e.g., Qwen 3.5)
+        if os.getenv('LLM_NO_THINK', '').lower() in ('1', 'true', 'yes'):
+            prompt += "\n/no_think"
+        return prompt
 
     def _extract_verilog(self, llm_response: str) -> str:
         """
