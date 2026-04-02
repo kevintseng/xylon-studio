@@ -18,6 +18,7 @@ export function WorkspaceSelector() {
   const [open, setOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
+  const [focusIdx, setFocusIdx] = useState(-1)
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -36,6 +37,33 @@ export function WorkspaceSelector() {
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [])
+
+  useEffect(() => {
+    if (!open) return
+    setFocusIdx(-1)
+    const total = workspaces.length + 1
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setFocusIdx(i => (i + 1) % total)
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setFocusIdx(i => (i - 1 + total) % total)
+      } else if (e.key === 'Enter' && focusIdx >= 0) {
+        e.preventDefault()
+        if (focusIdx < workspaces.length) {
+          handleSelect(workspaces[focusIdx].id)
+        } else {
+          setCreating(true)
+        }
+      } else if (e.key === 'Escape') {
+        setOpen(false)
+        setCreating(false)
+      }
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [open, focusIdx, workspaces])
 
   const activeName = workspaces.find((w) => w.id === activeId)?.name || t('workspace.default')
 
@@ -80,13 +108,15 @@ export function WorkspaceSelector() {
       </button>
 
       {open && (
-        <div className="absolute top-full right-0 mt-1 w-56 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 py-1">
-          {workspaces.map((ws) => (
+        <div role="listbox" className="absolute top-full right-0 mt-1 w-56 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 py-1">
+          {workspaces.map((ws, index) => (
             <div
               key={ws.id}
+              role="option"
+              aria-selected={ws.id === activeId}
               className={`flex items-center justify-between px-3 py-2 text-sm cursor-pointer hover:bg-slate-700 ${
                 ws.id === activeId ? 'text-blue-400' : 'text-slate-300'
-              }`}
+              }${focusIdx === index ? ' bg-slate-700' : ''}`}
             >
               <span onClick={() => handleSelect(ws.id)} className="flex-1 truncate">
                 {ws.id === 'default' ? t('workspace.default') : ws.name}

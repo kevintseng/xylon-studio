@@ -96,12 +96,12 @@ export function CircuitBackground() {
       </div>
 
       {/* Layer 2: Animated signal dots traveling along circuit traces */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+      <div className="absolute inset-0 overflow-hidden pointer-events-none" style={{ willChange: 'transform', transform: 'translateZ(0)' }}>
         <svg
           className="absolute inset-0 w-full h-full"
           xmlns="http://www.w3.org/2000/svg"
           viewBox="0 0 1500 800"
-          preserveAspectRatio="xMidYMid slice"
+          preserveAspectRatio="xMidYMid meet"
         >
           <defs>
             {/* Glow filter for signal dots */}

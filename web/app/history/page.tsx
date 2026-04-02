@@ -37,6 +37,14 @@ export default function HistoryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterWs])
 
+  useEffect(() => {
+    const handler = () => {
+      setFilterWs(getActiveWorkspaceId())
+    }
+    window.addEventListener('workspace-changed', handler)
+    return () => window.removeEventListener('workspace-changed', handler)
+  }, [])
+
   const handleDelete = (id: string) => {
     deleteHistoryEntry(id)
     loadData()
@@ -123,6 +131,14 @@ export default function HistoryPage() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             <p>{t('history.empty')}</p>
+            <div className="flex gap-3 justify-center mt-6">
+              <a href="/design" className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-500 transition-all">
+                {t('nav.design')}
+              </a>
+              <a href="/verify" className="px-4 py-2 bg-slate-700 text-slate-200 rounded-md text-sm hover:bg-slate-600 transition-all">
+                {t('nav.verify')}
+              </a>
+            </div>
           </div>
         ) : (
           <div className="space-y-3">
@@ -148,7 +164,7 @@ export default function HistoryPage() {
                   </span>
 
                   {/* Module name */}
-                  <span className="font-mono text-sm text-slate-200 flex-1 truncate">
+                  <span className="font-mono text-sm text-slate-200 flex-1 truncate" title={entry.moduleName}>
                     {entry.moduleName}
                   </span>
 

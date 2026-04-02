@@ -29,7 +29,7 @@ export function BugReportButton() {
     <>
       <button
         onClick={() => setIsOpen(true)}
-        className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        className="inline-flex items-center gap-1.5 text-sm text-blue-400 hover:text-blue-300 underline underline-offset-2 transition-colors"
         aria-label="Report a bug"
       >
         <svg
@@ -72,13 +72,31 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
     setConsoleLogs(consoleCollector.getFormattedLog())
   }, [])
 
-  // Close on Escape
   useEffect(() => {
-    const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+    const dialog = dialogRef.current
+    if (!dialog) return
+
+    const focusables = dialog.querySelectorAll<HTMLElement>('button, textarea, input, [tabindex]')
+    if (focusables.length > 0) focusables[0].focus()
+
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose()
+        return
+      }
+      if (e.key !== 'Tab') return
+      const first = focusables[0]
+      const last = focusables[focusables.length - 1]
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault()
+        last?.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault()
+        first?.focus()
+      }
     }
-    document.addEventListener('keydown', handleEsc)
-    return () => document.removeEventListener('keydown', handleEsc)
+    dialog.addEventListener('keydown', handler)
+    return () => dialog.removeEventListener('keydown', handler)
   }, [onClose])
 
   // Prevent body scroll when dialog is open

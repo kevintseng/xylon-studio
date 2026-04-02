@@ -53,7 +53,7 @@ function Footer({ extra }: { extra?: ReactNode }) {
             {extra}
             <a
               href="mailto:dev@xylonstud.io"
-              className="hover:text-foreground transition-colors"
+              className="text-blue-400 hover:text-blue-300 underline underline-offset-2 transition-colors"
             >
               {t('footer.contact')}
             </a>
@@ -61,7 +61,7 @@ function Footer({ extra }: { extra?: ReactNode }) {
               href="https://github.com/kevintseng/xylon-studio"
               target="_blank"
               rel="noopener noreferrer"
-              className="hover:text-foreground transition-colors"
+              className="text-blue-400 hover:text-blue-300 underline underline-offset-2 transition-colors"
             >
               GitHub
             </a>

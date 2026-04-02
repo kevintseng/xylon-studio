@@ -34,7 +34,7 @@ export function CodeBlock({ code, filename, language = 'verilog' }: CodeBlockPro
   const handleCopy = useCallback(async () => {
     await navigator.clipboard.writeText(code)
     setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    setTimeout(() => setCopied(false), 3000)
   }, [code])
 
   const handleDownload = useCallback(() => {
@@ -62,7 +62,7 @@ export function CodeBlock({ code, filename, language = 'verilog' }: CodeBlockPro
         <div className="flex items-center gap-2">
           <button
             onClick={handleCopy}
-            className="text-xs text-slate-400 hover:text-white flex items-center gap-1 transition-colors px-2 py-1 rounded hover:bg-slate-700"
+            className={`text-xs flex items-center gap-1 transition-all px-2 py-1 rounded ${copied ? 'text-green-400 bg-green-500/10' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
           >
             {copied ? (
               <>

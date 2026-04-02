@@ -41,6 +41,11 @@ export default function DesignPage() {
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
 
+  const handleCancel = () => {
+    setLoading(false)
+    setElapsed(0)
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
@@ -128,7 +133,7 @@ export default function DesignPage() {
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder={t('design.placeholder.description')}
-              className="w-full min-h-[120px] px-3 py-2 border border-slate-600 rounded-md bg-slate-800 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all"
+              className="w-full min-h-[120px] px-3 py-2 border border-slate-600 rounded-md bg-slate-800 text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all"
               minLength={10}
               maxLength={5000}
               required
@@ -145,7 +150,7 @@ export default function DesignPage() {
                 value={targetFreq}
                 onChange={(e) => setTargetFreq(e.target.value)}
                 placeholder={t('design.placeholder.targetFreq')}
-                className="w-full px-3 py-2 border border-slate-600 rounded-md bg-slate-800 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all"
+                className="w-full px-3 py-2 border border-slate-600 rounded-md bg-slate-800 text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all"
                 required
               />
             </div>
@@ -159,7 +164,7 @@ export default function DesignPage() {
                 value={moduleName}
                 onChange={(e) => setModuleName(e.target.value)}
                 placeholder={t('design.placeholder.moduleName')}
-                className="w-full px-3 py-2 border border-slate-600 rounded-md bg-slate-800 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all"
+                className="w-full px-3 py-2 border border-slate-600 rounded-md bg-slate-800 text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all"
               />
             </div>
           </div>
@@ -174,7 +179,7 @@ export default function DesignPage() {
                 value={maxArea}
                 onChange={(e) => setMaxArea(e.target.value)}
                 placeholder={t('design.placeholder.maxArea')}
-                className="w-full px-3 py-2 border border-slate-600 rounded-md bg-slate-800 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all"
+                className="w-full px-3 py-2 border border-slate-600 rounded-md bg-slate-800 text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all"
               />
             </div>
 
@@ -187,7 +192,7 @@ export default function DesignPage() {
                 value={maxPower}
                 onChange={(e) => setMaxPower(e.target.value)}
                 placeholder={t('design.placeholder.maxPower')}
-                className="w-full px-3 py-2 border border-slate-600 rounded-md bg-slate-800 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all"
+                className="w-full px-3 py-2 border border-slate-600 rounded-md bg-slate-800 text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all"
               />
             </div>
           </div>
@@ -195,7 +200,8 @@ export default function DesignPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-600 text-white px-6 py-3 rounded-md font-medium hover:bg-blue-500 disabled:opacity-50 active:scale-[0.99] transition-all"
+            aria-busy={loading}
+            className="w-full bg-blue-600 text-white px-6 py-3 rounded-md font-medium hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99] transition-all"
           >
             {loading ? (
               <span className="flex items-center justify-center gap-2">
@@ -213,12 +219,12 @@ export default function DesignPage() {
           {loading && (
             <div className="text-center">
               <div className="w-full bg-slate-700 rounded-full h-1.5 overflow-hidden">
-                <div
-                  className="bg-blue-500 h-1.5 rounded-full transition-all duration-1000"
-                  style={{ width: `${Math.min((elapsed / 60) * 100, 95)}%` }}
-                />
+                <div className="bg-blue-500 h-1.5 rounded-full animate-pulse" style={{ width: '100%' }} />
               </div>
-              <p className="text-xs text-muted-foreground mt-2">{t('design.loading')}</p>
+              <p className="text-xs text-muted-foreground mt-2">{elapsed}s · {t('design.loading')}</p>
+              <button type="button" onClick={handleCancel} className="text-xs text-red-400 hover:text-red-300 mt-1">
+                {t('common.cancel')}
+              </button>
             </div>
           )}
         </form>

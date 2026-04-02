@@ -220,14 +220,23 @@ const I18nContext = createContext<I18nContextType>({
 const LOCALE_KEY = 'xylon-locale'
 
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>('zh-TW')
+  const [locale, setLocaleState] = useState<Locale>('en')
 
   useEffect(() => {
     const saved = localStorage.getItem(LOCALE_KEY) as Locale | null
     if (saved && (saved === 'en' || saved === 'zh-TW')) {
       setLocaleState(saved)
+    } else {
+      const browserLang = navigator.language || 'en'
+      if (browserLang.startsWith('zh')) {
+        setLocaleState('zh-TW')
+      }
     }
   }, [])
+
+  useEffect(() => {
+    document.documentElement.lang = locale
+  }, [locale])
 
   const setLocale = useCallback((l: Locale) => {
     setLocaleState(l)
