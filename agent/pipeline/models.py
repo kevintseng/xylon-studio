@@ -108,7 +108,7 @@ class PipelineConfig:
     synthesis_enabled: bool = False
     simulation_timeout: int = 300
     llm_provider: Optional[str] = None
-    mode: str = "professional"  # "education" or "professional"
+    mode: PipelineMode = PipelineMode.PROFESSIONAL
 
 
 @dataclass

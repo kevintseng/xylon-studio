@@ -26,6 +26,7 @@ class PipelineRequest(BaseModel):
         ...,
         description="Verilog RTL source code",
         min_length=1,
+        max_length=500_000,
     )
     testbench_code: Optional[str] = Field(
         None,
@@ -60,6 +61,7 @@ class PipelineRequest(BaseModel):
     )
     mode: str = Field(
         "professional",
+        pattern="^(education|professional)$",
         description="Pipeline mode: 'education' (pauses with explanations) or 'professional' (runs automatically)",
     )
 
@@ -90,6 +92,34 @@ class PipelineResponse(BaseModel):
     final_coverage: Optional[dict] = None
 
 
+def _create_llm_gateway(provider_name: str | None):
+    """Create an LLMGateway from a provider name string, or return None."""
+    if not provider_name:
+        return None
+    try:
+        from agent.core.llm_gateway import LLMGateway, LLMProvider, OllamaBackend, VLLMBackend, ClaudeBackend
+
+        provider_map = {
+            "ollama": (LLMProvider.OLLAMA, OllamaBackend),
+            "vllm": (LLMProvider.VLLM, VLLMBackend),
+            "claude": (LLMProvider.CLAUDE, ClaudeBackend),
+        }
+
+        if provider_name not in provider_map:
+            logger.warning(f"Unknown LLM provider: {provider_name}")
+            return None
+
+        provider_enum, backend_cls = provider_map[provider_name]
+        backend = backend_cls()
+        return LLMGateway(
+            primary_provider=provider_enum,
+            backends={provider_enum: backend},
+        )
+    except Exception as e:
+        logger.error(f"Failed to initialize LLM gateway '{provider_name}': {e}")
+        return None
+
+
 @router.post("/run", response_model=PipelineResponse)
 async def run_pipeline_endpoint(request: PipelineRequest) -> PipelineResponse:
     """
@@ -115,13 +145,7 @@ async def run_pipeline_endpoint(request: PipelineRequest) -> PipelineResponse:
     )
 
     # Phase B: resolve LLM gateway if provider specified
-    llm_gateway = None
-    if request.llm_provider:
-        try:
-            from agent.core.llm_gateway import LLMGateway
-            llm_gateway = LLMGateway(provider=request.llm_provider)
-        except Exception as e:
-            logger.warning(f"Failed to initialize LLM gateway: {e}")
+    llm_gateway = _create_llm_gateway(request.llm_provider)
 
     try:
         result = await run_pipeline(
@@ -190,34 +214,28 @@ async def pipeline_websocket(websocket: WebSocket):
         # Receive pipeline request
         data = await websocket.receive_json()
 
-        rtl_code = data.get("rtl_code", "")
-        if not rtl_code:
+        # Validate input using the same Pydantic model as REST
+        try:
+            req = PipelineRequest(**data)
+        except Exception as e:
             await websocket.send_json({
                 "type": "error",
-                "message": "rtl_code is required",
+                "message": f"Invalid request: {e}",
             })
             await websocket.close()
             return
 
-        llm_provider = data.get("llm_provider")
         config = PipelineConfig(
-            coverage_target=data.get("coverage_target", 0.8),
-            max_iterations=data.get("max_iterations", 5),
-            lint_enabled=data.get("lint_enabled", True),
-            synthesis_enabled=data.get("synthesis_enabled", False),
-            simulation_timeout=data.get("simulation_timeout", 300),
-            llm_provider=llm_provider,
-            mode=data.get("mode", "professional"),
+            coverage_target=req.coverage_target,
+            max_iterations=req.max_iterations,
+            lint_enabled=req.lint_enabled,
+            synthesis_enabled=req.synthesis_enabled,
+            simulation_timeout=req.simulation_timeout,
+            llm_provider=req.llm_provider,
+            mode=req.mode,
         )
 
-        # Phase B: resolve LLM gateway if provider specified
-        llm_gateway = None
-        if llm_provider:
-            try:
-                from agent.core.llm_gateway import LLMGateway
-                llm_gateway = LLMGateway(provider=llm_provider)
-            except Exception as e:
-                logger.warning(f"Failed to initialize LLM gateway: {e}")
+        llm_gateway = _create_llm_gateway(req.llm_provider)
 
         # Define step callback that streams to WebSocket
         async def on_step(
@@ -243,8 +261,8 @@ async def pipeline_websocket(websocket: WebSocket):
 
         # Run pipeline with streaming callback
         result = await run_pipeline(
-            rtl_code=rtl_code,
-            testbench_code=data.get("testbench_code"),
+            rtl_code=req.rtl_code,
+            testbench_code=req.testbench_code,
             config=config,
             on_step_complete=on_step,
             llm_gateway=llm_gateway,

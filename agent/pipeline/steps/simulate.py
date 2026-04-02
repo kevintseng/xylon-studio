@@ -103,21 +103,25 @@ def _parse_test_result(stdout: str) -> bool | None:
     - $display("PASS") or $display("ALL TESTS PASSED") → pass
     - $display("FAIL") or $fatal → fail
 
+    Uses word-boundary matching to avoid false positives on substrings
+    like "BYPASS", "FAILSAFE", "PASSWORD", etc.
+
     Returns:
         True if passed, False if failed, None if indeterminate
     """
+    import re
     stdout_upper = stdout.upper()
 
-    # Check for explicit failure indicators first
-    fail_indicators = ["FAIL", "$FATAL", "ERROR:", "ASSERTION FAILED"]
-    for indicator in fail_indicators:
-        if indicator in stdout_upper:
+    # Check for explicit failure indicators first (word-boundary aware)
+    fail_patterns = [r"\bFAIL\b", r"\$FATAL", r"\bERROR:", r"ASSERTION FAILED"]
+    for pattern in fail_patterns:
+        if re.search(pattern, stdout_upper):
             return False
 
     # Check for explicit pass indicators
-    pass_indicators = ["PASS", "ALL TESTS PASSED", "TEST COMPLETE", "SIMULATION DONE"]
-    for indicator in pass_indicators:
-        if indicator in stdout_upper:
+    pass_patterns = [r"\bPASS\b", r"ALL TESTS PASSED", r"TEST COMPLETE", r"SIMULATION DONE"]
+    for pattern in pass_patterns:
+        if re.search(pattern, stdout_upper):
             return True
 
     # Indeterminate — simulation ran but no clear pass/fail signal
