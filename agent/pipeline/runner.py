@@ -362,7 +362,7 @@ def _copy_to_container(
     """Copy local directory contents into a Docker container."""
     subprocess.run(
         ["docker", "exec", container_name, "mkdir", "-p", container_dir],
-        capture_output=True, timeout=10, check=False,
+        capture_output=True, timeout=10, check=True,
     )
     # docker cp copies directory contents
     subprocess.run(
@@ -466,7 +466,7 @@ async def _run_coverage_iteration_loop(
             return iteration
 
         # Stall detection: if coverage didn't improve by at least 1%, stop
-        if current_cov.score <= prev_score + 0.01:
+        if current_cov.score < prev_score + 0.01:
             logger.info(
                 f"Pipeline {pipeline_id}: coverage stalled at iteration {iteration} "
                 f"({prev_score:.2%} -> {current_cov.score:.2%})"

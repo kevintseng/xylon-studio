@@ -64,10 +64,15 @@ async def run_simulate_step(
             status = StepStatus.PASSED
 
         errors = []
+        warnings = []
         if not sim_success:
             errors.append("Simulation execution failed")
         if test_passed is False:
             errors.append("Test assertions failed (FAIL detected in output)")
+        if test_passed is None and sim_success:
+            warnings.append(
+                "Simulation result indeterminate: no PASS/FAIL signal detected"
+            )
 
         return StepResult(
             step_name=STEP_NAME,
@@ -81,7 +86,7 @@ async def run_simulate_step(
                 "test_passed": test_passed,
             },
             errors=errors,
-            warnings=[],
+            warnings=warnings,
         )
 
     except Exception as e:

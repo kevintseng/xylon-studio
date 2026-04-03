@@ -204,14 +204,14 @@ class SandboxManager:
 
         # Build Yosys command
         yosys_script = f"""
-        read_verilog {verilog_file};
+        read_verilog "{verilog_file}";
         hierarchy -check;
         proc; opt; fsm; opt; memory; opt;
         techmap; opt;
         """
 
         if output_file:
-            yosys_script += f"write_json {output_file};"
+            yosys_script += f'write_json "{output_file}";'
 
         yosys_script += "stat;"
 
