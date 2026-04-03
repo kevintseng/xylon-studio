@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback, type ReactNode } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { useI18n } from '@/lib/i18n'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
@@ -109,8 +109,8 @@ endmodule`,
   reg [1:0] state, next_state;
   reg [7:0] timer;
   always @(posedge clk) begin
-    if (!rst_n) begin state <= S_RED; timer <= 8'd0; end
-    else if (emergency) begin state <= S_RED; timer <= 8'd0; end
+    if (!rst_n) begin state <= S_RED; timer <= RED_TIME - 8'd1; end
+    else if (emergency) begin state <= S_RED; timer <= RED_TIME - 8'd1; end
     else if (timer == 8'd0) begin
       state <= next_state;
       case (next_state)
@@ -182,6 +182,7 @@ export default function PipelinePage() {
     setError(null)
     setElapsed(0)
     setActiveStep(null)
+    setExpandedStep(null)
 
     // Start elapsed timer
     const startTime = Date.now()
@@ -294,7 +295,7 @@ export default function PipelinePage() {
               {Object.entries(EXAMPLES).map(([key, ex]) => (
                 <button
                   key={key}
-                  onClick={() => setRtlCode(ex.code)}
+                  onClick={() => { setRtlCode(ex.code); setTestbenchCode('') }}
                   disabled={running}
                   className="px-2 py-1 text-xs rounded border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-slate-100 disabled:opacity-50 transition-all"
                 >
@@ -471,7 +472,7 @@ export default function PipelinePage() {
                     <button
                       onClick={() => hasOutput ? setExpandedStep(isExpanded ? null : step.step_name) : undefined}
                       className={`w-full p-4 flex items-center justify-between text-left ${hasOutput ? 'cursor-pointer hover:bg-slate-800/30' : 'cursor-default'} transition-colors rounded-lg`}
-                      aria-expanded={isExpanded}
+                      aria-expanded={hasOutput ? isExpanded : undefined}
                     >
                       <div className="flex items-center gap-3">
                         {/* Status indicator */}
@@ -584,7 +585,7 @@ export default function PipelinePage() {
                               {step.step_name === 'lint' && typeof output.warning_count === 'number' ? (
                                 <div className="p-2 bg-slate-800 rounded">
                                   <p className="text-xs text-slate-400">
-                                    {Number(output.error_count ?? 0)} errors, {Number(output.warning_count)} warnings
+                                    {parseInt(String(output.error_count ?? 0), 10) || 0} errors, {parseInt(String(output.warning_count ?? 0), 10) || 0} warnings
                                   </p>
                                 </div>
                               ) : null}

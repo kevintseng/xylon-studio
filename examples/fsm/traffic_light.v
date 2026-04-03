@@ -41,10 +41,10 @@ module traffic_light (
     always @(posedge clk) begin
         if (!rst_n) begin
             state <= S_RED;
-            timer <= 8'd0;
+            timer <= RED_TIME - 8'd1;
         end else if (emergency) begin
             state <= S_RED;
-            timer <= 8'd0;
+            timer <= RED_TIME - 8'd1;
         end else if (timer == 8'd0) begin
             state <= next_state;
             case (next_state)
