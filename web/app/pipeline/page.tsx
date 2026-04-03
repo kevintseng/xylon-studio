@@ -559,67 +559,64 @@ export default function PipelinePage() {
                         )}
 
                         {/* Step-specific output */}
-                        {stepData.output != null && (
-                          <div className="mt-3">
-                            {/* Coverage metrics */}
-                            {step.step_name === 'coverage' && (
-                              <div className="grid grid-cols-4 gap-2 mb-3">
-                                {(['line_coverage', 'toggle_coverage', 'branch_coverage', 'coverage_score'] as const).map((key) => {
-                                  const val = stepData.output?.[key] as number | undefined
-                                  if (val === undefined) return null
-                                  return (
-                                    <div key={key} className="p-2 bg-slate-800 rounded text-center">
-                                      <p className="text-xs text-slate-400">{t(`pipeline.coverage.${key}`)}</p>
-                                      <p className="text-lg font-bold text-slate-200">
-                                        {(val * 100).toFixed(1)}%
-                                      </p>
-                                    </div>
-                                  )
-                                })}
-                              </div>
-                            )}
+                        {stepData.output != null && (() => {
+                          const output = stepData.output as Record<string, unknown>
+                          return (
+                            <div className="mt-3">
+                              {/* Coverage metrics */}
+                              {step.step_name === 'coverage' && (
+                                <div className="grid grid-cols-4 gap-2 mb-3">
+                                  {(['line_coverage', 'toggle_coverage', 'branch_coverage', 'coverage_score'] as const).map((key) => {
+                                    const val = output[key] as number | undefined
+                                    if (val === undefined) return null
+                                    return (
+                                      <div key={key} className="p-2 bg-slate-800 rounded text-center">
+                                        <p className="text-xs text-slate-400">{t(`pipeline.coverage.${key}`)}</p>
+                                        <p className="text-lg font-bold text-slate-200">
+                                          {(val * 100).toFixed(1)}%
+                                        </p>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              )}
 
-                            {step.step_name === 'lint'
-                              && typeof (stepData.output as Record<string, unknown>).warning_count === 'number'
-                              ? (
+                              {step.step_name === 'lint' && typeof output.warning_count === 'number' ? (
                                 <div className="p-2 bg-slate-800 rounded">
                                   <p className="text-xs text-slate-400">
-                                    {Number((stepData.output as Record<string, unknown>).error_count ?? 0)} errors, {Number((stepData.output as Record<string, unknown>).warning_count)} warnings
+                                    {Number(output.error_count ?? 0)} errors, {Number(output.warning_count)} warnings
                                   </p>
                                 </div>
                               ) : null}
 
-                            {step.step_name === 'simulate'
-                              && typeof (stepData.output as Record<string, unknown>).test_passed === 'boolean'
-                              ? (
+                              {step.step_name === 'simulate' && typeof output.test_passed === 'boolean' ? (
                                 <div className="p-2 bg-slate-800 rounded">
-                                  <p className={`text-xs ${(stepData.output as Record<string, unknown>).test_passed ? 'text-green-400' : 'text-red-400'}`}>
-                                    {(stepData.output as Record<string, unknown>).test_passed ? t('pipeline.detail.simPass') : t('pipeline.detail.simFail')}
+                                  <p className={`text-xs ${output.test_passed ? 'text-green-400' : 'text-red-400'}`}>
+                                    {output.test_passed ? t('pipeline.detail.simPass') : t('pipeline.detail.simFail')}
                                   </p>
                                 </div>
                               ) : null}
 
-                            {(stepData.output as Record<string, unknown>).stdout
-                              ? (
+                              {output.stdout ? (
                                 <div className="mt-2">
                                   <p className="text-xs font-medium text-slate-400 mb-1">stdout</p>
                                   <pre className="text-xs font-mono text-slate-300 bg-slate-900 p-2 rounded max-h-48 overflow-y-auto whitespace-pre-wrap">
-                                    {String((stepData.output as Record<string, unknown>).stdout)}
+                                    {String(output.stdout)}
                                   </pre>
                                 </div>
                               ) : null}
 
-                            {(stepData.output as Record<string, unknown>).stderr
-                              ? (
+                              {output.stderr ? (
                                 <div className="mt-2">
                                   <p className="text-xs font-medium text-slate-400 mb-1">stderr</p>
                                   <pre className="text-xs font-mono text-red-300 bg-slate-900 p-2 rounded max-h-48 overflow-y-auto whitespace-pre-wrap">
-                                    {String((stepData.output as Record<string, unknown>).stderr)}
+                                    {String(output.stderr)}
                                   </pre>
                                 </div>
                               ) : null}
-                          </div>
-                        )}
+                            </div>
+                          )
+                        })()}
                       </div>
                     )}
                   </div>
