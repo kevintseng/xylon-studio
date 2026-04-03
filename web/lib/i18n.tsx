@@ -182,6 +182,11 @@ const translations: Record<Locale, Record<string, string>> = {
     'pipeline.result.iterations': 'Iterations',
     'pipeline.result.steps': 'Steps Passed',
     'pipeline.result.coverage': 'Final Coverage',
+    'pipeline.examples': 'Examples',
+    'pipeline.detail.errors': 'Errors',
+    'pipeline.detail.warnings': 'Warnings',
+    'pipeline.detail.simPass': 'All tests passed',
+    'pipeline.detail.simFail': 'Tests failed',
 
     // Common
     'common.error': 'Error',
@@ -372,6 +377,11 @@ const translations: Record<Locale, Record<string, string>> = {
     'pipeline.result.iterations': '迭代次數',
     'pipeline.result.steps': '通過步驟',
     'pipeline.result.coverage': '最終覆蓋率',
+    'pipeline.examples': '範例',
+    'pipeline.detail.errors': '錯誤',
+    'pipeline.detail.warnings': '警告',
+    'pipeline.detail.simPass': '所有測試通過',
+    'pipeline.detail.simFail': '測試失敗',
 
     // Common
     'common.error': '錯誤',

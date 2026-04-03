@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, type ReactNode } from 'react'
 import { useI18n } from '@/lib/i18n'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
@@ -50,19 +50,98 @@ const STATUS_STYLES: Record<StepStatus, { bg: string; border: string; text: stri
   skipped: { bg: 'bg-slate-800/30', border: 'border-slate-700/50', text: 'text-slate-600', icon: '' },
 }
 
-const DEFAULT_RTL = `module adder_8bit (
+const EXAMPLES: Record<string, { label: string; code: string }> = {
+  adder: {
+    label: '8-bit Adder',
+    code: `module adder_8bit (
   input  [7:0] a,
   input  [7:0] b,
-  output [8:0] sum
+  input        cin,
+  output [7:0] sum,
+  output       cout,
+  output       overflow
 );
-  assign sum = a + b;
-endmodule`
+  wire [8:0] full_sum;
+  assign full_sum = {1'b0, a} + {1'b0, b} + {8'b0, cin};
+  assign sum  = full_sum[7:0];
+  assign cout = full_sum[8];
+  assign overflow = (a[7] == b[7]) && (sum[7] != a[7]);
+endmodule`,
+  },
+  counter: {
+    label: '8-bit Counter',
+    code: `module counter_8bit (
+  input        clk,
+  input        rst_n,
+  input        enable,
+  input        up_down,
+  input        load,
+  input  [7:0] data_in,
+  output [7:0] count,
+  output       zero,
+  output       max
+);
+  reg [7:0] count_reg;
+  always @(posedge clk) begin
+    if (!rst_n)          count_reg <= 8'b0;
+    else if (load)       count_reg <= data_in;
+    else if (enable) begin
+      if (up_down) count_reg <= count_reg + 8'd1;
+      else         count_reg <= count_reg - 8'd1;
+    end
+  end
+  assign count = count_reg;
+  assign zero  = (count_reg == 8'b0);
+  assign max   = (count_reg == 8'hFF);
+endmodule`,
+  },
+  fsm: {
+    label: 'Traffic Light FSM',
+    code: `module traffic_light (
+  input        clk,
+  input        rst_n,
+  input        emergency,
+  output [2:0] light,
+  output [1:0] state_out
+);
+  localparam [1:0] S_RED = 2'b00, S_GREEN = 2'b01, S_YELLOW = 2'b10;
+  localparam RED_TIME = 8'd10, GREEN_TIME = 8'd8, YELLOW_TIME = 8'd3;
+  reg [1:0] state, next_state;
+  reg [7:0] timer;
+  always @(posedge clk) begin
+    if (!rst_n) begin state <= S_RED; timer <= 8'd0; end
+    else if (emergency) begin state <= S_RED; timer <= 8'd0; end
+    else if (timer == 8'd0) begin
+      state <= next_state;
+      case (next_state)
+        S_RED:    timer <= RED_TIME - 8'd1;
+        S_GREEN:  timer <= GREEN_TIME - 8'd1;
+        S_YELLOW: timer <= YELLOW_TIME - 8'd1;
+        default:  timer <= RED_TIME - 8'd1;
+      endcase
+    end else timer <= timer - 8'd1;
+  end
+  always @(*) begin
+    case (state)
+      S_RED:    next_state = S_GREEN;
+      S_GREEN:  next_state = S_YELLOW;
+      S_YELLOW: next_state = S_RED;
+      default:  next_state = S_RED;
+    endcase
+  end
+  assign light[2] = (state == S_RED);
+  assign light[1] = (state == S_YELLOW);
+  assign light[0] = (state == S_GREEN);
+  assign state_out = state;
+endmodule`,
+  },
+}
 
 export default function PipelinePage() {
   const { t } = useI18n()
 
   // Form state
-  const [rtlCode, setRtlCode] = useState(DEFAULT_RTL)
+  const [rtlCode, setRtlCode] = useState(EXAMPLES.adder.code)
   const [testbenchCode, setTestbenchCode] = useState('')
   const [coverageTarget, setCoverageTarget] = useState(0.8)
   const [lintEnabled, setLintEnabled] = useState(true)
@@ -78,6 +157,7 @@ export default function PipelinePage() {
   const [error, setError] = useState<string | null>(null)
   const [elapsed, setElapsed] = useState(0)
   const [activeStep, setActiveStep] = useState<string | null>(null)
+  const [expandedStep, setExpandedStep] = useState<string | null>(null)
 
   const wsRef = useRef<WebSocket | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -207,6 +287,21 @@ export default function PipelinePage() {
         <div className="grid lg:grid-cols-5 gap-8">
           {/* Left: Input form */}
           <div className="lg:col-span-2 space-y-4">
+            {/* Example selector */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-400">{t('pipeline.examples')}:</span>
+              {Object.entries(EXAMPLES).map(([key, ex]) => (
+                <button
+                  key={key}
+                  onClick={() => setRtlCode(ex.code)}
+                  disabled={running}
+                  className="px-2 py-1 text-xs rounded border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-slate-100 disabled:opacity-50 transition-all"
+                >
+                  {ex.label}
+                </button>
+              ))}
+            </div>
+
             <div>
               <label htmlFor="pipeline-rtl" className="block text-sm font-medium mb-2">
                 {t('pipeline.label.rtl')} <span className="text-red-400">*</span>
@@ -349,12 +444,20 @@ export default function PipelinePage() {
                 const style = STATUS_STYLES[status]
                 const stepData = steps.find((s) => s.step_name === step.step_name)
 
+                const isExpanded = expandedStep === step.step_name
+                const hasOutput = stepData && (stepData.output || stepData.errors?.length || stepData.warnings?.length)
+
                 return (
                   <div
                     key={step.step_name}
-                    className={`p-4 rounded-lg border ${style.border} ${style.bg} transition-all duration-300`}
+                    className={`rounded-lg border ${style.border} ${style.bg} transition-all duration-300`}
                   >
-                    <div className="flex items-center justify-between">
+                    {/* Step header — clickable to expand */}
+                    <button
+                      onClick={() => hasOutput ? setExpandedStep(isExpanded ? null : step.step_name) : undefined}
+                      className={`w-full p-4 flex items-center justify-between text-left ${hasOutput ? 'cursor-pointer hover:bg-slate-800/30' : 'cursor-default'} transition-colors rounded-lg`}
+                      aria-expanded={isExpanded}
+                    >
                       <div className="flex items-center gap-3">
                         {/* Status indicator */}
                         <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-mono ${style.text} ${style.bg} border ${style.border}`}>
@@ -399,33 +502,103 @@ export default function PipelinePage() {
                         <span className={`px-2 py-0.5 rounded text-xs font-medium ${style.text} ${style.bg} border ${style.border}`}>
                           {t(`pipeline.status.${status}`)}
                         </span>
+                        {hasOutput && (
+                          <svg className={`w-4 h-4 text-slate-500 transition-transform ${isExpanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                          </svg>
+                        )}
                       </div>
-                    </div>
+                    </button>
 
-                    {/* Errors */}
-                    {stepData?.errors && stepData.errors.length > 0 && (
-                      <div className="mt-3 p-3 bg-red-500/5 border border-red-500/20 rounded text-xs font-mono text-red-300 max-h-32 overflow-y-auto">
-                        {stepData.errors.map((err, i) => (
-                          <div key={i}>{err}</div>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Coverage details */}
-                    {step.step_name === 'coverage' && stepData?.output && (
-                      <div className="mt-3 grid grid-cols-4 gap-2">
-                        {(['line_coverage', 'toggle_coverage', 'branch_coverage', 'coverage_score'] as const).map((key) => {
-                          const val = stepData.output?.[key] as number | undefined
-                          if (val === undefined) return null
-                          return (
-                            <div key={key} className="p-2 bg-slate-800 rounded text-center">
-                              <p className="text-xs text-slate-400">{t(`pipeline.coverage.${key}`)}</p>
-                              <p className="text-lg font-bold text-slate-200">
-                                {(val * 100).toFixed(1)}%
-                              </p>
+                    {/* Expanded detail panel */}
+                    {isExpanded && stepData && (
+                      <div className="px-4 pb-4 space-y-3 border-t border-slate-700/50">
+                        {/* Errors */}
+                        {stepData.errors && stepData.errors.length > 0 && (
+                          <div className="mt-3 p-3 bg-red-500/5 border border-red-500/20 rounded">
+                            <p className="text-xs font-medium text-red-400 mb-1">{t('pipeline.detail.errors')} ({stepData.errors.length})</p>
+                            <div className="text-xs font-mono text-red-300 max-h-40 overflow-y-auto space-y-0.5">
+                              {stepData.errors.map((err, i) => (
+                                <div key={i}>{err}</div>
+                              ))}
                             </div>
-                          )
-                        })}
+                          </div>
+                        )}
+
+                        {/* Warnings */}
+                        {stepData.warnings && stepData.warnings.length > 0 && (
+                          <div className="mt-3 p-3 bg-amber-500/5 border border-amber-500/20 rounded">
+                            <p className="text-xs font-medium text-amber-400 mb-1">{t('pipeline.detail.warnings')} ({stepData.warnings.length})</p>
+                            <div className="text-xs font-mono text-amber-300 max-h-40 overflow-y-auto space-y-0.5">
+                              {stepData.warnings.map((w, i) => (
+                                <div key={i}>{w}</div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Step-specific output */}
+                        {stepData.output != null && (
+                          <div className="mt-3">
+                            {/* Coverage metrics */}
+                            {step.step_name === 'coverage' && (
+                              <div className="grid grid-cols-4 gap-2 mb-3">
+                                {(['line_coverage', 'toggle_coverage', 'branch_coverage', 'coverage_score'] as const).map((key) => {
+                                  const val = stepData.output?.[key] as number | undefined
+                                  if (val === undefined) return null
+                                  return (
+                                    <div key={key} className="p-2 bg-slate-800 rounded text-center">
+                                      <p className="text-xs text-slate-400">{t(`pipeline.coverage.${key}`)}</p>
+                                      <p className="text-lg font-bold text-slate-200">
+                                        {(val * 100).toFixed(1)}%
+                                      </p>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )}
+
+                            {step.step_name === 'lint'
+                              && typeof (stepData.output as Record<string, unknown>).warning_count === 'number'
+                              ? (
+                                <div className="p-2 bg-slate-800 rounded">
+                                  <p className="text-xs text-slate-400">
+                                    {Number((stepData.output as Record<string, unknown>).error_count ?? 0)} errors, {Number((stepData.output as Record<string, unknown>).warning_count)} warnings
+                                  </p>
+                                </div>
+                              ) : null}
+
+                            {step.step_name === 'simulate'
+                              && typeof (stepData.output as Record<string, unknown>).test_passed === 'boolean'
+                              ? (
+                                <div className="p-2 bg-slate-800 rounded">
+                                  <p className={`text-xs ${(stepData.output as Record<string, unknown>).test_passed ? 'text-green-400' : 'text-red-400'}`}>
+                                    {(stepData.output as Record<string, unknown>).test_passed ? t('pipeline.detail.simPass') : t('pipeline.detail.simFail')}
+                                  </p>
+                                </div>
+                              ) : null}
+
+                            {(stepData.output as Record<string, unknown>).stdout
+                              ? (
+                                <div className="mt-2">
+                                  <p className="text-xs font-medium text-slate-400 mb-1">stdout</p>
+                                  <pre className="text-xs font-mono text-slate-300 bg-slate-900 p-2 rounded max-h-48 overflow-y-auto whitespace-pre-wrap">
+                                    {String((stepData.output as Record<string, unknown>).stdout)}
+                                  </pre>
+                                </div>
+                              ) : null}
+
+                            {(stepData.output as Record<string, unknown>).stderr
+                              ? (
+                                <div className="mt-2">
+                                  <p className="text-xs font-medium text-slate-400 mb-1">stderr</p>
+                                  <pre className="text-xs font-mono text-red-300 bg-slate-900 p-2 rounded max-h-48 overflow-y-auto whitespace-pre-wrap">
+                                    {String((stepData.output as Record<string, unknown>).stderr)}
+                                  </pre>
+                                </div>
+                              ) : null}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
