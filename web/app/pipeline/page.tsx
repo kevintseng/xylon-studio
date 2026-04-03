@@ -149,6 +149,7 @@ export default function PipelinePage() {
   const [simulationTimeout, setSimulationTimeout] = useState(300)
   const [llmProvider, setLlmProvider] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [educationMode, setEducationMode] = useState(true)
 
   // Pipeline state
   const [running, setRunning] = useState(false)
@@ -407,6 +408,20 @@ export default function PipelinePage() {
               </div>
             )}
 
+            {/* Education mode toggle */}
+            <label className="flex items-center justify-between p-3 border border-slate-700 rounded-lg bg-slate-800/30 cursor-pointer">
+              <div>
+                <span className="text-sm font-medium">{t('pipeline.education.toggle')}</span>
+                <p className="text-xs text-slate-400 mt-0.5">{t('pipeline.education.toggleDesc')}</p>
+              </div>
+              <input
+                type="checkbox"
+                checked={educationMode}
+                onChange={(e) => setEducationMode(e.target.checked)}
+                className="rounded"
+              />
+            </label>
+
             {/* Run/Stop button */}
             {running ? (
               <button
@@ -492,6 +507,12 @@ export default function PipelinePage() {
                           )}
                         </div>
                       </div>
+
+                      {educationMode && status !== 'running' && (
+                        <p className="text-xs text-slate-500 mt-1 max-w-md">
+                          {t(`pipeline.education.${step.step_name}`)}
+                        </p>
+                      )}
 
                       <div className="flex items-center gap-3 text-sm">
                         {stepData?.duration_seconds !== undefined && (

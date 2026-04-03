@@ -187,6 +187,14 @@ const translations: Record<Locale, Record<string, string>> = {
     'pipeline.detail.warnings': 'Warnings',
     'pipeline.detail.simPass': 'All tests passed',
     'pipeline.detail.simFail': 'Tests failed',
+    'pipeline.education.toggle': 'Education Mode',
+    'pipeline.education.toggleDesc': 'Show explanations at each step',
+    'pipeline.education.lint': 'Lint checks your Verilog for syntax errors and common pitfalls before simulation. Catching issues early saves hours of debugging.',
+    'pipeline.education.test_plan': 'A test plan defines what scenarios to verify: edge cases, boundary conditions, and functional requirements. Good plans prevent "it works on my machine" surprises.',
+    'pipeline.education.testbench_gen': 'The testbench is a C++ or SystemVerilog wrapper that drives inputs into your design and checks outputs. Think of it as automated QA for hardware.',
+    'pipeline.education.simulate': 'Simulation runs your design with the testbench inputs and checks if outputs match expected values. Verilator compiles Verilog to fast C++ for this.',
+    'pipeline.education.coverage': 'Coverage measures how thoroughly your tests exercise the design. Line coverage shows which code ran; toggle coverage shows which signals changed; branch coverage shows which conditions were tested.',
+    'pipeline.education.synthesis': 'Synthesis translates your RTL into actual logic gates using Yosys. It reveals area, timing, and resource usage, showing how your design maps to real hardware.',
 
     // Common
     'common.error': 'Error',
@@ -382,6 +390,14 @@ const translations: Record<Locale, Record<string, string>> = {
     'pipeline.detail.warnings': '警告',
     'pipeline.detail.simPass': '所有測試通過',
     'pipeline.detail.simFail': '測試失敗',
+    'pipeline.education.toggle': '教學模式',
+    'pipeline.education.toggleDesc': '在每一步顯示說明',
+    'pipeline.education.lint': 'Lint 在模擬前檢查 Verilog 的語法錯誤和常見問題。及早發現問題可節省數小時的除錯時間。',
+    'pipeline.education.test_plan': '測試計畫定義要驗證的場景：邊界情況、極端條件和功能需求。好的計畫能防止「在我的機器上可以跑」的意外。',
+    'pipeline.education.testbench_gen': '測試平台是一個 C++ 或 SystemVerilog 包裝器，用來驅動設計的輸入並檢查輸出。可以把它想成硬體的自動化 QA。',
+    'pipeline.education.simulate': '模擬使用測試平台的輸入執行您的設計，並檢查輸出是否與預期值匹配。Verilator 將 Verilog 編譯為快速的 C++ 來執行。',
+    'pipeline.education.coverage': '覆蓋率衡量測試對設計的覆蓋程度。行覆蓋率顯示哪些程式碼被執行；翻轉覆蓋率顯示哪些信號改變過；分支覆蓋率顯示哪些條件被測試過。',
+    'pipeline.education.synthesis': '合成使用 Yosys 將 RTL 轉換為實際的邏輯閘。它揭示面積、時序和資源使用情況，顯示您的設計如何映射到真實硬體。',
 
     // Common
     'common.error': '錯誤',
