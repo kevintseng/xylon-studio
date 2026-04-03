@@ -139,7 +139,14 @@ export default function PipelinePage() {
     }
 
     ws.onmessage = (event) => {
-      const data = JSON.parse(event.data)
+      let data: Record<string, unknown>
+      try {
+        data = JSON.parse(event.data)
+      } catch {
+        setError(t('pipeline.error.connection'))
+        handleStop()
+        return
+      }
 
       if (data.type === 'step_complete') {
         const step = data.step as StepState
@@ -164,7 +171,7 @@ export default function PipelinePage() {
         setResult(data.result as PipelineResult)
         handleStop()
       } else if (data.type === 'error') {
-        setError(data.message)
+        setError(String(data.message ?? 'Unknown error'))
         handleStop()
       }
     }
@@ -175,11 +182,9 @@ export default function PipelinePage() {
     }
 
     ws.onclose = () => {
-      if (running) {
-        handleStop()
-      }
+      handleStop()
     }
-  }, [rtlCode, testbenchCode, coverageTarget, lintEnabled, synthesisEnabled, simulationTimeout, llmProvider, handleStop, running, t])
+  }, [rtlCode, testbenchCode, coverageTarget, lintEnabled, synthesisEnabled, simulationTimeout, llmProvider, handleStop, t])
 
   const formatDuration = (seconds: number) => {
     if (seconds < 1) return '<1s'
@@ -203,10 +208,11 @@ export default function PipelinePage() {
           {/* Left: Input form */}
           <div className="lg:col-span-2 space-y-4">
             <div>
-              <label className="block text-sm font-medium mb-2">
+              <label htmlFor="pipeline-rtl" className="block text-sm font-medium mb-2">
                 {t('pipeline.label.rtl')} <span className="text-red-400">*</span>
               </label>
               <textarea
+                id="pipeline-rtl"
                 value={rtlCode}
                 onChange={(e) => setRtlCode(e.target.value)}
                 placeholder={t('pipeline.placeholder.rtl')}
@@ -216,10 +222,11 @@ export default function PipelinePage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-2">
+              <label htmlFor="pipeline-testbench" className="block text-sm font-medium mb-2">
                 {t('pipeline.label.testbench')} <span className="text-slate-500 text-xs">{t('design.optional')}</span>
               </label>
               <textarea
+                id="pipeline-testbench"
                 value={testbenchCode}
                 onChange={(e) => setTestbenchCode(e.target.value)}
                 placeholder={t('pipeline.placeholder.testbench')}
@@ -231,17 +238,20 @@ export default function PipelinePage() {
             {/* Advanced settings */}
             <button
               onClick={() => setShowAdvanced(!showAdvanced)}
+              aria-expanded={showAdvanced}
+              aria-controls="pipeline-advanced-settings"
               className="text-sm text-slate-400 hover:text-slate-200 transition-colors"
             >
               {showAdvanced ? '- ' : '+ '}{t('pipeline.advanced')}
             </button>
 
             {showAdvanced && (
-              <div className="space-y-3 p-4 border border-slate-700 rounded-lg bg-slate-800/30">
+              <div id="pipeline-advanced-settings" className="space-y-3 p-4 border border-slate-700 rounded-lg bg-slate-800/30">
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs text-slate-400 mb-1">{t('pipeline.label.coverage')}</label>
+                    <label htmlFor="pipeline-coverage" className="block text-xs text-slate-400 mb-1">{t('pipeline.label.coverage')}</label>
                     <input
+                      id="pipeline-coverage"
                       type="number"
                       min={0} max={1} step={0.05}
                       value={coverageTarget}
@@ -251,8 +261,9 @@ export default function PipelinePage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-slate-400 mb-1">{t('pipeline.label.timeout')}</label>
+                    <label htmlFor="pipeline-timeout" className="block text-xs text-slate-400 mb-1">{t('pipeline.label.timeout')}</label>
                     <input
+                      id="pipeline-timeout"
                       type="number"
                       min={10} max={3600}
                       value={simulationTimeout}
