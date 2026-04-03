@@ -29,6 +29,9 @@ function Header() {
           <a href="/verify" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all">
             {t('nav.verify')}
           </a>
+          <a href="/pipeline" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all">
+            {t('nav.pipeline')}
+          </a>
           <a href="/history" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all">
             {t('nav.history')}
           </a>
