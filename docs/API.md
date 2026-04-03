@@ -121,7 +121,127 @@ curl -X POST http://localhost:5000/api/verification/verify \
 
 ---
 
-### 3. Health Check
+### 3. Verification Pipeline (v2)
+
+Run the full verification pipeline: lint, simulate, coverage, and optionally LLM-driven test plan/testbench generation with coverage-driven iteration.
+
+#### 3a. REST Endpoint
+
+**Endpoint**: `POST /api/pipeline/run`
+
+**Request Body**:
+
+```json
+{
+  "rtl_code": "string (required, Verilog source code)",
+  "testbench_code": "string (optional, C++ or SystemVerilog)",
+  "coverage_target": "float (0.0-1.0, default 0.8)",
+  "max_iterations": "integer (1-20, default 5)",
+  "lint_enabled": "boolean (default true)",
+  "synthesis_enabled": "boolean (default false)",
+  "simulation_timeout": "integer (10-3600 seconds, default 300)",
+  "llm_provider": "string (optional: 'ollama', 'claude', 'vllm')",
+  "mode": "string ('professional' or 'education', default 'professional')"
+}
+```
+
+**Response** (200 OK):
+
+```json
+{
+  "pipeline_id": "pipe-abc123def456",
+  "success": true,
+  "total_duration_seconds": 12.5,
+  "iterations_used": 1,
+  "steps": [
+    {
+      "step_name": "lint",
+      "status": "passed",
+      "duration_seconds": 0.8,
+      "output": { "error_count": 0, "warning_count": 2 },
+      "errors": [],
+      "warnings": ["UNOPTFLAT: Signal not optimized"]
+    }
+  ],
+  "final_coverage": {
+    "line_coverage": 0.85,
+    "toggle_coverage": 0.72,
+    "branch_coverage": 0.60,
+    "score": 0.76
+  }
+}
+```
+
+**Example**:
+
+```bash
+curl -X POST http://localhost:5000/api/pipeline/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rtl_code": "module adder(input [7:0] a, b, output [8:0] sum); assign sum = a + b; endmodule",
+    "coverage_target": 0.8,
+    "lint_enabled": true
+  }'
+```
+
+**Error Responses**:
+
+- `422 Unprocessable Entity`: Invalid request fields
+- `500 Internal Server Error`: Pipeline execution failed
+
+#### 3b. WebSocket Endpoint
+
+**Endpoint**: `WS /api/pipeline/ws`
+
+Provides real-time step progress streaming during pipeline execution.
+
+**Client sends** (JSON):
+
+```json
+{
+  "rtl_code": "module adder...",
+  "coverage_target": 0.8,
+  "lint_enabled": true
+}
+```
+
+**Server streams** step results:
+
+```json
+{
+  "type": "step_complete",
+  "pipeline_id": "pipe-abc123",
+  "step_index": 1,
+  "total_steps": 3,
+  "step": {
+    "step_name": "lint",
+    "status": "passed",
+    "duration_seconds": 0.5
+  }
+}
+```
+
+**Final message**:
+
+```json
+{
+  "type": "pipeline_complete",
+  "result": { "...full PipelineResult..." }
+}
+```
+
+**Error message**:
+
+```json
+{
+  "type": "error",
+  "message": "Invalid request: ..."
+}
+```
+
+---
+
+### 4. Health Check
 
 Check API service health status.
 
@@ -191,6 +311,53 @@ curl http://localhost:5000/health
 | waveform_file_path | string | VCD waveform file path |
 | errors | array[string] | Error messages |
 | generated_at | datetime | Verification timestamp |
+
+---
+
+### PipelineRequest
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| rtl_code | string | Yes | - | Verilog RTL source code |
+| testbench_code | string | No | null | C++ or SystemVerilog testbench |
+| coverage_target | float | No | 0.8 | Target coverage score (0.0-1.0) |
+| max_iterations | integer | No | 5 | Max coverage improvement iterations |
+| lint_enabled | boolean | No | true | Run lint step |
+| synthesis_enabled | boolean | No | false | Run Yosys synthesis report |
+| simulation_timeout | integer | No | 300 | Simulation timeout in seconds |
+| llm_provider | string | No | null | LLM provider (ollama, claude, vllm) |
+| mode | string | No | professional | Pipeline mode (education, professional) |
+
+### PipelineResponse
+
+| Field | Type | Description |
+|-------|------|-------------|
+| pipeline_id | string | Unique pipeline run identifier |
+| success | boolean | Overall pipeline success |
+| total_duration_seconds | float | Total execution time |
+| iterations_used | integer | Number of coverage iterations |
+| steps | array[StepResult] | Results for each pipeline step |
+| final_coverage | CoverageResult | Final coverage metrics (if collected) |
+
+### StepResult
+
+| Field | Type | Description |
+|-------|------|-------------|
+| step_name | string | Step name (lint, simulate, coverage, etc.) |
+| status | string | passed, failed, skipped, or error |
+| duration_seconds | float | Step execution time |
+| output | object | Step-specific output data |
+| errors | array[string] | Error messages |
+| warnings | array[string] | Warning messages |
+
+### CoverageResult
+
+| Field | Type | Description |
+|-------|------|-------------|
+| line_coverage | float | Line coverage (0.0-1.0) |
+| toggle_coverage | float | Toggle coverage (0.0-1.0) |
+| branch_coverage | float | Branch coverage (0.0-1.0) |
+| score | float | Weighted average score (0.0-1.0) |
 
 ---
 
@@ -329,6 +496,12 @@ All errors follow this format:
 ---
 
 ## Changelog
+
+### v2.0.0 (2026-04-03)
+- Verification Pipeline endpoints (REST + WebSocket)
+- Real-time step progress streaming via WebSocket
+- Coverage-driven iteration with LLM support (Phase B)
+- Pipeline request/response models
 
 ### v1.0.0 (2026-04-02)
 - Initial API release
