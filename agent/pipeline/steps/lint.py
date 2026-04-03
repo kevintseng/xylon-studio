@@ -41,7 +41,7 @@ async def run_lint_step(
         warnings = result.get("warnings", [])
 
         # Lint passes if no errors (warnings are acceptable)
-        has_errors = len(errors) > 0 and not result.get("success", False)
+        has_errors = len(errors) > 0 or not result.get("success", False)
 
         return StepResult(
             step_name=STEP_NAME,
@@ -95,7 +95,7 @@ async def run_lint_step_from_string(
 
         errors = result.get("errors", [])
         warnings = result.get("warnings", [])
-        has_errors = len(errors) > 0 and not result.get("success", False)
+        has_errors = len(errors) > 0 or not result.get("success", False)
 
         return StepResult(
             step_name=STEP_NAME,

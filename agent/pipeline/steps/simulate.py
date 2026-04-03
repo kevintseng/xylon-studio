@@ -5,6 +5,7 @@ Runs Verilator simulation with RTL and testbench,
 capturing pass/fail results and waveform output.
 """
 
+import asyncio
 import logging
 import time
 
@@ -38,7 +39,8 @@ async def run_simulate_step(
     start = time.monotonic()
 
     try:
-        result = sandbox.run_verilator_sim(
+        result = await asyncio.to_thread(
+            sandbox.run_verilator_sim,
             rtl_file, tb_file, timeout=timeout, coverage=False,
         )
         duration = time.monotonic() - start

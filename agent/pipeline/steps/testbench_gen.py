@@ -67,6 +67,8 @@ int main(int argc, char** argv) {{
 
     // --- Scenario tests ---
     // [Your test code here]
+    // Note: use dut->evaluate() (not eval()) to step the simulation.
+    // "evaluate" is the standard Verilator C++ API for propagating signals.
     // Use: dut->evaluate(); after setting inputs
     // Use: dut->clk = !dut->clk; dut->evaluate(); for clock toggle
 
@@ -118,7 +120,7 @@ Improve the testbench to increase coverage. Focus on:
 4. Add edge cases: reset during operation, back-to-back transactions, pipeline stalls
 
 Keep all existing tests that pass. Add new test scenarios.
-Use dut->evaluate() to step the simulation.
+Use dut->evaluate() to step the simulation (Verilator C++ API, not eval()).
 
 Respond with ONLY the improved C++ testbench code, no other text.
 """

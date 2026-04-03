@@ -5,6 +5,7 @@ Runs Verilator simulation with --coverage enabled,
 then parses the coverage.dat output into a CoverageReport.
 """
 
+import asyncio
 import logging
 import re
 import time
@@ -39,7 +40,8 @@ async def run_coverage_step(
     start = time.monotonic()
 
     try:
-        result = sandbox.run_verilator_sim(
+        result = await asyncio.to_thread(
+            sandbox.run_verilator_sim,
             rtl_file, tb_file, timeout=timeout, coverage=True,
         )
         duration = time.monotonic() - start
@@ -66,10 +68,15 @@ async def run_coverage_step(
         # Parse coverage data into CoverageReport
         report = _parse_coverage_data(coverage_data)
 
+        # Simulation succeeded but coverage data unavailable
+        cov_errors = []
+        if report is None:
+            cov_errors.append("Coverage data unavailable after successful simulation")
+
         return (
             StepResult(
                 step_name=STEP_NAME,
-                status=StepStatus.PASSED,
+                status=StepStatus.PASSED if report else StepStatus.FAILED,
                 duration_seconds=duration,
                 output={
                     "stdout": result.get("stdout", ""),
@@ -79,7 +86,7 @@ async def run_coverage_step(
                     "toggle_coverage": report.toggle_coverage if report else 0.0,
                     "branch_coverage": report.branch_coverage if report else 0.0,
                 },
-                errors=[],
+                errors=cov_errors,
                 warnings=_coverage_warnings(report),
             ),
             report,

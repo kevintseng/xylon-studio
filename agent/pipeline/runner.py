@@ -12,6 +12,7 @@ Inspired by UVM2 (arXiv:2504.19959) iterative verification methodology.
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -108,8 +109,13 @@ async def run_pipeline(
     container_work_dir = f"/tmp/xylon-pipeline/{pipeline_id}"
 
     try:
+        # Parse module name from RTL to use as filename.
+        # Verilator names the executable after the top module (V<module>),
+        # so the filename must match for the sandbox to find the binary.
+        rtl_filename = _extract_module_filename(rtl_code)
+
         # Write files to local temp dir
-        rtl_file_local = os.path.join(work_dir, "design.v")
+        rtl_file_local = os.path.join(work_dir, rtl_filename)
         with open(rtl_file_local, "w", encoding="utf-8") as f:
             f.write(rtl_code)
 
@@ -120,7 +126,7 @@ async def run_pipeline(
                 f.write(testbench_code)
 
         # Copy files into container
-        container_rtl = f"{container_work_dir}/design.v"
+        container_rtl = f"{container_work_dir}/{rtl_filename}"
         container_tb = f"{container_work_dir}/testbench.sv" if tb_file_local else None
         _copy_to_container(sandbox.verilator_container, work_dir, container_work_dir)
 
@@ -315,6 +321,20 @@ async def run_pipeline(
             )
         except Exception:
             pass
+
+
+def _extract_module_filename(rtl_code: str) -> str:
+    """
+    Parse the top module name from Verilog RTL and return a matching filename.
+
+    Verilator names the compiled executable after the top module (V<module>),
+    so the RTL filename must match for the sandbox to find the binary.
+    Falls back to 'design.v' if no module declaration is found.
+    """
+    match = re.search(r"^\s*module\s+(\w+)", rtl_code, re.MULTILINE)
+    if match:
+        return f"{match.group(1)}.v"
+    return "design.v"
 
 
 def _estimate_total_steps(config: PipelineConfig, has_testbench: bool) -> int:
