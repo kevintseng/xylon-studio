@@ -133,11 +133,8 @@ class SandboxManager:
         """Write content to a file inside the container via docker exec + stdin."""
         container_dir = os.path.dirname(container_path)
         subprocess.run(
-            ["docker", "exec", container, "mkdir", "-p", container_dir],
-            capture_output=True, timeout=10, check=True,
-        )
-        subprocess.run(
-            ["docker", "exec", "-i", container, "sh", "-c", f"cat > {container_path}"],
+            ["docker", "exec", "-i", container, "sh", "-c",
+             f"mkdir -p {container_dir} && cat > {container_path}"],
             input=content.encode("utf-8"),
             capture_output=True, timeout=10, check=True,
         )
