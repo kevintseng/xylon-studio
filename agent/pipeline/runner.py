@@ -9,6 +9,7 @@ from typing import Awaitable, Callable, Optional
 from agent.core.llm_provider import LLMProvider, LLMProviderError, create_llm_provider
 from agent.pipeline.models import CoverageReport, PipelineConfig, PipelineResult, StepStatus
 from agent.pipeline.steps.coverage import run_coverage_step
+from agent.pipeline.steps.debug_assist import run_debug_assist_step
 from agent.pipeline.steps.improve import improve_testbench_step
 from agent.pipeline.steps.lint import run_lint_step
 from agent.pipeline.steps.simulate import run_simulate_step
@@ -249,6 +250,18 @@ async def run_pipeline(
                     logger.warning(
                         f"[PIPELINE-{pipeline_id}] Simulation failed at iteration {iterations_used}, will attempt improvement"
                     )
+                    # Run debug assistant if LLM is available
+                    if llm_provider:
+                        await _emit_start("debug")
+                        debug_result = await run_debug_assist_step(
+                            rtl_code=rtl_code,
+                            testbench_code=current_testbench,
+                            sim_stdout=simulate_result.output.get('stdout', ''),
+                            sim_stderr=simulate_result.output.get('stderr', ''),
+                            llm=llm_provider,
+                        )
+                        steps.append(debug_result)
+                        await _emit(debug_result)
 
                 # If target not met (or sim failed) and iterations remaining, improve testbench
                 if iteration < config.max_iterations - 1:
