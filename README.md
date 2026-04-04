@@ -21,8 +21,10 @@ XylonStudio is an AI-assisted chip verification platform. Auto-generate test pla
 - C++ Verilator testbench generation with coverage support
 - Coverage-driven iteration loop (auto-improve until target met)
 - Real Verilator simulation in Docker containers
+- Yosys synthesis reports (gate count, cell breakdown)
+- AI Debug Assistant explains simulation failures in plain language
 - Pluggable LLM (Ollama, vLLM — bring your own model)
-- Education mode with step-by-step explanations
+- CLI for scripting and CI integration (`python -m agent.cli run ...`)
 - Pipeline visualization with real-time WebSocket streaming
 
 ---
@@ -40,13 +42,19 @@ Testbench Generation (LLM)
     ↓
 ┌─── Simulation (Verilator) ◄──┐
 │        ↓                      │
+│   PASS? ── No ── Debug Assistant (LLM)
+│        │                      │
+│       Yes                     │
+│        ↓                      │
 │   Coverage Analysis           │
 │        ↓                      │
 │   Target met? ── No ── Improve Testbench (LLM)
 │        │
 │       Yes
 │        ↓
-└── Coverage Report
+├── Coverage Report
+    ↓
+Synthesis Report (Yosys, optional)
 ```
 
 ---
@@ -107,6 +115,25 @@ npm run dev
 
 ### Example: Run Pipeline
 
+**CLI (fastest way to try it):**
+
+```bash
+# Lint only
+python -m agent.cli run examples/adder/adder_8bit.v
+
+# Phase A: user-provided C++ testbench + synthesis report
+python -m agent.cli run examples/adder/adder_8bit.v \
+  --testbench examples/adder/tb_adder_8bit.cpp \
+  --synthesis
+
+# Phase B: LLM generates test plan + testbench automatically
+python -m agent.cli run examples/adder/adder_8bit.v \
+  --llm ollama --model qwen2.5-coder:32b \
+  --coverage-target 0.8
+```
+
+**REST API:**
+
 ```bash
 # Phase A: Lint + simulate with your own testbench
 curl -X POST http://localhost:5000/api/pipeline/run \
@@ -114,7 +141,8 @@ curl -X POST http://localhost:5000/api/pipeline/run \
   -d '{
     "rtl_code": "module adder(input [7:0] a, b, output [8:0] sum); assign sum = a + b; endmodule",
     "testbench_code": "...",
-    "coverage_target": 0.80
+    "coverage_target": 0.80,
+    "synthesis_enabled": true
   }'
 
 # Phase B: LLM generates test plan + testbench automatically
@@ -135,11 +163,13 @@ curl -X POST http://localhost:5000/api/pipeline/run \
 
 ## Example Designs
 
-| Design | Type | Tests | Line Coverage |
-|--------|------|-------|---------------|
-| [8-bit Adder](examples/adder/) | Combinational | 25 | 100% |
-| [8-bit Counter](examples/counter/) | Sequential | 10 | 100% |
-| [Traffic Light FSM](examples/fsm/) | FSM | 9 | 79% |
+| Design | Type | Tests | Line Cov | Gates (Yosys) |
+|--------|------|-------|----------|---------------|
+| [8-bit Adder](examples/adder/) | Combinational | 25 | 100% | — |
+| [8-bit Counter](examples/counter/) | Sequential | 10 | 100% | — |
+| [Traffic Light FSM](examples/fsm/) | FSM | 9 | 79% | — |
+| [16-bit Barrel Shifter](examples/barrel_shifter/) | Combinational | 36 | 80% | 237 |
+| [RISC-V ALU](examples/risc-v-alu/) | Combinational (RV32I) | 24 | 50% | 1485 |
 
 Each example includes RTL source and a verified C++ Verilator testbench.
 
@@ -150,12 +180,14 @@ Each example includes RTL source and a verified C++ Verilator testbench.
 ```
 xylon/
 ├── agent/                  # Backend (Python/FastAPI)
+│   ├── cli.py              # Command-line pipeline runner (python -m agent.cli)
 │   ├── core/               # LLM provider abstraction
 │   ├── pipeline/           # Pipeline runner + step functions
-│   │   ├── steps/          # lint, test_plan, testbench_gen, simulate, coverage, improve
-│   │   └── tests/          # 12 unit/integration tests
+│   │   └── steps/          # lint, test_plan, testbench_gen, simulate, coverage,
+│   │                       # improve, debug_assist, synthesis
 │   ├── api/                # REST + WebSocket endpoints
-│   └── sandbox/            # Docker EDA container management
+│   ├── sandbox/            # Docker EDA container management
+│   └── tests/              # 101 unit + integration tests
 ├── web/                    # Frontend (Next.js)
 │   ├── app/                # Pages: home, design, verify, pipeline, history
 │   ├── components/         # UI components
@@ -174,8 +206,14 @@ xylon/
 cd agent
 source venv/bin/activate
 
-# Run tests
-pytest agent/pipeline/tests/ -v
+# Run unit tests (fast, no Docker required)
+pytest agent/
+
+# Run integration tests (requires Docker + Verilator/Yosys containers)
+pytest agent/ -m integration
+
+# Lint with ruff
+ruff check agent/
 
 # Start API server
 uvicorn agent.api.main:app --reload --port 5000
