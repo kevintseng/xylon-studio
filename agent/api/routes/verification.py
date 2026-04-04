@@ -6,10 +6,10 @@ Endpoints for testbench generation and RTL verification.
 
 import logging
 import os
-from fastapi import APIRouter, HTTPException, BackgroundTasks
-from pydantic import BaseModel, Field
-from typing import Optional, List
 from datetime import datetime
+
+from fastapi import APIRouter, BackgroundTasks, HTTPException
+from pydantic import BaseModel, Field
 
 from agent.dragons import VerificationDragon, VerificationDragonError
 from agent.models import RTLCode, TestReport
@@ -26,7 +26,7 @@ class VerificationRequest(BaseModel):
     """Request model for verification."""
     module_name: str = Field(..., description="Module name")
     code: str = Field(..., min_length=1, description="Verilog RTL code")
-    file_path: Optional[str] = Field(None, description="Original file path")
+    file_path: str | None = Field(None, description="Original file path")
 
     class Config:
         json_schema_extra = {
@@ -44,8 +44,8 @@ class VerificationResponse(BaseModel):
     test_cases_passed: int
     test_cases_failed: int
     code_coverage: float
-    waveform_file_path: Optional[str] = None
-    errors: List[str]
+    waveform_file_path: str | None = None
+    errors: list[str]
     generated_at: datetime
 
     @classmethod
@@ -112,13 +112,13 @@ async def verify_rtl(request: VerificationRequest, background_tasks: BackgroundT
         raise HTTPException(
             status_code=400,
             detail=f"Verification failed: {str(e)}"
-        )
+        ) from e
     except Exception as e:
         logger.error(f"Unexpected error: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Internal server error: {str(e)}"
-        )
+        ) from e
 
 
 @router.get("/verification/health")
@@ -126,7 +126,7 @@ async def verification_health():
     """Health check for Verification Dragon service."""
     try:
         # Simple health check
-        dragon = VerificationDragon(llm_endpoint=LLM_ENDPOINT)
+        VerificationDragon(llm_endpoint=LLM_ENDPOINT)
         return {
             "status": "healthy",
             "service": "verification-dragon",
@@ -137,4 +137,4 @@ async def verification_health():
         raise HTTPException(
             status_code=503,
             detail=f"Service unhealthy: {str(e)}"
-        )
+        ) from e

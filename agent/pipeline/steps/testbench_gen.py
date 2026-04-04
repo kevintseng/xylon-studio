@@ -10,7 +10,6 @@ Reference: UVM2 (arXiv:2504.19959) iterative verification methodology.
 import logging
 import re
 import time
-from typing import Optional
 
 from agent.pipeline.models import (
     CoverageReport,
@@ -353,7 +352,7 @@ def _format_scenarios(scenarios: list[TestScenario]) -> str:
     return "\n".join(lines)
 
 
-def _extract_cpp_code(raw_text: str) -> Optional[str]:
+def _extract_cpp_code(raw_text: str) -> str | None:
     """
     Extract C++ code from LLM response.
 

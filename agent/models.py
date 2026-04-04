@@ -5,7 +5,6 @@ Shared data models used across Dragons, API routes, and workflows.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional
 from datetime import datetime
 
 
@@ -23,9 +22,9 @@ class DesignSpec:
     """
     description: str
     target_freq: str
-    module_name: Optional[str] = None
-    max_area: Optional[str] = None
-    max_power: Optional[str] = None
+    module_name: str | None = None
+    max_area: str | None = None
+    max_power: str | None = None
 
 
 @dataclass
@@ -49,9 +48,9 @@ class RTLCode:
     code: str
     lines_of_code: int
     quality_score: float
-    lint_warnings: List[str] = field(default_factory=list)
-    estimated_area: Optional[float] = None
-    estimated_power: Optional[float] = None
+    lint_warnings: list[str] = field(default_factory=list)
+    estimated_area: float | None = None
+    estimated_power: float | None = None
     generated_at: datetime = field(default_factory=datetime.utcnow)
 
 
@@ -73,6 +72,6 @@ class TestReport:
     test_cases_passed: int
     test_cases_failed: int
     code_coverage: float
-    waveform_file_path: Optional[str] = None
-    errors: List[str] = field(default_factory=list)
+    waveform_file_path: str | None = None
+    errors: list[str] = field(default_factory=list)
     generated_at: datetime = field(default_factory=datetime.utcnow)

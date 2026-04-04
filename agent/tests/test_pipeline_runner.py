@@ -1,11 +1,11 @@
 """Tests for pipeline runner."""
 
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
 
 from agent.pipeline.models import PipelineConfig, StepStatus
 from agent.pipeline.runner import run_pipeline
-
 
 SIMPLE_RTL = """\
 module adder_8bit (
@@ -53,31 +53,32 @@ def mock_sandbox_manager():
 
 @pytest.fixture
 def mock_container_ops():
-    """Mock Docker container operations (copy, mkdir, rm)."""
-    with patch("agent.pipeline.runner._copy_to_container"):
-        with patch("agent.pipeline.runner.subprocess"):
-            yield
+    """Mock Docker container operations.
+
+    Runner writes RTL/testbench to tempdir via open(), so we only need
+    the SandboxManager itself mocked (done by mock_sandbox_manager).
+    """
+    yield
 
 
 @pytest.mark.asyncio
 async def test_pipeline_lint_only(mock_sandbox_manager, mock_container_ops):
-    """Pipeline with no testbench should run lint and skip simulation."""
-    with patch("agent.pipeline.steps.lint.SandboxManager"):
-        mock_sandbox_manager.lint_verilog_string.return_value = {
-            "success": True,
-            "warnings": [],
-            "errors": [],
-            "stdout": "",
-            "stderr": "",
-            "duration_seconds": 0.5,
-        }
+    """Pipeline with no testbench should run lint only."""
+    mock_sandbox_manager.lint_verilog_string.return_value = {
+        "success": True,
+        "warnings": [],
+        "errors": [],
+        "stdout": "",
+        "stderr": "",
+        "duration_seconds": 0.5,
+    }
 
-        result = await run_pipeline(SIMPLE_RTL)
+    result = await run_pipeline(SIMPLE_RTL)
 
     assert result.success is True
-    assert len(result.steps) == 2  # lint + skipped simulate
+    assert len(result.steps) == 1  # lint only, no simulate step added
     assert result.get_step("lint").status == StepStatus.PASSED
-    assert result.get_step("simulate").status == StepStatus.SKIPPED
+    assert result.get_step("simulate") is None
 
 
 @pytest.mark.asyncio
@@ -113,8 +114,8 @@ async def test_pipeline_full_run(mock_sandbox_manager, mock_container_ops):
     }
 
     # Simulate passes (called twice: once for simulate, once for coverage)
-    mock_sandbox_manager.run_verilator_sim.side_effect = [
-        # First call: simulate step (coverage=False)
+    mock_sandbox_manager.run_verilator_sim_string.side_effect = [
+        # First call: simulate step
         {
             "success": True,
             "stdout": "PASS\n",
@@ -123,7 +124,7 @@ async def test_pipeline_full_run(mock_sandbox_manager, mock_container_ops):
             "coverage_data": None,
             "duration_seconds": 1.0,
         },
-        # Second call: coverage step (coverage=True)
+        # Second call: coverage step
         {
             "success": True,
             "stdout": "PASS\n",
@@ -131,7 +132,7 @@ async def test_pipeline_full_run(mock_sandbox_manager, mock_container_ops):
             "vcd_file": None,
             "coverage_data": {
                 "success": True,
-                "raw_report": "Lines covered: 90.0%\nToggle coverage: 80.0%\nBranch coverage: 70.0%",
+                "raw_report": "Total coverage (90/100) 90.00%",
                 "summary": "",
             },
             "duration_seconds": 1.5,
@@ -161,7 +162,7 @@ async def test_pipeline_sim_failure_skips_coverage(mock_sandbox_manager, mock_co
         "duration_seconds": 0.3,
     }
 
-    mock_sandbox_manager.run_verilator_sim.return_value = {
+    mock_sandbox_manager.run_verilator_sim_string.return_value = {
         "success": False,
         "stdout": "",
         "stderr": "Build error",
@@ -173,14 +174,15 @@ async def test_pipeline_sim_failure_skips_coverage(mock_sandbox_manager, mock_co
     result = await run_pipeline(SIMPLE_RTL, testbench_code=SIMPLE_TB)
 
     assert result.success is False
-    assert len(result.steps) == 2  # lint + failed simulate, no coverage
+    # lint + failed simulate, no coverage step
+    assert len(result.steps) == 2
     assert result.final_coverage is None
 
 
 @pytest.mark.asyncio
 async def test_pipeline_lint_disabled(mock_sandbox_manager, mock_container_ops):
     """Pipeline with lint_enabled=False should skip lint."""
-    mock_sandbox_manager.run_verilator_sim.side_effect = [
+    mock_sandbox_manager.run_verilator_sim_string.side_effect = [
         {
             "success": True,
             "stdout": "PASS\n",
@@ -196,7 +198,7 @@ async def test_pipeline_lint_disabled(mock_sandbox_manager, mock_container_ops):
             "vcd_file": None,
             "coverage_data": {
                 "success": True,
-                "raw_report": "Lines covered: 95.0%",
+                "raw_report": "Total coverage (95/100) 95.00%",
                 "summary": "",
             },
             "duration_seconds": 1.5,
@@ -222,6 +224,7 @@ async def test_pipeline_result_to_dict(mock_sandbox_manager, mock_container_ops)
     d = result.to_dict()
 
     assert "pipeline_id" in d
-    assert d["pipeline_id"].startswith("pipe-")
+    # pipeline_id is a UUID4 string (36 chars with hyphens)
+    assert len(d["pipeline_id"]) == 36
     assert isinstance(d["steps"], list)
     assert isinstance(d["total_duration_seconds"], float)

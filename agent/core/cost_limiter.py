@@ -39,11 +39,11 @@ Usage:
     )
 """
 
-import logging
-from datetime import datetime, timedelta
-from typing import Dict, Any, Optional
-from dataclasses import dataclass, field
 import json
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,7 @@ class UserQuota:
     alert_sent_90: bool = False
     alert_sent_100: bool = False
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for Redis storage."""
         return {
             'user_id': self.user_id,
@@ -116,7 +116,7 @@ class UserQuota:
         return json.dumps(self.to_dict())
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'UserQuota':
+    def from_dict(cls, data: dict[str, Any]) -> 'UserQuota':
         """Create from dictionary."""
         return cls(**data)
 
@@ -176,7 +176,7 @@ class LLMCostRecord:
     output_tokens: int = 0
     dragon_type: str = 'unknown'
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             'user_id': self.user_id,
@@ -394,7 +394,7 @@ def record_llm_cost(
         return value.decode() if isinstance(value, bytes) else value
 
     new_spent_usd = results[0]  # Updated spent_today_usd (float from HINCRBYFLOAT)
-    new_request_count = results[1]  # Updated request_count_today (int from HINCRBY)
+    results[1]  # Updated request_count_today (int from HINCRBY)
     daily_budget_usd = float(decode_if_bytes(results[2]))
     alert_sent_80 = decode_if_bytes(results[3]) == 'True' if results[3] else False
     alert_sent_90 = decode_if_bytes(results[4]) == 'True' if results[4] else False
@@ -458,7 +458,7 @@ def record_llm_cost(
     return quota
 
 
-def get_user_spending_summary(user_id: str, redis_client) -> Dict[str, Any]:
+def get_user_spending_summary(user_id: str, redis_client) -> dict[str, Any]:
     """
     Get user spending summary for today.
 

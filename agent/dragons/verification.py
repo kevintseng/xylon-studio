@@ -29,13 +29,12 @@ import logging
 import os
 import re
 import tempfile
-import subprocess
-from typing import Any, List, Dict, Optional, Tuple
 from datetime import datetime
+from typing import Any
 
+from agent.core.llm_gateway import LLMGateway, LLMProvider, VLLMBackend
 from agent.dragons import Dragon, DragonError, DragonMetrics
 from agent.models import RTLCode, TestReport
-from agent.core.llm_gateway import LLMGateway, LLMProvider, VLLMBackend
 from agent.sandbox import SandboxManager
 
 logger = logging.getLogger(__name__)
@@ -87,8 +86,8 @@ class VerificationDragon(Dragon[RTLCode, TestReport]):
         self.sandbox = SandboxManager()
 
         # Metrics tracking
-        self._start_time: Optional[datetime] = None
-        self._end_time: Optional[datetime] = None
+        self._start_time: datetime | None = None
+        self._end_time: datetime | None = None
         self._llm_calls = 0
         self._llm_tokens = 0
         self._success = False
@@ -237,7 +236,7 @@ class VerificationDragon(Dragon[RTLCode, TestReport]):
 
     # ==================== Internal Methods ====================
 
-    def _analyze_rtl_interface(self, rtl_code: str) -> Dict[str, Any]:
+    def _analyze_rtl_interface(self, rtl_code: str) -> dict[str, Any]:
         """
         Extract module interface from RTL code.
 
@@ -279,7 +278,7 @@ class VerificationDragon(Dragon[RTLCode, TestReport]):
 
         return module_info
 
-    def _generate_testbench(self, rtl: RTLCode, module_info: Dict) -> str:
+    def _generate_testbench(self, rtl: RTLCode, module_info: dict) -> str:
         """
         Generate testbench using LLM.
 
@@ -309,7 +308,7 @@ class VerificationDragon(Dragon[RTLCode, TestReport]):
 
         return testbench_code
 
-    def _build_testbench_prompt(self, rtl: RTLCode, module_info: Dict) -> str:
+    def _build_testbench_prompt(self, rtl: RTLCode, module_info: dict) -> str:
         """
         Build LLM prompt for testbench generation.
 
@@ -382,7 +381,7 @@ Output ONLY the SystemVerilog testbench code, no explanations.
 
         return code
 
-    def _save_verification_files(self, rtl: RTLCode, testbench: str) -> Tuple[str, str]:
+    def _save_verification_files(self, rtl: RTLCode, testbench: str) -> tuple[str, str]:
         """
         Save RTL and testbench to temporary files.
 
@@ -410,7 +409,7 @@ Output ONLY the SystemVerilog testbench code, no explanations.
 
         return rtl_file, tb_file
 
-    def _run_simulation(self, rtl_file: str, tb_file: str) -> Dict:
+    def _run_simulation(self, rtl_file: str, tb_file: str) -> dict:
         """
         Run Verilator simulation.
 
@@ -436,8 +435,8 @@ Output ONLY the SystemVerilog testbench code, no explanations.
     def _create_test_report(
         self,
         tb_file: str,
-        sim_result: Dict,
-        module_info: Dict
+        sim_result: dict,
+        module_info: dict
     ) -> TestReport:
         """
         Create TestReport from simulation results.
@@ -468,7 +467,7 @@ Output ONLY the SystemVerilog testbench code, no explanations.
             errors=errors
         )
 
-    def _parse_simulation_output(self, output: str) -> Tuple[int, int, List[str]]:
+    def _parse_simulation_output(self, output: str) -> tuple[int, int, list[str]]:
         """
         Parse simulation output for test results.
 
@@ -489,7 +488,7 @@ Output ONLY the SystemVerilog testbench code, no explanations.
 
         return passed, failed, errors
 
-    def _estimate_coverage(self, passed: int, failed: int, module_info: Dict) -> float:
+    def _estimate_coverage(self, passed: int, failed: int, module_info: dict) -> float:
         """
         Estimate code coverage (basic heuristic).
 

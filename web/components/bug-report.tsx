@@ -348,6 +348,7 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
             </div>
             {screenshot && (
               <div className="mt-2 border rounded-md overflow-hidden">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={screenshot}
                   alt="Bug screenshot preview"

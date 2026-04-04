@@ -8,7 +8,6 @@ Usage:
 """
 
 import uvicorn
-from agent.api.main import app
 
 
 def main():

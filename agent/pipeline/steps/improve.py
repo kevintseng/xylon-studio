@@ -11,10 +11,9 @@ Iteratively improves testbench to increase coverage based on coverage reports.
 import logging
 import re
 import time
-from typing import Optional
 
-from agent.pipeline.models import StepResult, StepStatus, CoverageReport
 from agent.core.llm_provider import LLMProviderError
+from agent.pipeline.models import CoverageReport, StepResult, StepStatus
 
 logger = logging.getLogger(__name__)
 

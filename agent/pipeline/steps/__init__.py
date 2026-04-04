@@ -1,8 +1,8 @@
 """Pipeline step implementations."""
 
+from .coverage import run_coverage_step
 from .lint import run_lint_step
 from .simulate import run_simulate_step
-from .coverage import run_coverage_step
 
 __all__ = [
     'run_lint_step',

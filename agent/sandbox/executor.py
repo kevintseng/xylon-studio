@@ -8,11 +8,10 @@ Executes commands in isolated Docker containers with:
 - Security validation
 """
 
-import subprocess
 import logging
 import os
+import subprocess
 from dataclasses import dataclass
-from typing import Optional, List
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -88,10 +87,10 @@ class SandboxExecutor:
 
     def execute(
         self,
-        command: List[str],
-        timeout: Optional[int] = None,
-        workdir: Optional[str] = None,
-        env: Optional[dict] = None,
+        command: list[str],
+        timeout: int | None = None,
+        workdir: str | None = None,
+        env: dict | None = None,
     ) -> ExecutionResult:
         """
         Execute command in sandbox container.
@@ -193,7 +192,7 @@ class SandboxExecutor:
                 stdout=stdout,
                 stderr=stderr,
                 exit_code=-1,
-            )
+            ) from e
 
         except Exception as e:
             logger.error(f"Execution failed: {e}")
@@ -202,7 +201,7 @@ class SandboxExecutor:
                 stdout="",
                 stderr=str(e),
                 exit_code=-1,
-            )
+            ) from e
 
     def verify_container_running(self) -> bool:
         """
@@ -258,7 +257,7 @@ def validate_verilog_file(file_path: str) -> bool:
         raise ValueError(f"File too large: {file_size} bytes (max {max_size})")
 
     # Check for obviously malicious content (basic heuristics)
-    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+    with open(file_path, encoding='utf-8', errors='replace') as f:
         content = f.read(10000)  # Read first 10KB for inspection
 
         # Check for system tasks that could leak info

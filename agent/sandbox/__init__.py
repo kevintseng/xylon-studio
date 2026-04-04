@@ -14,7 +14,7 @@ Security features:
 - Read-only filesystem (except /tmp)
 """
 
-from agent.sandbox.executor import SandboxExecutor, ExecutionResult, ExecutionError
+from agent.sandbox.executor import ExecutionError, ExecutionResult, SandboxExecutor
 from agent.sandbox.manager import SandboxManager
 
 __all__ = [

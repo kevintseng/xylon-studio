@@ -8,11 +8,12 @@ Run:
 """
 
 import logging
-from fastapi import FastAPI, HTTPException
+
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from agent.api.routes import design, verification, pipeline
+from agent.api.routes import design, pipeline, verification
 
 # Configure logging
 logging.basicConfig(

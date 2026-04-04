@@ -1,12 +1,13 @@
 """Unit tests for pipeline steps."""
 
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from agent.pipeline.models import StepStatus
+from agent.pipeline.steps.coverage import run_coverage_step
 from agent.pipeline.steps.lint import run_lint_step
 from agent.pipeline.steps.simulate import run_simulate_step
-from agent.pipeline.steps.coverage import run_coverage_step
 
 
 @pytest.fixture
@@ -15,10 +16,26 @@ def mock_sandbox():
     return MagicMock()
 
 
+@pytest.fixture
+def rtl_file(tmp_path):
+    """Real temp RTL file."""
+    f = tmp_path / "design.v"
+    f.write_text("module design; endmodule\n")
+    return str(f)
+
+
+@pytest.fixture
+def tb_file(tmp_path):
+    """Real temp testbench file."""
+    f = tmp_path / "tb.sv"
+    f.write_text("module tb; endmodule\n")
+    return str(f)
+
+
 @pytest.mark.asyncio
-async def test_lint_step_pass(mock_sandbox):
+async def test_lint_step_pass(mock_sandbox, rtl_file):
     """Test lint step with successful lint."""
-    mock_sandbox.lint_verilog.return_value = {
+    mock_sandbox.lint_verilog_string.return_value = {
         'success': True,
         'warnings': ['warning 1'],
         'errors': [],
@@ -27,7 +44,7 @@ async def test_lint_step_pass(mock_sandbox):
         'duration_seconds': 2.5,
     }
 
-    result = await run_lint_step('/tmp/design.v', mock_sandbox)
+    result = await run_lint_step(rtl_file, mock_sandbox)
 
     assert result.step_name == 'lint'
     assert result.status == StepStatus.PASSED
@@ -37,9 +54,9 @@ async def test_lint_step_pass(mock_sandbox):
 
 
 @pytest.mark.asyncio
-async def test_lint_step_fail(mock_sandbox):
+async def test_lint_step_fail(mock_sandbox, rtl_file):
     """Test lint step with lint errors."""
-    mock_sandbox.lint_verilog.return_value = {
+    mock_sandbox.lint_verilog_string.return_value = {
         'success': False,
         'warnings': [],
         'errors': ['Syntax error at line 42'],
@@ -48,7 +65,7 @@ async def test_lint_step_fail(mock_sandbox):
         'duration_seconds': 1.2,
     }
 
-    result = await run_lint_step('/tmp/design.v', mock_sandbox)
+    result = await run_lint_step(rtl_file, mock_sandbox)
 
     assert result.step_name == 'lint'
     assert result.status == StepStatus.FAILED
@@ -56,11 +73,11 @@ async def test_lint_step_fail(mock_sandbox):
 
 
 @pytest.mark.asyncio
-async def test_lint_step_error(mock_sandbox):
+async def test_lint_step_error(mock_sandbox, rtl_file):
     """Test lint step with exception."""
-    mock_sandbox.lint_verilog.side_effect = RuntimeError('Container failed')
+    mock_sandbox.lint_verilog_string.side_effect = RuntimeError('Container failed')
 
-    result = await run_lint_step('/tmp/design.v', mock_sandbox)
+    result = await run_lint_step(rtl_file, mock_sandbox)
 
     assert result.step_name == 'lint'
     assert result.status == StepStatus.ERROR
@@ -68,9 +85,9 @@ async def test_lint_step_error(mock_sandbox):
 
 
 @pytest.mark.asyncio
-async def test_simulate_step_pass(mock_sandbox):
+async def test_simulate_step_pass(mock_sandbox, rtl_file, tb_file):
     """Test simulation step with passing test."""
-    mock_sandbox.run_verilator_sim.return_value = {
+    mock_sandbox.run_verilator_sim_string.return_value = {
         'success': True,
         'stdout': 'PASS',
         'stderr': '',
@@ -79,7 +96,7 @@ async def test_simulate_step_pass(mock_sandbox):
         'duration_seconds': 5.0,
     }
 
-    result = await run_simulate_step('/tmp/design.v', '/tmp/tb.sv', mock_sandbox)
+    result = await run_simulate_step(rtl_file, tb_file, mock_sandbox)
 
     assert result.step_name == 'simulate'
     assert result.status == StepStatus.PASSED
@@ -87,9 +104,9 @@ async def test_simulate_step_pass(mock_sandbox):
 
 
 @pytest.mark.asyncio
-async def test_simulate_step_fail(mock_sandbox):
+async def test_simulate_step_fail(mock_sandbox, rtl_file, tb_file):
     """Test simulation step with failing test."""
-    mock_sandbox.run_verilator_sim.return_value = {
+    mock_sandbox.run_verilator_sim_string.return_value = {
         'success': True,
         'stdout': 'FAIL: Assertion failed at cycle 100',
         'stderr': '',
@@ -98,45 +115,42 @@ async def test_simulate_step_fail(mock_sandbox):
         'duration_seconds': 8.0,
     }
 
-    result = await run_simulate_step('/tmp/design.v', '/tmp/tb.sv', mock_sandbox)
+    result = await run_simulate_step(rtl_file, tb_file, mock_sandbox)
 
     assert result.step_name == 'simulate'
     assert result.status == StepStatus.FAILED
 
 
 @pytest.mark.asyncio
-async def test_coverage_step_success(mock_sandbox):
+async def test_coverage_step_success(mock_sandbox, rtl_file, tb_file):
     """Test coverage step with successful simulation and coverage."""
-    mock_sandbox.run_verilator_sim.return_value = {
+    mock_sandbox.run_verilator_sim_string.return_value = {
         'success': True,
         'stdout': 'Test completed',
         'stderr': '',
         'vcd_file': None,
         'coverage_data': {
-            'raw_report': ' 80.5% 193/240 lines\n 60.0% 144/240 toggles\n 70.0% 168/240 branches',
+            'raw_report': 'Total coverage (80/100) 80.00%',
             'summary': 'Coverage report',
             'success': True,
         },
         'duration_seconds': 12.0,
     }
 
-    step_result, coverage_report = await run_coverage_step(
-        '/tmp/design.v', '/tmp/tb.sv', mock_sandbox
-    )
+    step_result, coverage_report = await run_coverage_step(rtl_file, tb_file, mock_sandbox)
 
     assert step_result.step_name == 'coverage'
     assert step_result.status == StepStatus.PASSED
-    assert abs(coverage_report.line_coverage - 0.805) < 0.01
-    assert abs(coverage_report.toggle_coverage - 0.60) < 0.01
-    assert abs(coverage_report.branch_coverage - 0.70) < 0.01
-    # Score = 0.805*0.5 + 0.60*0.3 + 0.70*0.2 = 0.4025 + 0.18 + 0.14 = 0.7225
-    assert abs(coverage_report.score - 0.7225) < 0.01
+    assert abs(coverage_report.line_coverage - 0.80) < 0.01
+    # Score uses weighted average from CoverageReport.DEFAULT_WEIGHTS (0.4/0.3/0.3)
+    # 0.80 * (0.4 + 0.3 + 0.3) = 0.80
+    assert abs(coverage_report.score - 0.80) < 0.01
 
 
 @pytest.mark.asyncio
-async def test_coverage_step_sim_failed(mock_sandbox):
+async def test_coverage_step_sim_failed(mock_sandbox, rtl_file, tb_file):
     """Test coverage step when simulation fails."""
-    mock_sandbox.run_verilator_sim.return_value = {
+    mock_sandbox.run_verilator_sim_string.return_value = {
         'success': False,
         'stdout': '',
         'stderr': 'Simulation error',
@@ -145,9 +159,7 @@ async def test_coverage_step_sim_failed(mock_sandbox):
         'duration_seconds': 3.0,
     }
 
-    step_result, coverage_report = await run_coverage_step(
-        '/tmp/design.v', '/tmp/tb.sv', mock_sandbox
-    )
+    step_result, coverage_report = await run_coverage_step(rtl_file, tb_file, mock_sandbox)
 
     assert step_result.step_name == 'coverage'
     assert step_result.status == StepStatus.FAILED

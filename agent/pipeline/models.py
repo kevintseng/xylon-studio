@@ -13,15 +13,14 @@ Defines the data structures for the verification pipeline:
 """
 
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Optional
 from datetime import datetime
-
+from enum import StrEnum
+from typing import Optional
 
 # ==================== Enums ====================
 
 
-class StepStatus(str, Enum):
+class StepStatus(StrEnum):
     """Pipeline step execution status."""
 
     PASSED = "passed"
@@ -90,7 +89,7 @@ class TestbenchStepResult(StepResult):
         """Set step name to testbench."""
         self.step_name = "testbench"
 
-    def get_testbench(self) -> Optional[str]:
+    def get_testbench(self) -> str | None:
         """Extract testbench code from output."""
         return self.output.get("testbench")
 
@@ -182,12 +181,43 @@ class CoverageReport:
     uncovered_lines: list[str] = field(default_factory=list)
     raw_output: str = ""
 
+    # Default weights used by compute_score() — can be overridden per-call.
+    DEFAULT_WEIGHTS = {"line": 0.4, "toggle": 0.3, "branch": 0.3}
+
     def __post_init__(self):
         """Validate coverage values are in [0.0, 1.0]."""
         for attr in ["line_coverage", "toggle_coverage", "branch_coverage", "score"]:
             val = getattr(self, attr)
             if not (0.0 <= val <= 1.0):
                 raise ValueError(f"{attr} must be in [0.0, 1.0], got {val}")
+
+    @classmethod
+    def compute_score(
+        cls,
+        line_coverage: float,
+        toggle_coverage: float,
+        branch_coverage: float,
+        weights: dict | None = None,
+    ) -> float:
+        """
+        Compute weighted coverage score.
+
+        Args:
+            line_coverage: Line coverage fraction (0.0-1.0)
+            toggle_coverage: Toggle coverage fraction (0.0-1.0)
+            branch_coverage: Branch coverage fraction (0.0-1.0)
+            weights: Optional weight dict with keys 'line', 'toggle', 'branch'.
+                     Defaults to {line: 0.4, toggle: 0.3, branch: 0.3}.
+
+        Returns:
+            Weighted average score in [0.0, 1.0]
+        """
+        w = weights or cls.DEFAULT_WEIGHTS
+        return (
+            line_coverage * w.get("line", 0.0)
+            + toggle_coverage * w.get("toggle", 0.0)
+            + branch_coverage * w.get("branch", 0.0)
+        )
 
 
 @dataclass
@@ -214,7 +244,7 @@ class PipelineConfig:
     max_iterations: int = 5
     lint_enabled: bool = True
     simulation_timeout: int = 300
-    llm_provider: Optional[dict] = None
+    llm_provider: dict | None = None
     generate_test_plan: bool = False
     generate_testbench: bool = False
     synthesis_enabled: bool = False
@@ -254,14 +284,14 @@ class PipelineResult:
 
     pipeline_id: str
     steps: list[StepResult]
-    final_coverage: Optional[CoverageReport]
+    final_coverage: CoverageReport | None
     test_plan: Optional["TestPlan"] = None
     iterations_used: int = 0
     total_duration_seconds: float = 0.0
     success: bool = False
     timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
 
-    def get_step(self, step_name: str) -> Optional[StepResult]:
+    def get_step(self, step_name: str) -> StepResult | None:
         """
         Retrieve a specific step result by name.
 
@@ -276,3 +306,41 @@ class PipelineResult:
     def all_passed(self) -> bool:
         """Check if all steps passed."""
         return all(s.status == StepStatus.PASSED for s in self.steps)
+
+    def to_dict(self) -> dict:
+        """
+        Serialize to a JSON-safe dict.
+
+        Useful for API responses and persistence. Enums are converted to
+        their string values; nested dataclasses are unwrapped.
+        """
+        coverage_dict = None
+        if self.final_coverage is not None:
+            coverage_dict = {
+                "line_coverage": self.final_coverage.line_coverage,
+                "toggle_coverage": self.final_coverage.toggle_coverage,
+                "branch_coverage": self.final_coverage.branch_coverage,
+                "score": self.final_coverage.score,
+                "uncovered_lines": list(self.final_coverage.uncovered_lines),
+            }
+
+        return {
+            "pipeline_id": self.pipeline_id,
+            "steps": [
+                {
+                    "step_name": s.step_name,
+                    "status": s.status.value,
+                    "duration_seconds": s.duration_seconds,
+                    "output": s.output,
+                    "errors": s.errors,
+                    "warnings": s.warnings,
+                    "timestamp": s.timestamp,
+                }
+                for s in self.steps
+            ],
+            "final_coverage": coverage_dict,
+            "iterations_used": self.iterations_used,
+            "total_duration_seconds": self.total_duration_seconds,
+            "success": self.success,
+            "timestamp": self.timestamp,
+        }

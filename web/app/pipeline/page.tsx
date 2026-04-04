@@ -38,6 +38,7 @@ const PIPELINE_STEP_ORDER = [
   'testbench_gen',
   'simulate',
   'coverage',
+  'debug',
   'synthesis',
 ]
 
@@ -206,6 +207,7 @@ export default function PipelinePage() {
         if (name === 'synthesis' && !synthesisEnabled) return false
         if (name === 'test_plan' && !llmProvider) return false
         if (name === 'testbench_gen' && !llmProvider) return false
+        if (name === 'debug' && !llmProvider) return false
         return true
       })
       .map((name) => ({ step_name: name, status: 'pending' as StepStatus }))

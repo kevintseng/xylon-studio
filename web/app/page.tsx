@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Image from 'next/image'
 import { CircuitBackground } from '@/components/circuit-bg'
 import { useI18n } from '@/lib/i18n'
 
@@ -192,17 +193,19 @@ endmodule`}</code>
 
           <div className="grid md:grid-cols-2 gap-8">
             {[
-              { src: '/screenshots/02-design-result.png', key: 'design' },
-              { src: '/screenshots/03-verify-result.png', key: 'verify' },
-              { src: '/screenshots/04-history.png', key: 'history' },
-              { src: '/screenshots/01-homepage.png', key: 'homepage' },
-            ].map(({ src, key }) => (
+              { src: '/screenshots/02-design-result.png', key: 'design', w: 1400, h: 1000 },
+              { src: '/screenshots/03-verify-result.png', key: 'verify', w: 1400, h: 1000 },
+              { src: '/screenshots/04-history.png', key: 'history', w: 1400, h: 1000 },
+              { src: '/screenshots/01-homepage.png', key: 'homepage', w: 1920, h: 1080 },
+            ].map(({ src, key, w, h }) => (
               <div key={key} className="group">
                 <div className="rounded-xl border border-slate-700 overflow-hidden shadow-2xl shadow-black/40 group-hover:border-slate-500 transition-colors">
-                  <img
+                  <Image
                     src={src}
                     alt={t(`landing.screenshots.${key}`)}
-                    className="w-full"
+                    width={w}
+                    height={h}
+                    className="w-full h-auto"
                     loading="lazy"
                   />
                 </div>

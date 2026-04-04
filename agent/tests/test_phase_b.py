@@ -9,36 +9,35 @@ Tests cover:
 """
 
 import json
-import pytest
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from agent.pipeline.models import (
     CoverageReport,
     PipelineConfig,
-    StepResult,
     StepStatus,
     TestPlan,
     TestScenario,
 )
+from agent.pipeline.runner import run_pipeline
+from agent.pipeline.steps.synthesis import (
+    _parse_yosys_stats,
+    _synthesis_warnings,
+    run_synthesis_step,
+)
 from agent.pipeline.steps.test_plan import (
-    run_test_plan_step,
     _parse_test_plan_response,
+    run_test_plan_step,
 )
 from agent.pipeline.steps.testbench_gen import (
-    run_testbench_gen_step,
-    run_testbench_improve_step,
     _extract_cpp_code,
     _format_scenarios,
     _looks_like_cpp,
+    run_testbench_gen_step,
+    run_testbench_improve_step,
 )
-from agent.pipeline.steps.synthesis import (
-    run_synthesis_step,
-    _parse_yosys_stats,
-    _synthesis_warnings,
-)
-from agent.pipeline.runner import run_pipeline
-
 
 # ── Fixtures ──
 
@@ -60,8 +59,9 @@ class MockLLMResponse:
 
 @pytest.fixture
 def mock_llm_gateway():
-    """Create a mock LLM gateway."""
+    """Create a mock LLM gateway with async generate()."""
     gateway = MagicMock()
+    gateway.generate = AsyncMock()
     return gateway
 
 
@@ -409,10 +409,18 @@ YOSYS_STAT_OUTPUT = """
 """
 
 
+@pytest.fixture
+def rtl_file(tmp_path):
+    """Create a temp RTL file for synthesis tests."""
+    f = tmp_path / "counter.v"
+    f.write_text("module counter; endmodule\n")
+    return str(f)
+
+
 @pytest.mark.asyncio
-async def test_synthesis_step_passes(mock_sandbox):
+async def test_synthesis_step_passes(mock_sandbox, rtl_file):
     """Synthesis step passes with valid Yosys output."""
-    mock_sandbox.synthesize_verilog.return_value = {
+    mock_sandbox.synthesize_verilog_string.return_value = {
         "success": True,
         "gate_count": 12,
         "stdout": YOSYS_STAT_OUTPUT,
@@ -420,7 +428,7 @@ async def test_synthesis_step_passes(mock_sandbox):
         "duration_seconds": 2.0,
     }
 
-    result = await run_synthesis_step("/designs/counter.v", mock_sandbox)
+    result = await run_synthesis_step(rtl_file, mock_sandbox)
 
     assert result.status == StepStatus.PASSED
     assert result.output["gate_count"] == 12
@@ -431,9 +439,9 @@ async def test_synthesis_step_passes(mock_sandbox):
 
 
 @pytest.mark.asyncio
-async def test_synthesis_step_fails(mock_sandbox):
+async def test_synthesis_step_fails(mock_sandbox, rtl_file):
     """Synthesis step fails on Yosys error."""
-    mock_sandbox.synthesize_verilog.return_value = {
+    mock_sandbox.synthesize_verilog_string.return_value = {
         "success": False,
         "gate_count": 0,
         "stdout": "",
@@ -441,18 +449,18 @@ async def test_synthesis_step_fails(mock_sandbox):
         "duration_seconds": 0.5,
     }
 
-    result = await run_synthesis_step("/designs/bad.v", mock_sandbox)
+    result = await run_synthesis_step(rtl_file, mock_sandbox)
 
     assert result.status == StepStatus.FAILED
     assert any("ERROR" in e or "error" in e.lower() for e in result.errors)
 
 
 @pytest.mark.asyncio
-async def test_synthesis_step_exception(mock_sandbox):
+async def test_synthesis_step_exception(mock_sandbox, rtl_file):
     """Synthesis step handles exceptions gracefully."""
-    mock_sandbox.synthesize_verilog.side_effect = Exception("Docker not running")
+    mock_sandbox.synthesize_verilog_string.side_effect = Exception("Docker not running")
 
-    result = await run_synthesis_step("/designs/counter.v", mock_sandbox)
+    result = await run_synthesis_step(rtl_file, mock_sandbox)
 
     assert result.status == StepStatus.ERROR
     assert "Docker not running" in result.errors[0]
@@ -507,10 +515,13 @@ def mock_sandbox_manager():
 
 @pytest.fixture
 def mock_container_ops():
-    """Mock Docker container operations."""
-    with patch("agent.pipeline.runner._copy_to_container"):
-        with patch("agent.pipeline.runner.subprocess"):
-            yield
+    """Mock Docker container operations.
+
+    Runner writes RTL/testbench to tempdir via open(), so we only need
+    to ensure the underlying subprocess calls in SandboxManager are mocked.
+    SandboxManager itself is already patched by mock_sandbox_manager.
+    """
+    yield
 
 
 @pytest.mark.asyncio
@@ -526,15 +537,16 @@ async def test_pipeline_phase_b_full_flow(mock_sandbox_manager, mock_container_o
         "duration_seconds": 0.3,
     }
 
-    # Simulate passes (for coverage step)
-    mock_sandbox_manager.run_verilator_sim.return_value = {
+    # Simulate passes (for coverage step) — raw_report uses
+    # Verilator's "Total coverage (N/M) X.XX%" format
+    mock_sandbox_manager.run_verilator_sim_string.return_value = {
         "success": True,
         "stdout": "PASS: 5 checks passed\n",
         "stderr": "",
         "vcd_file": None,
         "coverage_data": {
             "success": True,
-            "raw_report": "Lines covered: 90.0%\nToggle coverage: 80.0%\nBranch coverage: 75.0%",
+            "raw_report": "Total coverage (90/100) 90.00%",
             "summary": "",
         },
         "duration_seconds": 2.0,
@@ -542,23 +554,25 @@ async def test_pipeline_phase_b_full_flow(mock_sandbox_manager, mock_container_o
 
     # Mock LLM gateway for test plan + testbench gen
     mock_gateway = MagicMock()
-    mock_gateway.generate.side_effect = [
+    mock_gateway.generate = AsyncMock(side_effect=[
         # First call: test plan
         MockLLMResponse(text=VALID_TEST_PLAN_JSON),
         # Second call: testbench gen
         MockLLMResponse(text=VALID_CPP_TESTBENCH),
-    ]
+    ])
 
     config = PipelineConfig(
-        llm_provider="mock",
+        llm_provider={"type": "mock"},
         coverage_target=0.8,
+        generate_testbench=True,
+        generate_test_plan=True,
     )
 
     result = await run_pipeline(
         rtl_code="module counter; endmodule",
         testbench_code=None,  # Phase B generates testbench
         config=config,
-        llm_gateway=mock_gateway,
+        llm_provider=mock_gateway,
     )
 
     assert result.success is True
@@ -577,7 +591,7 @@ async def test_pipeline_synthesis_enabled(mock_sandbox_manager, mock_container_o
         "success": True, "warnings": [], "errors": [],
         "stdout": "", "stderr": "", "duration_seconds": 0.1,
     }
-    mock_sandbox_manager.synthesize_verilog.return_value = {
+    mock_sandbox_manager.synthesize_verilog_string.return_value = {
         "success": True,
         "gate_count": 25,
         "stdout": YOSYS_STAT_OUTPUT,
@@ -608,12 +622,10 @@ async def test_pipeline_step_callback(mock_sandbox_manager, mock_container_ops):
 
     callback_calls = []
 
-    async def on_step(pipeline_id, step_result, index, total):
+    async def on_step(step_result):
         callback_calls.append({
-            "pipeline_id": pipeline_id,
             "step_name": step_result.step_name,
-            "index": index,
-            "total": total,
+            "status": step_result.status,
         })
 
     result = await run_pipeline(
@@ -621,10 +633,10 @@ async def test_pipeline_step_callback(mock_sandbox_manager, mock_container_ops):
         on_step_complete=on_step,
     )
 
-    assert len(callback_calls) == 2  # lint + skipped simulate
+    # Lint runs (no testbench provided → no simulate/coverage steps)
+    assert result is not None
+    assert len(callback_calls) == 1
     assert callback_calls[0]["step_name"] == "lint"
-    assert callback_calls[0]["index"] == 1
-    assert callback_calls[1]["step_name"] == "simulate"
 
 
 @pytest.mark.asyncio
@@ -637,7 +649,7 @@ async def test_pipeline_iteration_loop(mock_sandbox_manager, mock_container_ops)
     }
 
     # Simulation calls: initial sim, initial cov, iter1 sim, iter1 cov
-    mock_sandbox_manager.run_verilator_sim.side_effect = [
+    mock_sandbox_manager.run_verilator_sim_string.side_effect = [
         # Initial simulate (no coverage)
         {
             "success": True, "stdout": "PASS\n", "stderr": "",
@@ -649,7 +661,7 @@ async def test_pipeline_iteration_loop(mock_sandbox_manager, mock_container_ops)
             "vcd_file": None,
             "coverage_data": {
                 "success": True,
-                "raw_report": "Lines covered: 60.0%\nToggle coverage: 50.0%\nBranch coverage: 40.0%",
+                "raw_report": "Total coverage (60/100) 60.00%",
                 "summary": "",
             },
             "duration_seconds": 1.5,
@@ -665,7 +677,7 @@ async def test_pipeline_iteration_loop(mock_sandbox_manager, mock_container_ops)
             "vcd_file": None,
             "coverage_data": {
                 "success": True,
-                "raw_report": "Lines covered: 90.0%\nToggle coverage: 85.0%\nBranch coverage: 80.0%",
+                "raw_report": "Total coverage (90/100) 90.00%",
                 "summary": "",
             },
             "duration_seconds": 1.5,
@@ -674,26 +686,30 @@ async def test_pipeline_iteration_loop(mock_sandbox_manager, mock_container_ops)
 
     # LLM: test plan, testbench gen, testbench improve
     mock_gateway = MagicMock()
-    mock_gateway.generate.side_effect = [
+    mock_gateway.generate = AsyncMock(side_effect=[
         MockLLMResponse(text=VALID_TEST_PLAN_JSON),
         MockLLMResponse(text=VALID_CPP_TESTBENCH),
         MockLLMResponse(text=VALID_CPP_TESTBENCH.replace("// Test basic", "// Improved")),
-    ]
+    ])
 
     config = PipelineConfig(
-        llm_provider="mock",
+        llm_provider={"type": "mock"},
         coverage_target=0.8,
         max_iterations=3,
+        generate_testbench=True,
+        generate_test_plan=True,
     )
 
     result = await run_pipeline(
         rtl_code="module counter; endmodule",
         config=config,
-        llm_gateway=mock_gateway,
+        llm_provider=mock_gateway,
     )
 
     assert result.success is True
-    assert result.iterations_used == 1
+    # 2 loop iterations: iter 0 runs baseline sim+coverage (60%, below target);
+    # runner improves testbench; iter 1 runs sim+coverage (90%, target met)
+    assert result.iterations_used == 2
     assert result.final_coverage is not None
     assert result.final_coverage.score >= 0.8
 
@@ -707,7 +723,7 @@ async def test_pipeline_iteration_stall_detection(mock_sandbox_manager, mock_con
     }
 
     # Coverage doesn't improve between iterations
-    mock_sandbox_manager.run_verilator_sim.side_effect = [
+    mock_sandbox_manager.run_verilator_sim_string.side_effect = [
         # Initial simulate
         {"success": True, "stdout": "PASS\n", "stderr": "",
          "vcd_file": None, "coverage_data": None, "duration_seconds": 1.0},
@@ -715,42 +731,44 @@ async def test_pipeline_iteration_stall_detection(mock_sandbox_manager, mock_con
         {"success": True, "stdout": "PASS\n", "stderr": "",
          "vcd_file": None,
          "coverage_data": {"success": True,
-                          "raw_report": "Lines covered: 50.0%\nToggle coverage: 40.0%\nBranch coverage: 30.0%",
+                          "raw_report": "Total coverage (50/100) 50.00%",
                           "summary": ""},
          "duration_seconds": 1.5},
         # Iteration 1 sim
         {"success": True, "stdout": "PASS\n", "stderr": "",
          "vcd_file": None, "coverage_data": None, "duration_seconds": 1.0},
-        # Iteration 1 coverage: still 50% (stall)
+        # Iteration 1 coverage: tiny delta (stall)
         {"success": True, "stdout": "PASS\n", "stderr": "",
          "vcd_file": None,
          "coverage_data": {"success": True,
-                          "raw_report": "Lines covered: 50.5%\nToggle coverage: 40.0%\nBranch coverage: 30.0%",
+                          "raw_report": "Total coverage (1005/2000) 50.25%",
                           "summary": ""},
          "duration_seconds": 1.5},
     ]
 
     mock_gateway = MagicMock()
-    mock_gateway.generate.side_effect = [
+    mock_gateway.generate = AsyncMock(side_effect=[
         MockLLMResponse(text=VALID_TEST_PLAN_JSON),
         MockLLMResponse(text=VALID_CPP_TESTBENCH),
         MockLLMResponse(text=VALID_CPP_TESTBENCH),  # improve attempt
-    ]
+    ])
 
     config = PipelineConfig(
-        llm_provider="mock",
+        llm_provider={"type": "mock"},
         coverage_target=0.9,
         max_iterations=5,
+        generate_testbench=True,
+        generate_test_plan=True,
     )
 
     result = await run_pipeline(
         rtl_code="module counter; endmodule",
         config=config,
-        llm_gateway=mock_gateway,
+        llm_provider=mock_gateway,
     )
 
-    # Should stop after 1 iteration due to stall
-    assert result.iterations_used == 1
+    # Should stop after 2 loop iterations (baseline + 1 retry) due to stall
+    assert result.iterations_used == 2
     stall_step = result.get_step("iteration_stall")
     assert stall_step is not None
     assert "stalled" in stall_step.warnings[0].lower()

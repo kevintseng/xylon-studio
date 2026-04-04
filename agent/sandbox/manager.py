@@ -15,11 +15,10 @@ Usage:
 
 import logging
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
-from agent.sandbox.executor import SandboxExecutor, ExecutionError
+
+from agent.sandbox.executor import ExecutionError, SandboxExecutor
 
 # Configure logging
 # Environment-aware: use file logging in container, stdout-only in local dev
@@ -516,7 +515,7 @@ class SandboxManager:
             if 'Number of cells:' in line:
                 try:
                     return int(line.split(':')[1].strip())
-                except:
+                except (ValueError, IndexError):
                     pass
 
         return 0

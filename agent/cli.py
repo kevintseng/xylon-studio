@@ -50,7 +50,7 @@ def main():
 async def run_command(args):
     # Read RTL file
     try:
-        with open(args.rtl_file, 'r', encoding='utf-8') as f:
+        with open(args.rtl_file, encoding='utf-8') as f:
             rtl_code = f.read()
     except FileNotFoundError:
         print(f"Error: RTL file not found: {args.rtl_file}")
@@ -60,7 +60,7 @@ async def run_command(args):
     testbench_code = None
     if args.testbench:
         try:
-            with open(args.testbench, 'r', encoding='utf-8') as f:
+            with open(args.testbench, encoding='utf-8') as f:
                 testbench_code = f.read()
         except FileNotFoundError:
             print(f"Error: Testbench file not found: {args.testbench}")
@@ -112,8 +112,10 @@ async def run_command(args):
             print(f"    {total} gates, {step.output.get('wires', '?')} wires")
         elif step.step_name == "debug" and step.output:
             print(f"    {step.output.get('summary', '')}")
-            for fix in step.output.get("fix_suggestions", [])[:2]:
-                print(f"    -> {fix}")
+            fixes = step.output.get("fix_suggestions", [])
+            if isinstance(fixes, list):
+                for fix in fixes[:2]:
+                    print(f"    -> {fix}")
 
     # Run pipeline
     start = time.monotonic()

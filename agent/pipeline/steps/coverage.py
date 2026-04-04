@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import re
-from typing import Optional
 
 from agent.pipeline.models import CoverageReport, StepResult, StepStatus
 from agent.sandbox.manager import SandboxManager
@@ -59,15 +58,16 @@ def _compute_coverage_score(
     """
     Compute weighted coverage score.
 
-    Weights: 50% line, 30% toggle, 20% branch
+    Delegates to CoverageReport.compute_score which uses the project-wide
+    default weights (line=0.4, toggle=0.3, branch=0.3).
     """
-    return (line_cov * 0.5) + (toggle_cov * 0.3) + (branch_cov * 0.2)
+    return CoverageReport.compute_score(line_cov, toggle_cov, branch_cov)
 
 
 async def run_coverage_step(
     rtl_file: str,
     tb_file: str,
-    sandbox: Optional[SandboxManager] = None,
+    sandbox: SandboxManager | None = None,
     timeout: int = 300,
 ) -> tuple[StepResult, CoverageReport]:
     """
@@ -88,9 +88,9 @@ async def run_coverage_step(
     logger.info(f"[COV] Starting coverage analysis: RTL={rtl_file}, TB={tb_file}")
 
     try:
-        with open(rtl_file, 'r', encoding='utf-8') as f:
+        with open(rtl_file, encoding='utf-8') as f:
             rtl_code = f.read()
-        with open(tb_file, 'r', encoding='utf-8') as f:
+        with open(tb_file, encoding='utf-8') as f:
             tb_code = f.read()
 
         # Run simulation with coverage enabled
@@ -105,7 +105,7 @@ async def run_coverage_step(
         sim_success = result.get('success', False)
 
         if not sim_success:
-            logger.error(f"[COV] Simulation failed, no coverage data")
+            logger.error("[COV] Simulation failed, no coverage data")
             step_result = StepResult(
                 step_name="coverage",
                 status=StepStatus.FAILED,

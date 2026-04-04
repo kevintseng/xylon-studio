@@ -37,7 +37,7 @@ async def run_synthesis_step(
 
     try:
         import asyncio
-        with open(rtl_file, 'r', encoding='utf-8') as f:
+        with open(rtl_file, encoding='utf-8') as f:
             rtl_code = f.read()
 
         result = await asyncio.to_thread(
