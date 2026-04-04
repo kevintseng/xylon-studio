@@ -1,0 +1,35 @@
+# ==========================================
+# XylonStudio Requirements
+# Python 3.11+
+# ==========================================
+
+# Core Framework
+fastapi==0.110.0
+uvicorn[standard]==0.27.1
+pydantic==2.6.3
+pydantic-settings==2.2.1
+
+# LLM Integration
+openai==1.13.3  # OpenAI-compatible client for vLLM
+httpx==0.27.0
+aiohttp==3.9.3
+
+# EDA Tool Integration
+pyverilog==1.3.0
+
+# Monitoring & Logging
+structlog==24.1.0
+python-json-logger==2.0.7
+
+# Utilities
+python-dotenv==1.0.1
+click==8.1.7
+rich==13.7.1  # Beautiful terminal output
+tenacity==8.2.3  # Retry logic
+jinja2==3.1.3  # Template rendering
+
+# Security
+regex==2024.11.6  # ReDoS prevention with timeout support
+
+# Performance
+orjson==3.9.15  # Fast JSON

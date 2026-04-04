@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>XylonStudio - AI Chip Verification Platform</title>
+  <meta name="description" content="AI-assisted chip verification platform. Auto-generate test plans, testbenches, and coverage reports from your RTL. Open source, pluggable LLM, education-first.">
+  <meta property="og:title" content="XylonStudio - Learn. Verify. Tape Out.">
+  <meta property="og:description" content="AI-assisted chip verification platform. Open source, pluggable LLM, education-first.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://xylonstud.io">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%233b82f6'/><text x='50' y='72' font-size='60' font-weight='900' fill='white' text-anchor='middle' font-family='system-ui'>X</text></svg>">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'] },
+        }
+      }
+    }
+  </script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+    body { background: #0a0f1a; color: #e2e8f0; }
+    .circuit-dot { position: absolute; width: 3px; height: 3px; background: rgba(59,130,246,0.15); border-radius: 50%; }
+    .circuit-line { position: absolute; background: rgba(59,130,246,0.06); }
+    @keyframes pulse-slow { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .animate-pulse-slow { animation: pulse-slow 2s ease-in-out infinite; }
+  </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+
+  <!-- Header -->
+  <header class="sticky top-0 z-50 bg-[#0a0f1a]/85 backdrop-blur-xl border-b border-slate-800">
+    <div class="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
+      <a href="/" class="flex items-center gap-2">
+        <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-white font-black text-xs">X</div>
+        <span class="font-bold tracking-tight text-white">XylonStudio</span>
+      </a>
+      <div class="flex items-center gap-2">
+        <button id="lang-btn" onclick="toggleLocale()" class="px-3 py-1.5 rounded-md text-xs font-medium text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all">EN</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero -->
+  <section class="relative min-h-[calc(100vh-56px)] flex items-center overflow-hidden">
+    <div class="absolute inset-0 pointer-events-none">
+      <div class="absolute -top-40 -right-40 w-96 h-96 rounded-full bg-blue-600/5 blur-3xl"></div>
+      <div class="absolute -bottom-20 -left-20 w-80 h-80 rounded-full bg-blue-500/5 blur-3xl"></div>
+      <div class="circuit-dot" style="top:10%;left:15%"></div>
+      <div class="circuit-dot" style="top:20%;left:45%"></div>
+      <div class="circuit-dot" style="top:35%;left:75%"></div>
+      <div class="circuit-dot" style="top:60%;left:25%"></div>
+      <div class="circuit-dot" style="top:75%;left:55%"></div>
+      <div class="circuit-dot" style="top:85%;left:85%"></div>
+      <div class="circuit-line h-px w-32" style="top:20%;left:15%"></div>
+      <div class="circuit-line h-px w-24" style="top:35%;left:45%"></div>
+      <div class="circuit-line w-px h-20" style="top:60%;left:75%"></div>
+    </div>
+
+    <div class="max-w-7xl mx-auto px-8 py-16 grid lg:grid-cols-2 gap-16 items-center relative">
+      <div class="space-y-8">
+        <div class="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-full text-xs font-medium text-blue-400">
+          <span class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse-slow"></span>
+          <span data-i18n="home.badge"></span>
+        </div>
+
+        <h1 class="text-5xl lg:text-6xl font-bold tracking-tight leading-tight">
+          <span data-i18n="home.title1"></span>
+          <br>
+          <span class="bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent" data-i18n="home.title2"></span>
+        </h1>
+
+        <p class="text-lg text-slate-400 leading-relaxed max-w-lg" data-i18n="home.description"></p>
+
+        <div class="flex flex-wrap gap-3">
+          <a href="#waitlist" class="px-6 py-3 rounded-lg font-semibold text-sm bg-blue-600 text-white hover:bg-blue-500 active:scale-[0.98] transition-all shadow-lg shadow-blue-600/25" data-i18n="home.cta.primary"></a>
+          <a href="https://github.com/user-attachments/assets/b3598b06-df5a-4c50-8fd3-f27e0ca183e0" target="_blank" rel="noopener noreferrer" class="px-6 py-3 rounded-lg font-semibold text-sm bg-slate-800 text-slate-200 border border-slate-700 hover:bg-slate-700 active:scale-[0.98] transition-all" data-i18n="home.cta.secondary"></a>
+          <a href="https://github.com/kevintseng/xylon-studio" target="_blank" rel="noopener noreferrer" class="px-6 py-3 rounded-lg font-semibold text-sm text-slate-400 border border-slate-700 hover:text-slate-200 hover:border-slate-500 active:scale-[0.98] transition-all" data-i18n="home.cta.github"></a>
+        </div>
+      </div>
+
+      <!-- Code preview -->
+      <div class="hidden lg:block">
+        <div class="rounded-xl border border-slate-700 overflow-hidden shadow-2xl shadow-black/40">
+          <div class="bg-slate-800 px-4 py-3 flex items-center gap-2 border-b border-slate-700">
+            <div class="flex gap-1.5">
+              <div class="w-3 h-3 rounded-full bg-red-500/60"></div>
+              <div class="w-3 h-3 rounded-full bg-yellow-500/60"></div>
+              <div class="w-3 h-3 rounded-full bg-green-500/60"></div>
+            </div>
+            <span class="text-xs text-slate-400 ml-2 font-mono">barrel_shifter_16bit.v</span>
+          </div>
+          <pre class="p-6 text-xs font-mono bg-[#0d1117] text-slate-300 leading-relaxed overflow-hidden"><code>module barrel_shifter_16bit (
+  input         clk,
+  input         rst_n,
+  input  [15:0] data_in,
+  input  [3:0]  shift_amt,
+  input         shift_dir,  // 0=left, 1=right
+  output [15:0] data_out
+);
+
+  reg [15:0] stage1, stage2, result;
+
+  always @(posedge clk or negedge rst_n) begin
+    if (!rst_n)
+      result &lt;= 16'b0;
+    else
+      result &lt;= stage2;
+  end
+
+  assign data_out = result;
+endmodule</code></pre>
+        </div>
+        <p class="text-xs text-slate-500 text-center mt-3" data-i18n="home.code.caption"></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Pipeline Visualization -->
+  <section class="py-24 border-t border-slate-800">
+    <div class="max-w-7xl mx-auto px-8">
+      <div class="text-center mb-16">
+        <h2 class="text-3xl lg:text-4xl font-bold mb-4" data-i18n="landing.pipeline.title"></h2>
+        <p class="text-slate-400 max-w-2xl mx-auto" data-i18n="landing.pipeline.subtitle"></p>
+      </div>
+      <div class="flex flex-wrap justify-center items-center gap-2 lg:gap-0" id="pipeline-steps"></div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="py-24 border-t border-slate-800">
+    <div class="max-w-7xl mx-auto px-8">
+      <h2 class="text-3xl lg:text-4xl font-bold text-center mb-16" data-i18n="landing.features.title"></h2>
+      <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6" id="features-grid"></div>
+    </div>
+  </section>
+
+  <!-- Audience -->
+  <section class="py-24 border-t border-slate-800">
+    <div class="max-w-7xl mx-auto px-8">
+      <h2 class="text-3xl lg:text-4xl font-bold text-center mb-16" data-i18n="landing.audience.title"></h2>
+      <div class="grid md:grid-cols-3 gap-8" id="audience-grid"></div>
+    </div>
+  </section>
+
+  <!-- Open Source -->
+  <section class="py-16 border-t border-slate-800">
+    <div class="max-w-7xl mx-auto px-8 text-center">
+      <h2 class="text-2xl lg:text-3xl font-bold mb-4" data-i18n="landing.oss.title"></h2>
+      <p class="text-slate-400 max-w-xl mx-auto" data-i18n="landing.oss.desc"></p>
+    </div>
+  </section>
+
+  <!-- Waitlist -->
+  <section id="waitlist" class="py-24 border-t border-slate-800">
+    <div class="max-w-7xl mx-auto px-8">
+      <div class="max-w-md mx-auto text-center space-y-6">
+        <h2 class="text-3xl font-bold" data-i18n="landing.waitlist.title"></h2>
+        <p class="text-slate-400" data-i18n="landing.waitlist.desc"></p>
+
+        <div id="waitlist-form-container">
+          <form id="waitlist-form" class="flex gap-2">
+            <input type="email" required id="waitlist-email" class="flex-1 px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-blue-500 transition-colors" data-i18n-placeholder="landing.waitlist.placeholder" placeholder="your@email.com">
+            <button type="submit" class="px-6 py-3 rounded-lg font-semibold text-sm bg-blue-600 text-white hover:bg-blue-500 active:scale-[0.98] transition-all shadow-lg shadow-blue-600/25 whitespace-nowrap" data-i18n="landing.waitlist.btn"></button>
+          </form>
+        </div>
+        <div id="waitlist-thanks" class="hidden">
+          <p class="text-green-400 font-medium" data-i18n="landing.waitlist.thanks"></p>
+        </div>
+
+        <p class="text-xs text-slate-500" data-i18n="landing.waitlist.privacy"></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="border-t border-slate-800 py-6">
+    <div class="max-w-7xl mx-auto px-4">
+      <div class="flex items-center justify-between text-sm text-slate-500">
+        <span data-i18n="footer.copyright"></span>
+        <div class="flex items-center gap-4">
+          <a href="mailto:dev@xylonstud.io" class="text-blue-400 hover:text-blue-300 underline underline-offset-2 transition-colors" data-i18n="footer.contact"></a>
+          <a href="https://github.com/kevintseng/xylon-studio" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:text-blue-300 underline underline-offset-2 transition-colors">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // ── i18n translations ──
+    var T = {
+      en: {
+        'home.badge': 'Open Source Chip Verification Pipeline',
+        'home.title1': 'Learn. Verify.',
+        'home.title2': 'Tape Out.',
+        'home.description': 'AI-assisted chip verification platform. Auto-generate test plans, testbenches, and coverage reports from your RTL. Open source, pluggable LLM, education-first.',
+        'home.cta.primary': 'Join the Waitlist',
+        'home.cta.secondary': 'Try the Demo',
+        'home.cta.github': 'Star on GitHub',
+        'home.code.caption': 'AI-generated from: "16-bit barrel shifter with 2-stage pipeline"',
+        'landing.pipeline.title': 'One Pipeline. Full Verification.',
+        'landing.pipeline.subtitle': 'From RTL input to coverage report, every step visualized and AI-assisted.',
+        'landing.pipeline.rtl': 'RTL Input',
+        'landing.pipeline.lint': 'Lint',
+        'landing.pipeline.testplan': 'Test Plan',
+        'landing.pipeline.testbench': 'Testbench',
+        'landing.pipeline.sim': 'Simulate',
+        'landing.pipeline.coverage': 'Coverage',
+        'landing.pipeline.debug': 'Debug',
+        'landing.pipeline.synthesis': 'Synthesis',
+        'landing.features.title': 'What XylonStudio Does',
+        'landing.f1.title': 'AI Test Plan Generation',
+        'landing.f1.desc': 'Paste your RTL. AI analyzes ports, logic, and edge cases, then generates a structured verification plan. Learn what to test and why.',
+        'landing.f2.title': 'Testbench Auto-Generation',
+        'landing.f2.desc': 'AI writes SystemVerilog testbenches from your test plan. Verilator compiles and simulates automatically. Coverage too low? It iterates.',
+        'landing.f3.title': 'Coverage-Driven Iteration',
+        'landing.f3.desc': 'Real line, toggle, and branch coverage via Verilator. The pipeline loops until your coverage target is met or suggests what to test next.',
+        'landing.f4.title': 'Debug Assistant',
+        'landing.f4.desc': 'Simulation failed? AI explains what went wrong in plain language, highlights suspicious signals, and suggests fixes.',
+        'landing.f5.title': 'RTL to Silicon',
+        'landing.f5.desc': 'Synthesize with Yosys, place and route with OpenROAD. See your Verilog become a real chip layout targeting SkyWater 130nm.',
+        'landing.f6.title': 'Pluggable LLM',
+        'landing.f6.desc': 'Use Claude, GPT, DeepSeek, Qwen, or Ollama. Self-host for IP protection. Your model, your data, your choice.',
+        'landing.audience.title': 'Built For',
+        'landing.a1.title': 'Students & Professors',
+        'landing.a1.desc': 'Free, open source. Learn verification methodology with AI guidance. Pipeline visualization makes every step clear.',
+        'landing.a2.title': 'Junior DV Engineers',
+        'landing.a2.desc': 'Accelerate testbench writing, understand coverage gaps, debug faster. On-premise deployment keeps your IP safe.',
+        'landing.a3.title': 'FPGA Developers',
+        'landing.a3.desc': 'Open-source toolchain, no license fees. CLI and API for automation. Community-driven and extensible.',
+        'landing.oss.title': 'Open Source. MIT License.',
+        'landing.oss.desc': 'Core platform, pipeline engine, and all basic plugins are free and open source. Build on it, extend it, contribute back.',
+        'landing.waitlist.title': 'Get Early Access',
+        'landing.waitlist.desc': 'XylonStudio v2 is under active development. Join the waitlist to be the first to try it.',
+        'landing.waitlist.placeholder': 'your@email.com',
+        'landing.waitlist.btn': 'Join Waitlist',
+        'landing.waitlist.privacy': 'No spam. Unsubscribe anytime.',
+        'landing.waitlist.thanks': "Thanks! We'll be in touch.",
+        'footer.copyright': '\u00a9 2026 XylonStudio. Licensed under MIT License.',
+        'footer.contact': 'Contact'
+      },
+      'zh-TW': {
+        'home.badge': '\u958b\u6e90\u6676\u7247\u9a57\u8b49\u6d41\u6c34\u7dda',
+        'home.title1': '\u5b78\u7fd2\u3002\u9a57\u8b49\u3002',
+        'home.title2': '\u6295\u7247\u3002',
+        'home.description': 'AI \u8f14\u52a9\u6676\u7247\u9a57\u8b49\u5e73\u53f0\u3002\u5f9e RTL \u81ea\u52d5\u751f\u6210\u6e2c\u8a66\u8a08\u756b\u3001\u6e2c\u8a66\u5e73\u53f0\u8207\u8986\u84cb\u7387\u5831\u544a\u3002\u958b\u6e90\u3001\u53ef\u63d2\u62d4 LLM\u3001\u6559\u80b2\u512a\u5148\u3002',
+        'home.cta.primary': '\u52a0\u5165\u5019\u88dc\u540d\u55ae',
+        'home.cta.secondary': '\u8a66\u7528 Demo',
+        'home.cta.github': '\u5728 GitHub \u6309\u661f\u865f',
+        'home.code.caption': 'AI \u751f\u6210\u81ea\uff1a\u300c16 \u4f4d\u5143\u6876\u5f62\u79fb\u4f4d\u5668\uff0c2 \u7d1a\u6d41\u6c34\u7dda\u300d',
+        'landing.pipeline.title': '\u4e00\u689d\u6d41\u6c34\u7dda\u3002\u5b8c\u6574\u9a57\u8b49\u3002',
+        'landing.pipeline.subtitle': '\u5f9e RTL \u8f38\u5165\u5230\u8986\u84cb\u7387\u5831\u544a\uff0c\u6bcf\u4e00\u6b65\u7686\u53ef\u8996\u5316\u4e14\u7531 AI \u8f14\u52a9\u3002',
+        'landing.pipeline.rtl': 'RTL \u8f38\u5165',
+        'landing.pipeline.lint': 'Lint \u6aa2\u67e5',
+        'landing.pipeline.testplan': '\u6e2c\u8a66\u8a08\u756b',
+        'landing.pipeline.testbench': '\u6e2c\u8a66\u5e73\u53f0',
+        'landing.pipeline.sim': '\u6a21\u64ec',
+        'landing.pipeline.coverage': '\u8986\u84cb\u7387',
+        'landing.pipeline.debug': '\u9664\u932f',
+        'landing.pipeline.synthesis': '\u5408\u6210',
+        'landing.features.title': 'XylonStudio \u80fd\u505a\u4ec0\u9ebc',
+        'landing.f1.title': 'AI \u6e2c\u8a66\u8a08\u756b\u751f\u6210',
+        'landing.f1.desc': '\u8cbc\u4e0a RTL\uff0cAI \u5206\u6790\u57e0\u3001\u908f\u8f2f\u8207\u908a\u754c\u60c5\u6cc1\uff0c\u751f\u6210\u7d50\u69cb\u5316\u9a57\u8b49\u8a08\u756b\u3002\u4e86\u89e3\u8a72\u6e2c\u8a66\u4ec0\u9ebc\u3001\u70ba\u4ec0\u9ebc\u3002',
+        'landing.f2.title': '\u6e2c\u8a66\u5e73\u53f0\u81ea\u52d5\u751f\u6210',
+        'landing.f2.desc': 'AI \u5f9e\u6e2c\u8a66\u8a08\u756b\u64b0\u5beb SystemVerilog \u6e2c\u8a66\u5e73\u53f0\u3002Verilator \u81ea\u52d5\u7de8\u8b6f\u8207\u6a21\u64ec\u3002\u8986\u84cb\u7387\u592a\u4f4e\uff1f\u81ea\u52d5\u8fed\u4ee3\u3002',
+        'landing.f3.title': '\u8986\u84cb\u7387\u9a45\u52d5\u8fed\u4ee3',
+        'landing.f3.desc': '\u900f\u904e Verilator \u53d6\u5f97\u884c\u8986\u84cb\u7387\u3001\u7ffb\u8f49\u8986\u84cb\u7387\u8207\u5206\u652f\u8986\u84cb\u7387\u3002\u6d41\u6c34\u7dda\u6301\u7e8c\u8ff4\u5708\u76f4\u5230\u9054\u6a19\uff0c\u6216\u5efa\u8b70\u4e0b\u4e00\u6b65\u6e2c\u8a66\u3002',
+        'landing.f4.title': '\u9664\u932f\u52a9\u624b',
+        'landing.f4.desc': '\u6a21\u64ec\u5931\u6557\uff1fAI \u7528\u767d\u8a71\u89e3\u91cb\u554f\u984c\u3001\u6a19\u793a\u53ef\u7591\u8a0a\u865f\u3001\u5efa\u8b70\u4fee\u6b63\u65b9\u6848\u3002',
+        'landing.f5.title': 'RTL \u5230\u77fd\u6676',
+        'landing.f5.desc': '\u7528 Yosys \u5408\u6210\u3001OpenROAD \u4f48\u5c40\u7e5e\u7dda\u3002\u770b\u4f60\u7684 Verilog \u8b8a\u6210\u771f\u6b63\u7684\u6676\u7247\u4f48\u5c40\uff0c\u76ee\u6a19 SkyWater 130nm\u3002',
+        'landing.f6.title': '\u53ef\u63d2\u62d4 LLM',
+        'landing.f6.desc': '\u4f7f\u7528 Claude\u3001GPT\u3001DeepSeek\u3001Qwen \u6216 Ollama\u3002\u81ea\u67b6\u90e8\u7f72\u4fdd\u8b77\u667a\u6167\u8ca1\u7522\u3002\u4f60\u7684\u6a21\u578b\u3001\u4f60\u7684\u8cc7\u6599\u3001\u4f60\u7684\u9078\u64c7\u3002',
+        'landing.audience.title': '\u70ba\u8ab0\u800c\u5efa',
+        'landing.a1.title': '\u5b78\u751f\u8207\u6559\u6388',
+        'landing.a1.desc': '\u514d\u8cbb\u3001\u958b\u6e90\u3002\u5728 AI \u5f15\u5c0e\u4e0b\u5b78\u7fd2\u9a57\u8b49\u65b9\u6cd5\u8ad6\u3002\u6d41\u6c34\u7dda\u53ef\u8996\u5316\u8b93\u6bcf\u4e00\u6b65\u90fd\u6e05\u6670\u3002',
+        'landing.a2.title': '\u521d\u968e DV \u5de5\u7a0b\u5e2b',
+        'landing.a2.desc': '\u52a0\u901f\u6e2c\u8a66\u5e73\u53f0\u64b0\u5beb\u3001\u7406\u89e3\u8986\u84cb\u7387\u7f3a\u53e3\u3001\u66f4\u5feb\u9664\u932f\u3002\u672c\u5730\u90e8\u7f72\u78ba\u4fdd\u667a\u8ca1\u5b89\u5168\u3002',
+        'landing.a3.title': 'FPGA \u958b\u767c\u8005',
+        'landing.a3.desc': '\u958b\u6e90\u5de5\u5177\u93c8\uff0c\u7121\u6388\u6b0a\u8cbb\u3002CLI \u548c API \u652f\u63f4\u81ea\u52d5\u5316\u3002\u793e\u7fa4\u9a45\u52d5\u4e14\u53ef\u64f4\u5c55\u3002',
+        'landing.oss.title': '\u958b\u6e90\u3002MIT \u6388\u6b0a\u3002',
+        'landing.oss.desc': '\u6838\u5fc3\u5e73\u53f0\u3001\u6d41\u6c34\u7dda\u5f15\u64ce\u8207\u6240\u6709\u57fa\u790e\u5916\u639b\u7686\u514d\u8cbb\u958b\u6e90\u3002\u5728\u5176\u4e0a\u5efa\u69cb\u3001\u64f4\u5c55\u3001\u56de\u994b\u793e\u7fa4\u3002',
+        'landing.waitlist.title': '\u6436\u5148\u9ad4\u9a57',
+        'landing.waitlist.desc': 'XylonStudio v2 \u6b63\u5728\u7a4d\u6975\u958b\u767c\u4e2d\u3002\u52a0\u5165\u5019\u88dc\u540d\u55ae\uff0c\u6436\u5148\u8a66\u7528\u3002',
+        'landing.waitlist.placeholder': 'your@email.com',
+        'landing.waitlist.btn': '\u52a0\u5165\u5019\u88dc\u540d\u55ae',
+        'landing.waitlist.privacy': '\u4e0d\u6703\u767c\u9001\u5783\u573e\u4fe1\u3002\u96a8\u6642\u53ef\u9000\u8a02\u3002',
+        'landing.waitlist.thanks': '\u611f\u8b1d\uff01\u6211\u5011\u6703\u76e1\u5feb\u806f\u7e6b\u3002',
+        'footer.copyright': '\u00a9 2026 XylonStudio. MIT \u6388\u6b0a\u3002',
+        'footer.contact': '\u806f\u7d61\u6211\u5011'
+      }
+    };
+
+    var PIPELINE = [
+      { key: 'rtl', icon: '{ }' },
+      { key: 'lint', icon: '!!' },
+      { key: 'testplan', icon: '#' },
+      { key: 'testbench', icon: 'TB' },
+      { key: 'sim', icon: '>' },
+      { key: 'coverage', icon: '%' },
+      { key: 'debug', icon: '?' },
+      { key: 'synthesis', icon: 'Si' }
+    ];
+
+    var FEATURES = [
+      { key: 'f1', border: 'border-blue-500/30', bg: 'bg-blue-500/10', text: 'text-blue-400' },
+      { key: 'f2', border: 'border-cyan-500/30', bg: 'bg-cyan-500/10', text: 'text-cyan-400' },
+      { key: 'f3', border: 'border-green-500/30', bg: 'bg-green-500/10', text: 'text-green-400' },
+      { key: 'f4', border: 'border-amber-500/30', bg: 'bg-amber-500/10', text: 'text-amber-400' },
+      { key: 'f5', border: 'border-purple-500/30', bg: 'bg-purple-500/10', text: 'text-purple-400' },
+      { key: 'f6', border: 'border-rose-500/30', bg: 'bg-rose-500/10', text: 'text-rose-400' }
+    ];
+
+    var AUDIENCES = ['a1', 'a2', 'a3'];
+    var locale = 'en';
+    var LOCALE_KEY = 'xylon-locale';
+
+    function t(key) {
+      return (T[locale] && T[locale][key]) || T['en'][key] || key;
+    }
+
+    // ── Safe DOM rendering (no innerHTML) ──
+
+    function createEl(tag, classes, text) {
+      var el = document.createElement(tag);
+      if (classes) el.className = classes;
+      if (text) el.textContent = text;
+      return el;
+    }
+
+    function renderPipeline() {
+      var container = document.getElementById('pipeline-steps');
+      while (container.firstChild) container.removeChild(container.firstChild);
+
+      PIPELINE.forEach(function(step, i) {
+        var wrapper = createEl('div', 'flex items-center');
+
+        var col = createEl('div', 'flex flex-col items-center gap-2 group');
+        var box = createEl('div', 'w-16 h-16 lg:w-20 lg:h-20 rounded-xl border border-slate-700 bg-slate-800/50 flex items-center justify-center text-lg font-mono text-blue-400 group-hover:border-blue-500/50 group-hover:bg-blue-500/10 transition-all cursor-default', step.icon);
+        var label = createEl('span', 'text-xs text-slate-500 group-hover:text-slate-300 transition-colors', t('landing.pipeline.' + step.key));
+
+        col.appendChild(box);
+        col.appendChild(label);
+        wrapper.appendChild(col);
+
+        if (i < PIPELINE.length - 1) {
+          var line = createEl('div', 'hidden lg:block w-8 h-px bg-gradient-to-r from-slate-700 to-slate-600 mx-1');
+          wrapper.appendChild(line);
+        }
+
+        container.appendChild(wrapper);
+      });
+    }
+
+    function renderFeatures() {
+      var container = document.getElementById('features-grid');
+      while (container.firstChild) container.removeChild(container.firstChild);
+
+      FEATURES.forEach(function(f, i) {
+        var card = createEl('div', 'rounded-xl border ' + f.border + ' bg-slate-900/50 p-6 hover:bg-slate-800/50 transition-colors');
+
+        var icon = createEl('div', 'inline-flex items-center justify-center w-10 h-10 rounded-lg ' + f.bg + ' ' + f.text + ' font-bold text-sm mb-4', String(i + 1));
+        var title = createEl('h3', 'font-semibold text-lg mb-2 text-white', t('landing.' + f.key + '.title'));
+        var desc = createEl('p', 'text-sm text-slate-400 leading-relaxed', t('landing.' + f.key + '.desc'));
+
+        card.appendChild(icon);
+        card.appendChild(title);
+        card.appendChild(desc);
+        container.appendChild(card);
+      });
+    }
+
+    function renderAudience() {
+      var container = document.getElementById('audience-grid');
+      while (container.firstChild) container.removeChild(container.firstChild);
+
+      AUDIENCES.forEach(function(key) {
+        var card = createEl('div', 'rounded-xl border border-slate-700 bg-slate-900/30 p-8 text-center hover:border-slate-600 transition-colors');
+        var title = createEl('h3', 'font-semibold text-xl mb-3 text-white', t('landing.' + key + '.title'));
+        var desc = createEl('p', 'text-sm text-slate-400 leading-relaxed', t('landing.' + key + '.desc'));
+
+        card.appendChild(title);
+        card.appendChild(desc);
+        container.appendChild(card);
+      });
+    }
+
+    function applyI18n() {
+      document.querySelectorAll('[data-i18n]').forEach(function(el) {
+        el.textContent = t(el.getAttribute('data-i18n'));
+      });
+      document.querySelectorAll('[data-i18n-placeholder]').forEach(function(el) {
+        el.placeholder = t(el.getAttribute('data-i18n-placeholder'));
+      });
+      document.documentElement.lang = locale;
+      document.getElementById('lang-btn').textContent = locale === 'en' ? 'EN' : '\u4e2d';
+      renderPipeline();
+      renderFeatures();
+      renderAudience();
+    }
+
+    function toggleLocale() {
+      locale = locale === 'en' ? 'zh-TW' : 'en';
+      localStorage.setItem(LOCALE_KEY, locale);
+      applyI18n();
+    }
+
+    // ── Waitlist form ──
+    document.getElementById('waitlist-form').addEventListener('submit', function(e) {
+      e.preventDefault();
+      var email = document.getElementById('waitlist-email').value;
+      if (!email) return;
+
+      var formUrl = 'https://docs.google.com/forms/d/e/1FAIpQLSdJTx66rLS0CLdCa6Z3rvekpsOxtmki_oglVdfrYQf4j887Yg/formResponse';
+      var body = new URLSearchParams({ 'entry.915577406': email });
+
+      fetch(formUrl, { method: 'POST', body: body, mode: 'no-cors' }).catch(function() {});
+
+      document.getElementById('waitlist-form-container').classList.add('hidden');
+      document.getElementById('waitlist-thanks').classList.remove('hidden');
+    });
+
+    // ── Init ──
+    (function init() {
+      var saved = localStorage.getItem(LOCALE_KEY);
+      if (saved === 'en' || saved === 'zh-TW') {
+        locale = saved;
+      } else {
+        var lang = navigator.language || 'en';
+        if (lang.indexOf('zh') === 0) locale = 'zh-TW';
+      }
+      applyI18n();
+    })();
+  </script>
+</body>
+</html>

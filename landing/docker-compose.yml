@@ -1,0 +1,7 @@
+services:
+  xylon-landing:
+    build: .
+    container_name: xylon-landing
+    ports:
+      - "127.0.0.1:3000:80"
+    restart: unless-stopped
