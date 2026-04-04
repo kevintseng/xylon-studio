@@ -246,6 +246,41 @@ class SandboxManager:
                 'duration_seconds': 0,
             }
 
+    def synthesize_verilog_string(self, verilog_code: str) -> dict:
+        """
+        Synthesize Verilog from a code string using Yosys.
+
+        Writes to /results inside the container via docker exec + stdin.
+
+        Args:
+            verilog_code: Verilog source code as a string
+
+        Returns:
+            dict with success, gate_count, stdout, stderr, duration_seconds
+        """
+        import uuid
+        job_id = uuid.uuid4().hex[:8]
+        module_name = self._extract_module_name(verilog_code)
+        container_dir = f"/tmp/xylon-synth-{job_id}"
+        container_path = f"{container_dir}/{module_name}.v"
+
+        try:
+            self._write_to_container(self.yosys_container, container_path, verilog_code)
+            result = self.synthesize_verilog(container_path)
+            return result
+
+        except Exception as e:
+            logger.error(f"Synthesis string failed: {e}")
+            return {
+                "success": False,
+                "gate_count": 0,
+                "stdout": "",
+                "stderr": str(e),
+                "duration_seconds": 0,
+            }
+        finally:
+            self._cleanup_container_dir(self.yosys_container, container_dir)
+
     def run_verilator_sim(
         self, rtl_file: str, tb_file: str,
         timeout: int = 60, coverage: bool = False,

@@ -217,6 +217,7 @@ class PipelineConfig:
     llm_provider: Optional[dict] = None
     generate_test_plan: bool = False
     generate_testbench: bool = False
+    synthesis_enabled: bool = False
 
     def __post_init__(self):
         """Validate configuration values."""

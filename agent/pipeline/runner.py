@@ -12,6 +12,7 @@ from agent.pipeline.steps.coverage import run_coverage_step
 from agent.pipeline.steps.improve import improve_testbench_step
 from agent.pipeline.steps.lint import run_lint_step
 from agent.pipeline.steps.simulate import run_simulate_step
+from agent.pipeline.steps.synthesis import run_synthesis_step
 from agent.pipeline.steps.test_plan import run_test_plan_step
 from agent.pipeline.steps.testbench_gen import run_testbench_gen_step
 from agent.sandbox.manager import SandboxManager
@@ -337,6 +338,14 @@ async def run_pipeline(
 
         else:
             logger.info(f"[PIPELINE-{pipeline_id}] No testbench provided and Phase B not enabled, skipping simulate/coverage")
+
+        # Synthesis step (always runs after verification, if enabled)
+        if getattr(config, 'synthesis_enabled', False):
+            logger.info(f"[PIPELINE-{pipeline_id}] Running synthesis step...")
+            await _emit_start("synthesis")
+            synthesis_result = await run_synthesis_step(rtl_file, sandbox)
+            steps.append(synthesis_result)
+            await _emit(synthesis_result)
 
         return _finalize_result(
             pipeline_id,
