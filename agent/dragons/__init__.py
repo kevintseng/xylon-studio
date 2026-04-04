@@ -11,9 +11,9 @@ All dragons must implement the Dragon base class interface.
 """
 
 from abc import ABC, abstractmethod
-from typing import Generic, TypeVar, Dict, Any
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any, Generic, TypeVar
 
 # Type variables for generic Dragon
 Input = TypeVar('Input')
@@ -42,7 +42,7 @@ class DragonMetrics:
     success: bool
     quality_score: float
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for logging."""
         return {
             'start_time': self.start_time.isoformat(),
@@ -155,10 +155,13 @@ __all__ = [
     'DragonMetrics',
 ]
 
-# Import dragons for convenience
+# Import dragons for convenience (re-exports)
 try:
-    from agent.dragons.design import DesignDragon, DesignDragonError
-    from agent.dragons.verification import VerificationDragon, VerificationDragonError
+    from agent.dragons.design import DesignDragon, DesignDragonError  # noqa: F401
+    from agent.dragons.verification import (  # noqa: F401
+        VerificationDragon,
+        VerificationDragonError,
+    )
 
     __all__.extend([
         'DesignDragon',

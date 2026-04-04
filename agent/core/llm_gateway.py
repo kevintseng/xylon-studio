@@ -7,12 +7,12 @@ XylonStudio LLM Gateway
 Supports multiple LLM backends (Claude, OpenAI, Ollama, vLLM)
 """
 
-from abc import ABC, abstractmethod
-from typing import Optional, List, Dict, Iterator
-from enum import Enum
 import logging
-from dataclasses import dataclass
 import time
+from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from dataclasses import dataclass
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ class LLMBackend(ABC):
         prompt: str,
         max_tokens: int = 4000,
         temperature: float = 0.7,
-        stop_sequences: Optional[List[str]] = None
+        stop_sequences: list[str] | None = None
     ) -> LLMResponse:
         """Generate text"""
         pass
@@ -73,8 +73,8 @@ class ClaudeBackend(LLMBackend):
     def __init__(self, api_key: str, model: str = "claude-sonnet-4-6"):
         try:
             from anthropic import Anthropic
-        except ImportError:
-            raise ImportError("Please install: pip install anthropic")
+        except ImportError as e:
+            raise ImportError("Please install: pip install anthropic") from e
 
         self.client = Anthropic(api_key=api_key)
         self.model = model
@@ -92,7 +92,7 @@ class ClaudeBackend(LLMBackend):
         prompt: str,
         max_tokens: int = 4000,
         temperature: float = 0.7,
-        stop_sequences: Optional[List[str]] = None
+        stop_sequences: list[str] | None = None
     ) -> LLMResponse:
         start_time = time.time()
 
@@ -126,8 +126,7 @@ class ClaudeBackend(LLMBackend):
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}]
         ) as stream:
-            for text in stream.text_stream:
-                yield text
+            yield from stream.text_stream
 
     def health_check(self) -> bool:
         try:
@@ -157,9 +156,8 @@ class OllamaBackend(LLMBackend):
         prompt: str,
         max_tokens: int = 4000,
         temperature: float = 0.7,
-        stop_sequences: Optional[List[str]] = None
+        stop_sequences: list[str] | None = None
     ) -> LLMResponse:
-        import requests
 
         start_time = time.time()
 
@@ -197,7 +195,6 @@ class OllamaBackend(LLMBackend):
         )
 
     def generate_streaming(self, prompt: str, max_tokens: int = 4000) -> Iterator[str]:
-        import requests
         import json
 
         response = self.session.post(
@@ -219,7 +216,6 @@ class OllamaBackend(LLMBackend):
 
     def health_check(self) -> bool:
         try:
-            import requests
             response = self.session.get(f"{self.base_url}/api/tags", timeout=5)
             return response.status_code == 200
         except Exception as e:
@@ -238,8 +234,8 @@ class VLLMBackend(LLMBackend):
     ):
         try:
             from openai import OpenAI
-        except ImportError:
-            raise ImportError("Please install: pip install openai")
+        except ImportError as e:
+            raise ImportError("Please install: pip install openai") from e
 
         self.client = OpenAI(base_url=base_url, api_key=api_key)
         self.model = model
@@ -250,7 +246,7 @@ class VLLMBackend(LLMBackend):
         prompt: str,
         max_tokens: int = 4000,
         temperature: float = 0.7,
-        stop_sequences: Optional[List[str]] = None
+        stop_sequences: list[str] | None = None
     ) -> LLMResponse:
         start_time = time.time()
 
@@ -339,8 +335,8 @@ class LLMGateway:
     def __init__(
         self,
         primary_provider: LLMProvider,
-        backends: Dict[LLMProvider, LLMBackend],
-        fallback_provider: Optional[LLMProvider] = None,
+        backends: dict[LLMProvider, LLMBackend],
+        fallback_provider: LLMProvider | None = None,
         compare_mode: bool = False
     ):
         self.primary = primary_provider
@@ -396,7 +392,7 @@ class LLMGateway:
             else:
                 raise
 
-    def compare_quality(self, prompt: str, **kwargs) -> Dict[str, LLMResponse]:
+    def compare_quality(self, prompt: str, **kwargs) -> dict[str, LLMResponse]:
         """Call multiple backends simultaneously for quality comparison (testing)"""
         results = {}
 
@@ -416,7 +412,7 @@ class LLMGateway:
         logger.info(f"Switching provider: {self.primary.value} → {new_primary.value}")
         self.primary = new_primary
 
-    def get_metrics(self) -> Dict:
+    def get_metrics(self) -> dict:
         """Get usage statistics"""
         return {
             **self.metrics,
@@ -425,7 +421,7 @@ class LLMGateway:
             "avg_latency_ms": self.metrics["total_latency_ms"] / max(self.metrics["successes"], 1)
         }
 
-    def health_check_all(self) -> Dict[str, bool]:
+    def health_check_all(self) -> dict[str, bool]:
         """Check health status of all backends"""
         return {
             provider.value: backend.health_check()

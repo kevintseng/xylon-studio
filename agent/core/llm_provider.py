@@ -9,12 +9,12 @@ Abstraction layer for LLM backends (OpenAI, Anthropic, vLLM, Ollama).
 Supports test plan generation, testbench generation, and testbench improvement.
 """
 
-from abc import ABC, abstractmethod
-from typing import Optional, TYPE_CHECKING
 import logging
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from agent.pipeline.models import TestPlan
+    from agent.pipeline.models import CoverageReport, TestPlan
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ class LLMProvider(ABC):
     async def generate_test_plan(
         self,
         rtl_code: str,
-        lint_result: Optional[dict] = None
+        lint_result: dict | None = None
     ) -> "TestPlan":
         """
         Generate structured test plan from RTL code.
@@ -187,13 +187,13 @@ class VLLMProvider(LLMProvider):
         try:
             import httpx
             self.client = httpx.AsyncClient(timeout=timeout)
-        except ImportError:
-            raise ImportError("Please install: pip install httpx")
+        except ImportError as e:
+            raise ImportError("Please install: pip install httpx") from e
 
     async def generate_test_plan(
         self,
         rtl_code: str,
-        lint_result: Optional[dict] = None
+        lint_result: dict | None = None
     ) -> "TestPlan":
         """Generate test plan from RTL using vLLM."""
         from agent.pipeline.models import TestPlan, TestScenario
@@ -419,8 +419,8 @@ class OllamaProvider(LLMProvider):
         try:
             import httpx
             self.client = httpx.AsyncClient(timeout=timeout)
-        except ImportError:
-            raise ImportError("Please install: pip install httpx")
+        except ImportError as e:
+            raise ImportError("Please install: pip install httpx") from e
 
     async def generate(self, prompt: str, max_tokens: int = 4000, temperature: float = 0.3) -> LLMResponse:
         """Generate text using Ollama API. Used by pipeline step functions."""
@@ -457,7 +457,7 @@ class OllamaProvider(LLMProvider):
             logger.error(f"Ollama generate failed: {e}")
             raise LLMGenerationError(f"Ollama generation failed: {e}") from e
 
-    async def generate_test_plan(self, rtl_code: str, lint_result: Optional[dict] = None) -> "TestPlan":
+    async def generate_test_plan(self, rtl_code: str, lint_result: dict | None = None) -> "TestPlan":
         raise NotImplementedError("Use generate() via pipeline steps instead")
 
     async def generate_testbench(self, rtl_code: str, test_plan: "TestPlan") -> str:

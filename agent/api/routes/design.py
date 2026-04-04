@@ -6,10 +6,10 @@ Endpoints for RTL generation from natural language specifications.
 
 import logging
 import os
-from fastapi import APIRouter, HTTPException, BackgroundTasks
-from pydantic import BaseModel, Field
-from typing import Optional, List
 from datetime import datetime
+
+from fastapi import APIRouter, BackgroundTasks, HTTPException
+from pydantic import BaseModel, Field
 
 from agent.dragons import DesignDragon, DesignDragonError
 from agent.models import DesignSpec, RTLCode
@@ -27,9 +27,9 @@ class DesignRequest(BaseModel):
     description: str = Field(..., min_length=10, max_length=5000,
                             description="Natural language description")
     target_freq: str = Field(..., description="Target frequency (e.g., '2 GHz')")
-    module_name: Optional[str] = Field(None, description="Desired module name")
-    max_area: Optional[str] = Field(None, description="Maximum area constraint")
-    max_power: Optional[str] = Field(None, description="Maximum power constraint")
+    module_name: str | None = Field(None, description="Desired module name")
+    max_area: str | None = Field(None, description="Maximum area constraint")
+    max_power: str | None = Field(None, description="Maximum power constraint")
 
     class Config:
         json_schema_extra = {
@@ -50,9 +50,9 @@ class DesignResponse(BaseModel):
     code: str
     lines_of_code: int
     quality_score: float
-    lint_warnings: List[str]
-    estimated_area: Optional[float] = None
-    estimated_power: Optional[float] = None
+    lint_warnings: list[str]
+    estimated_area: float | None = None
+    estimated_power: float | None = None
     generated_at: datetime
 
     @classmethod
@@ -119,13 +119,13 @@ async def generate_rtl(request: DesignRequest, background_tasks: BackgroundTasks
         raise HTTPException(
             status_code=400,
             detail=f"RTL generation failed: {str(e)}"
-        )
+        ) from e
     except Exception as e:
         logger.error(f"Unexpected error: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Internal server error: {str(e)}"
-        )
+        ) from e
 
 
 @router.get("/design/health")
@@ -133,7 +133,7 @@ async def design_health():
     """Health check for Design Dragon service."""
     try:
         # Simple health check
-        dragon = DesignDragon(llm_endpoint=LLM_ENDPOINT)
+        DesignDragon(llm_endpoint=LLM_ENDPOINT)
         return {
             "status": "healthy",
             "service": "design-dragon",
@@ -144,4 +144,4 @@ async def design_health():
         raise HTTPException(
             status_code=503,
             detail=f"Service unhealthy: {str(e)}"
-        )
+        ) from e

@@ -30,12 +30,11 @@ import logging
 import os
 import tempfile
 import uuid
-from typing import List, Optional
 from datetime import datetime
 
+from agent.core.llm_gateway import LLMGateway, LLMProvider, VLLMBackend
 from agent.dragons import Dragon, DragonError, DragonMetrics
 from agent.models import DesignSpec, RTLCode
-from agent.core.llm_gateway import LLMGateway, LLMProvider, VLLMBackend
 from agent.sandbox import SandboxManager
 
 logger = logging.getLogger(__name__)
@@ -84,7 +83,7 @@ class DesignDragon(Dragon[DesignSpec, RTLCode]):
         )
 
         self.sandbox_manager = SandboxManager()
-        self._current_metrics: Optional[DragonMetrics] = None
+        self._current_metrics: DragonMetrics | None = None
 
     def validate_input(self, input_data: DesignSpec) -> bool:
         """
@@ -174,7 +173,7 @@ class DesignDragon(Dragon[DesignSpec, RTLCode]):
         self.validate_input(spec)
 
         # Context for iterative refinement
-        lint_context: List[str] = []
+        lint_context: list[str] = []
 
         for iteration in range(1, self.max_iterations + 1):
             logger.info(f"🐉 Iteration {iteration}/{self.max_iterations}")
@@ -257,7 +256,7 @@ class DesignDragon(Dragon[DesignSpec, RTLCode]):
         self,
         spec: DesignSpec,
         iteration: int,
-        lint_context: List[str]
+        lint_context: list[str]
     ) -> tuple[str, int]:
         """
         Call LLM to generate Verilog RTL.
@@ -287,7 +286,7 @@ class DesignDragon(Dragon[DesignSpec, RTLCode]):
 
         return rtl_code, total_tokens
 
-    def _build_prompt(self, spec: DesignSpec, iteration: int, lint_context: List[str]) -> str:
+    def _build_prompt(self, spec: DesignSpec, iteration: int, lint_context: list[str]) -> str:
         """
         Build LLM prompt for RTL generation.
 
@@ -309,7 +308,7 @@ class DesignDragon(Dragon[DesignSpec, RTLCode]):
         prompt_parts = [
             "You are an expert Verilog RTL designer. Generate synthesizable Verilog code.",
             "",
-            f"**Design Specification:**",
+            "**Design Specification:**",
             f"- Description: {spec.description}",
             f"- Target Frequency: {spec.target_freq}",
         ]
@@ -462,7 +461,7 @@ class DesignDragon(Dragon[DesignSpec, RTLCode]):
             except Exception as cleanup_error:
                 logger.warning(f"Failed to clean up temp file {temp_file}: {cleanup_error}")
 
-    def _finalize_rtl(self, spec: DesignSpec, rtl_code: str, lint_warnings: List[str]) -> RTLCode:
+    def _finalize_rtl(self, spec: DesignSpec, rtl_code: str, lint_warnings: list[str]) -> RTLCode:
         """
         Create RTLCode object from generated code.
 
@@ -500,7 +499,7 @@ class DesignDragon(Dragon[DesignSpec, RTLCode]):
             lint_warnings=lint_warnings
         )
 
-    def _extract_module_name(self, rtl_code: str) -> Optional[str]:
+    def _extract_module_name(self, rtl_code: str) -> str | None:
         """
         Extract module name from Verilog code.
 
@@ -521,7 +520,7 @@ class DesignDragon(Dragon[DesignSpec, RTLCode]):
                     return module_name
         return None
 
-    def _calculate_quality_score(self, rtl_code: str, lint_warnings: List[str]) -> float:
+    def _calculate_quality_score(self, rtl_code: str, lint_warnings: list[str]) -> float:
         """
         Calculate quality score for generated RTL.
 

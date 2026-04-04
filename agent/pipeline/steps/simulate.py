@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import re
-from typing import Optional
 
 from agent.pipeline.models import StepResult, StepStatus
 from agent.sandbox.manager import SandboxManager
@@ -38,7 +37,7 @@ def _extract_test_result(stdout: str) -> bool:
 async def run_simulate_step(
     rtl_file: str,
     tb_file: str,
-    sandbox: Optional[SandboxManager] = None,
+    sandbox: SandboxManager | None = None,
     timeout: int = 300,
 ) -> StepResult:
     """
@@ -59,9 +58,9 @@ async def run_simulate_step(
     logger.info(f"[SIM] Starting simulation: RTL={rtl_file}, TB={tb_file}")
 
     try:
-        with open(rtl_file, 'r', encoding='utf-8') as f:
+        with open(rtl_file, encoding='utf-8') as f:
             rtl_code = f.read()
-        with open(tb_file, 'r', encoding='utf-8') as f:
+        with open(tb_file, encoding='utf-8') as f:
             tb_code = f.read()
 
         result = await asyncio.to_thread(
@@ -91,9 +90,9 @@ async def run_simulate_step(
         )
 
         if status == StepStatus.PASSED:
-            logger.info(f"[SIM] ✅ PASSED")
+            logger.info("[SIM] ✅ PASSED")
         else:
-            logger.error(f"[SIM] ❌ FAILED")
+            logger.error("[SIM] ❌ FAILED")
 
         return step_result
 

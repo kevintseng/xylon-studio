@@ -1,11 +1,10 @@
 """Integration tests for pipeline."""
 
+
 import pytest
-import os
 
 from agent.pipeline.models import StepStatus
-from agent.pipeline.runner import run_pipeline, PipelineConfig
-
+from agent.pipeline.runner import PipelineConfig, run_pipeline
 
 # Simple 8-bit adder RTL for testing
 SIMPLE_ADDER_RTL = """
@@ -18,32 +17,29 @@ module adder_8bit (
 endmodule
 """
 
-# Simple testbench that verifies 1+1=2
+# Simple C++ testbench that verifies 1+1=2 (Verilator requires C++ harness)
 SIMPLE_TB = """
-module tb_adder();
-    reg [7:0] a, b;
-    wire [8:0] sum;
+#include "Vadder_8bit.h"
+#include "verilated.h"
+#include <cstdio>
 
-    adder_8bit dut (
-        .a(a),
-        .b(b),
-        .sum(sum)
-    );
+int main(int argc, char** argv) {
+    Verilated::commandArgs(argc, argv);
+    Vadder_8bit* dut = new Vadder_8bit;
 
-    initial begin
-        a = 8'd1;
-        b = 8'd1;
-        #10;
+    dut->a = 1;
+    dut->b = 1;
+    dut->eval();
 
-        if (sum == 9'd2) begin
-            $display("PASS");
-        end else begin
-            $display("FAIL");
-        end
+    if (dut->sum == 2) {
+        printf("PASS\\n");
+    } else {
+        printf("FAIL: sum=%d\\n", (int)dut->sum);
+    }
 
-        $finish;
-    end
-endmodule
+    delete dut;
+    return 0;
+}
 """
 
 

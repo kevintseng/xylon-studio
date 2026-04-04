@@ -36,7 +36,14 @@ async def run_synthesis_step(
     start = time.monotonic()
 
     try:
-        result = sandbox.synthesize_verilog(rtl_file)
+        import asyncio
+        with open(rtl_file, encoding='utf-8') as f:
+            rtl_code = f.read()
+
+        result = await asyncio.to_thread(
+            sandbox.synthesize_verilog_string,
+            rtl_code,
+        )
         duration = time.monotonic() - start
 
         if not result.get("success", False):

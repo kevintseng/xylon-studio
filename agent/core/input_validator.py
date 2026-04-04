@@ -22,10 +22,11 @@ Usage:
         return {"error": str(e), "status": 400}
 """
 
-import re
-import regex  # pip install regex - for timeout support
 import logging
-from typing import Dict, Any, List
+import re
+from typing import Any
+
+import regex  # pip install regex - for timeout support
 from pydantic import BaseModel, Field, validator
 
 from agent.config import REGEX_TIMEOUT_MS
@@ -68,7 +69,7 @@ def safe_regex_search(pattern: str, text: str, flags=0) -> bool:
         timeout_seconds = REGEX_TIMEOUT_MS / 1000.0
         match = regex.search(pattern, text, flags=flags, timeout=timeout_seconds)
         return match is not None
-    except TimeoutError:
+    except TimeoutError as e:
         # Treat timeout as potential ReDoS attack
         logger.warning(
             f"Regex timeout detected (pattern: {pattern[:50]}..., "
@@ -78,7 +79,7 @@ def safe_regex_search(pattern: str, text: str, flags=0) -> bool:
             message="Input validation timeout - text too complex or potential attack",
             field="unknown",
             pattern=pattern
-        )
+        ) from e
 
 
 # ==================== Attack Pattern Blacklist ====================
@@ -194,7 +195,7 @@ class DesignSpec(BaseModel):
         for pattern in PROMPT_INJECTION_PATTERNS:
             if safe_regex_search(pattern, v_lower, flags=regex.IGNORECASE):
                 raise InputValidationError(
-                    message=f"Potentially malicious input detected",
+                    message="Potentially malicious input detected",
                     field="description",
                     pattern=pattern
                 )
@@ -203,7 +204,7 @@ class DesignSpec(BaseModel):
         for pattern in RTL_INJECTION_PATTERNS:
             if safe_regex_search(pattern, v, flags=regex.IGNORECASE):
                 raise InputValidationError(
-                    message=f"Potentially malicious RTL pattern detected",
+                    message="Potentially malicious RTL pattern detected",
                     field="description",
                     pattern=pattern
                 )
@@ -263,7 +264,7 @@ class DesignSpec(BaseModel):
 # ==================== Validation Functions ====================
 
 
-def validate_design_spec(spec_dict: Dict[str, Any]) -> DesignSpec:
+def validate_design_spec(spec_dict: dict[str, Any]) -> DesignSpec:
     """
     Validate design specification against security rules.
 
@@ -335,7 +336,7 @@ def sanitize_user_input(text: str, max_length: int = 5000) -> str:
     return text
 
 
-def check_for_attack_patterns(text: str) -> List[str]:
+def check_for_attack_patterns(text: str) -> list[str]:
     """
     Check text for known attack patterns.
 

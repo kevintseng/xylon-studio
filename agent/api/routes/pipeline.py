@@ -2,8 +2,6 @@
 
 import json
 import logging
-from dataclasses import asdict
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
@@ -20,13 +18,15 @@ class PipelineRequest(BaseModel):
     """Request model for pipeline execution."""
 
     rtl_code: str = Field(..., description="Verilog RTL code")
-    testbench_code: Optional[str] = Field(
+    testbench_code: str | None = Field(
         None,
         description="Optional testbench code for Phase A (single-pass simulation)",
     )
     coverage_target: float = Field(0.8, description="Target coverage (0.0-1.0)")
     simulation_timeout: int = Field(300, description="Simulation timeout in seconds")
-    llm_config: Optional[dict] = Field(
+    lint_enabled: bool = Field(True, description="Run Verilator lint step")
+    synthesis_enabled: bool = Field(False, description="Run Yosys synthesis report after verification")
+    llm_config: dict | None = Field(
         None,
         description="LLM provider configuration for Phase B (testbench generation). "
                     "If provided, enables test plan generation and testbench generation with iteration. "
@@ -58,8 +58,8 @@ class PipelineResponse(BaseModel):
     total_duration_seconds: float
     steps_passed: int
     steps_total: int
-    coverage_score: Optional[float] = None
-    test_plan: Optional[TestPlan] = Field(
+    coverage_score: float | None = None
+    test_plan: TestPlan | None = Field(
         None,
         description="Generated test plan (Phase B only). Present when LLM provider is configured.",
     )
@@ -113,6 +113,8 @@ async def run_pipeline_endpoint(request: PipelineRequest) -> PipelineResponse:
         config = PipelineConfig(
             coverage_target=request.coverage_target,
             simulation_timeout=request.simulation_timeout,
+            lint_enabled=request.lint_enabled,
+            synthesis_enabled=request.synthesis_enabled,
             llm_provider=request.llm_config,
             generate_testbench=request.llm_config is not None,
             generate_test_plan=request.llm_config is not None,
@@ -154,7 +156,10 @@ async def run_pipeline_endpoint(request: PipelineRequest) -> PipelineResponse:
 
     except Exception as e:
         logger.error(f"Pipeline execution failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Pipeline execution failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Pipeline execution failed: {e}",
+        ) from e
 
 
 def _step_to_dict(step: StepResult) -> dict:
@@ -190,6 +195,8 @@ async def pipeline_websocket(ws: WebSocket):
         testbench_code = data.get("testbench_code")
         coverage_target = data.get("coverage_target", 0.8)
         simulation_timeout = data.get("simulation_timeout", 300)
+        lint_enabled = data.get("lint_enabled", True)
+        synthesis_enabled = data.get("synthesis_enabled", False)
         llm_config = data.get("llm_provider")
 
         if not rtl_code.strip():
@@ -200,6 +207,8 @@ async def pipeline_websocket(ws: WebSocket):
         config = PipelineConfig(
             coverage_target=coverage_target,
             simulation_timeout=simulation_timeout,
+            lint_enabled=lint_enabled,
+            synthesis_enabled=synthesis_enabled,
             llm_provider=llm_config,
             generate_testbench=llm_config is not None,
             generate_test_plan=llm_config is not None,

@@ -1,0 +1,19 @@
+{
+  "extends": "next/core-web-vitals",
+  "rules": {
+    "react-hooks/exhaustive-deps": "warn",
+    "no-unused-vars": ["warn", {
+      "argsIgnorePattern": "^_",
+      "varsIgnorePattern": "^_",
+      "args": "after-used"
+    }]
+  },
+  "overrides": [
+    {
+      "files": ["**/*.ts", "**/*.tsx"],
+      "rules": {
+        "no-unused-vars": "off"
+      }
+    }
+  ]
+}

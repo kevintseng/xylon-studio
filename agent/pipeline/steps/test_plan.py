@@ -13,7 +13,6 @@ import json
 import logging
 import re
 import time
-from typing import Optional
 
 from agent.pipeline.models import StepResult, StepStatus, TestPlan, TestScenario
 
@@ -84,7 +83,7 @@ Respond with ONLY the JSON object, no other text.
 async def run_test_plan_step(
     rtl_code: str,
     llm_gateway,
-    lint_warnings: Optional[list[str]] = None,
+    lint_warnings: list[str] | None = None,
 ) -> tuple[StepResult, TestPlan | None]:
     """
     Generate a verification test plan from RTL using LLM.

@@ -1,6 +1,7 @@
 """Tests for pipeline data models."""
 
 import pytest
+
 from agent.pipeline.models import (
     CoverageReport,
     PipelineConfig,

@@ -4,14 +4,22 @@ import asyncio
 import logging
 import tempfile
 import uuid
-from typing import Awaitable, Callable, Optional
+from collections.abc import Awaitable, Callable
 
-from agent.core.llm_provider import LLMProvider, LLMProviderError, create_llm_provider
-from agent.pipeline.models import CoverageReport, PipelineConfig, PipelineResult, StepStatus
+from agent.core.llm_provider import LLMProvider, create_llm_provider
+from agent.pipeline.models import (
+    CoverageReport,
+    PipelineConfig,
+    PipelineResult,
+    StepResult,
+    StepStatus,
+)
 from agent.pipeline.steps.coverage import run_coverage_step
+from agent.pipeline.steps.debug_assist import run_debug_assist_step
 from agent.pipeline.steps.improve import improve_testbench_step
 from agent.pipeline.steps.lint import run_lint_step
 from agent.pipeline.steps.simulate import run_simulate_step
+from agent.pipeline.steps.synthesis import run_synthesis_step
 from agent.pipeline.steps.test_plan import run_test_plan_step
 from agent.pipeline.steps.testbench_gen import run_testbench_gen_step
 from agent.sandbox.manager import SandboxManager
@@ -19,15 +27,15 @@ from agent.sandbox.manager import SandboxManager
 logger = logging.getLogger(__name__)
 
 
-StepCallback = Optional[Callable[["StepResult"], Awaitable[None]]]
-StepStartCallback = Optional[Callable[[str], Awaitable[None]]]
+StepCallback = Callable[["StepResult"], Awaitable[None]] | None
+StepStartCallback = Callable[[str], Awaitable[None]] | None
 
 
 async def run_pipeline(
     rtl_code: str,
-    testbench_code: Optional[str] = None,
-    config: Optional[PipelineConfig] = None,
-    llm_provider: Optional[LLMProvider] = None,
+    testbench_code: str | None = None,
+    config: PipelineConfig | None = None,
+    llm_provider: LLMProvider | None = None,
     on_step_complete: StepCallback = None,
     on_step_started: StepStartCallback = None,
 ) -> PipelineResult:
@@ -88,27 +96,32 @@ async def run_pipeline(
         # Initialize sandbox
         sandbox = SandboxManager()
 
-        # Step 1: Lint
         start_time = asyncio.get_event_loop().time()
-        logger.info(f"[PIPELINE-{pipeline_id}] Running lint step...")
-        await _emit_start("lint")
-        lint_result = await run_lint_step(rtl_file, sandbox)
-        steps.append(lint_result)
-        await _emit(lint_result)
 
-        # Check if lint passed
-        if lint_result.status != StepStatus.PASSED:
-            logger.warning(
-                f"[PIPELINE-{pipeline_id}] Lint failed, exiting"
-            )
-            return _finalize_result(
-                pipeline_id,
-                steps,
-                final_coverage,
-                start_time,
-                test_plan,
-                iterations_used,
-            )
+        # Step 1: Lint (skipped if disabled)
+        lint_result = None
+        if config.lint_enabled:
+            logger.info(f"[PIPELINE-{pipeline_id}] Running lint step...")
+            await _emit_start("lint")
+            lint_result = await run_lint_step(rtl_file, sandbox)
+            steps.append(lint_result)
+            await _emit(lint_result)
+
+            # Check if lint passed
+            if lint_result.status != StepStatus.PASSED:
+                logger.warning(
+                    f"[PIPELINE-{pipeline_id}] Lint failed, exiting"
+                )
+                return _finalize_result(
+                    pipeline_id,
+                    steps,
+                    final_coverage,
+                    start_time,
+                    test_plan,
+                    iterations_used,
+                )
+        else:
+            logger.info(f"[PIPELINE-{pipeline_id}] Lint step skipped (disabled)")
 
         # Phase B: LLM-driven testbench generation and iteration
         if config.generate_testbench:
@@ -154,7 +167,11 @@ async def run_pipeline(
             # Step 2: Test Plan Generation
             logger.info(f"[PIPELINE-{pipeline_id}] Running test plan generation...")
             await _emit_start("test_plan")
-            lint_warnings = lint_result.output.get("warnings", []) if lint_result.output else []
+            lint_warnings = (
+                lint_result.output.get("warnings", [])
+                if lint_result and lint_result.output
+                else []
+            )
             test_plan_result, test_plan = await run_test_plan_step(
                 rtl_code=rtl_code,
                 llm_gateway=llm_provider,
@@ -200,6 +217,7 @@ async def run_pipeline(
 
             # Step 4: Coverage-driven iteration loop
             logger.info(f"[PIPELINE-{pipeline_id}] Starting iteration loop (max {config.max_iterations} iterations)")
+            previous_score: float | None = None
             for iteration in range(config.max_iterations):
                 iterations_used = iteration + 1
                 logger.info(f"[PIPELINE-{pipeline_id}] Iteration {iterations_used}/{config.max_iterations}")
@@ -244,14 +262,47 @@ async def run_pipeline(
                             f"[PIPELINE-{pipeline_id}] Coverage target {config.coverage_target*100:.1f}% met at iteration {iterations_used}"
                         )
                         break
+
+                    # Stall detection: if coverage delta < 1% between iterations, stop
+                    if iteration >= 1 and previous_score is not None:
+                        delta = coverage_report.score - previous_score
+                        if delta < 0.01:
+                            logger.warning(
+                                f"[PIPELINE-{pipeline_id}] Coverage stalled "
+                                f"(delta={delta*100:.2f}%), stopping iterations"
+                            )
+                            stall_step = StepResult(
+                                step_name="iteration_stall",
+                                status=StepStatus.SKIPPED,
+                                duration_seconds=0.0,
+                                warnings=[
+                                    f"Coverage stalled at iteration {iterations_used} "
+                                    f"({coverage_report.score*100:.1f}% → delta {delta*100:.2f}%)"
+                                ],
+                            )
+                            steps.append(stall_step)
+                            await _emit(stall_step)
+                            break
+                    previous_score = coverage_report.score
                 else:
                     logger.warning(
                         f"[PIPELINE-{pipeline_id}] Simulation failed at iteration {iterations_used}, will attempt improvement"
                     )
+                    # Run debug assistant if LLM is available
+                    if llm_provider:
+                        await _emit_start("debug")
+                        debug_result = await run_debug_assist_step(
+                            rtl_code=rtl_code,
+                            testbench_code=current_testbench,
+                            sim_stdout=simulate_result.output.get('stdout', ''),
+                            sim_stderr=simulate_result.output.get('stderr', ''),
+                            llm=llm_provider,
+                        )
+                        steps.append(debug_result)
+                        await _emit(debug_result)
 
                 # If target not met (or sim failed) and iterations remaining, improve testbench
                 if iteration < config.max_iterations - 1:
-                    sim_errors = simulate_result.output.get('stderr', '') if simulate_result.status != StepStatus.PASSED else ''
                     sim_stdout = simulate_result.output.get('stdout', '')
                     logger.info(
                         f"[PIPELINE-{pipeline_id}] Improving testbench (iteration {iterations_used})..."
@@ -338,6 +389,14 @@ async def run_pipeline(
         else:
             logger.info(f"[PIPELINE-{pipeline_id}] No testbench provided and Phase B not enabled, skipping simulate/coverage")
 
+        # Synthesis step (always runs after verification, if enabled)
+        if config.synthesis_enabled:
+            logger.info(f"[PIPELINE-{pipeline_id}] Running synthesis step...")
+            await _emit_start("synthesis")
+            synthesis_result = await run_synthesis_step(rtl_file, sandbox)
+            steps.append(synthesis_result)
+            await _emit(synthesis_result)
+
         return _finalize_result(
             pipeline_id,
             steps,
@@ -373,10 +432,10 @@ def _finalize_result(
     pipeline_id: str,
     steps: list,
     final_coverage,
-    start_time: Optional[float],
+    start_time: float | None,
     test_plan=None,
     iterations_used: int = 1,
-    error: Optional[str] = None,
+    error: str | None = None,
 ) -> PipelineResult:
     """
     Finalize pipeline result.

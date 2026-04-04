@@ -1,22 +1,21 @@
 """Tests for LLM-driven pipeline steps (Phase B)."""
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Optional
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+from agent.core.llm_provider import LLMGenerationError
 from agent.pipeline.models import (
+    CoverageReport,
+    PipelineConfig,
     StepStatus,
     TestPlan,
     TestScenario,
-    CoverageReport,
-    PipelineConfig,
 )
+from agent.pipeline.runner import run_pipeline
+from agent.pipeline.steps.improve import improve_testbench_step
 from agent.pipeline.steps.test_plan import run_test_plan_step
 from agent.pipeline.steps.testbench_gen import run_testbench_gen_step
-from agent.pipeline.steps.improve import improve_testbench_step
-from agent.pipeline.runner import run_pipeline
-from agent.core.llm_provider import LLMProvider, LLMGenerationError
-
 
 # ==================== Test Data & Fixtures ====================
 
