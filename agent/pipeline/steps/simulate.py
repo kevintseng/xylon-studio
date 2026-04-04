@@ -69,7 +69,7 @@ async def run_simulate_step(
             rtl_code,
             tb_code,
             timeout=timeout,
-            coverage=False,
+            coverage=True,  # Always enable so testbenches with verilated_cov.h link
         )
 
         # Determine pass/fail from stdout
