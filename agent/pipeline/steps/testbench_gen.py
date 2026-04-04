@@ -67,10 +67,27 @@ int main(int argc, char** argv) {{
     int pass_count = 0;
     int fail_count = 0;
 
+    // Helper: apply one clock cycle (use for sequential logic)
+    auto tick = [&]() {{
+        dut->clk = 1; dut->eval();
+        dut->clk = 0; dut->eval();
+    }};
+
     // --- Scenario tests ---
     // [Your test code here]
-    // Use: dut->eval(); after setting inputs to propagate signals
-    // Use: dut->clk = !dut->clk; dut->eval(); for clock toggle
+    //
+    // CRITICAL: Verilator timing rules:
+    // - Combinational: set inputs, call dut->eval(), then check outputs
+    // - Sequential: registers update on RISING clock edge only
+    //   To apply one clock cycle:
+    //     dut->clk = 1; dut->eval();  // rising edge (registers capture)
+    //     dut->clk = 0; dut->eval();  // falling edge (outputs propagate)
+    //   Then check outputs AFTER the falling edge eval.
+    // - Reset: set rst_n=0, do one full clock cycle, THEN check outputs
+    //   dut->rst_n = 0;
+    //   dut->clk = 1; dut->eval(); dut->clk = 0; dut->eval();
+    //   // NOW count should be 0
+    // - DO NOT check register outputs before a clock edge — they haven't updated yet
 
     // --- Summary ---
     if (fail_count == 0) {{

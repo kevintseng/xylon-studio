@@ -7,7 +7,7 @@ import uuid
 from typing import Awaitable, Callable, Optional
 
 from agent.core.llm_provider import LLMProvider, LLMProviderError, create_llm_provider
-from agent.pipeline.models import PipelineConfig, PipelineResult, StepStatus
+from agent.pipeline.models import CoverageReport, PipelineConfig, PipelineResult, StepStatus
 from agent.pipeline.steps.coverage import run_coverage_step
 from agent.pipeline.steps.improve import improve_testbench_step
 from agent.pipeline.steps.lint import run_lint_step
@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 StepCallback = Optional[Callable[["StepResult"], Awaitable[None]]]
+StepStartCallback = Optional[Callable[[str], Awaitable[None]]]
 
 
 async def run_pipeline(
@@ -28,6 +29,7 @@ async def run_pipeline(
     config: Optional[PipelineConfig] = None,
     llm_provider: Optional[LLMProvider] = None,
     on_step_complete: StepCallback = None,
+    on_step_started: StepStartCallback = None,
 ) -> PipelineResult:
     """
     Run verification pipeline sequentially.
@@ -73,6 +75,10 @@ async def run_pipeline(
         if on_step_complete:
             await on_step_complete(step_result)
 
+    async def _emit_start(step_name: str):
+        if on_step_started:
+            await on_step_started(step_name)
+
     try:
         # Write RTL to temp file
         with open(rtl_file, 'w', encoding='utf-8') as f:
@@ -85,6 +91,7 @@ async def run_pipeline(
         # Step 1: Lint
         start_time = asyncio.get_event_loop().time()
         logger.info(f"[PIPELINE-{pipeline_id}] Running lint step...")
+        await _emit_start("lint")
         lint_result = await run_lint_step(rtl_file, sandbox)
         steps.append(lint_result)
         await _emit(lint_result)
@@ -146,6 +153,7 @@ async def run_pipeline(
 
             # Step 2: Test Plan Generation
             logger.info(f"[PIPELINE-{pipeline_id}] Running test plan generation...")
+            await _emit_start("test_plan")
             lint_warnings = lint_result.output.get("warnings", []) if lint_result.output else []
             test_plan_result, test_plan = await run_test_plan_step(
                 rtl_code=rtl_code,
@@ -168,6 +176,7 @@ async def run_pipeline(
 
             # Step 3: Testbench Generation
             logger.info(f"[PIPELINE-{pipeline_id}] Running testbench generation...")
+            await _emit_start("testbench_gen")
             testbench_result, generated_testbench = await run_testbench_gen_step(
                 rtl_code,
                 test_plan,
@@ -201,6 +210,7 @@ async def run_pipeline(
 
                 # Run simulation
                 logger.info(f"[PIPELINE-{pipeline_id}] Running simulation (iteration {iterations_used})...")
+                await _emit_start("simulate")
                 simulate_result = await run_simulate_step(
                     rtl_file,
                     tb_file,
@@ -210,44 +220,52 @@ async def run_pipeline(
                 steps.append(simulate_result)
                 await _emit(simulate_result)
 
-                if simulate_result.status != StepStatus.PASSED:
+                # If simulation passed, run coverage
+                if simulate_result.status == StepStatus.PASSED:
+                    logger.info(f"[PIPELINE-{pipeline_id}] Running coverage (iteration {iterations_used})...")
+                    await _emit_start("coverage")
+                    coverage_result, coverage_report = await run_coverage_step(
+                        rtl_file,
+                        tb_file,
+                        sandbox,
+                        timeout=config.simulation_timeout,
+                    )
+                    steps.append(coverage_result)
+                    await _emit(coverage_result)
+                    final_coverage = coverage_report
+
+                    logger.info(
+                        f"[PIPELINE-{pipeline_id}] Coverage score (iter {iterations_used}): {coverage_report.score*100:.1f}%"
+                    )
+
+                    # Check if target met
+                    if coverage_report.score >= config.coverage_target:
+                        logger.info(
+                            f"[PIPELINE-{pipeline_id}] Coverage target {config.coverage_target*100:.1f}% met at iteration {iterations_used}"
+                        )
+                        break
+                else:
                     logger.warning(
-                        f"[PIPELINE-{pipeline_id}] Simulation failed at iteration {iterations_used}"
+                        f"[PIPELINE-{pipeline_id}] Simulation failed at iteration {iterations_used}, will attempt improvement"
                     )
-                    break
 
-                # Run coverage
-                logger.info(f"[PIPELINE-{pipeline_id}] Running coverage (iteration {iterations_used})...")
-                coverage_result, coverage_report = await run_coverage_step(
-                    rtl_file,
-                    tb_file,
-                    sandbox,
-                    timeout=config.simulation_timeout,
-                )
-                steps.append(coverage_result)
-                await _emit(coverage_result)
-                final_coverage = coverage_report
-
-                logger.info(
-                    f"[PIPELINE-{pipeline_id}] Coverage score (iter {iterations_used}): {coverage_report.score*100:.1f}%"
-                )
-
-                # Check if target met
-                if coverage_report.score >= config.coverage_target:
-                    logger.info(
-                        f"[PIPELINE-{pipeline_id}] Coverage target {config.coverage_target*100:.1f}% met at iteration {iterations_used}"
-                    )
-                    break
-
-                # If not met and iterations remaining, improve testbench
+                # If target not met (or sim failed) and iterations remaining, improve testbench
                 if iteration < config.max_iterations - 1:
+                    sim_errors = simulate_result.output.get('stderr', '') if simulate_result.status != StepStatus.PASSED else ''
+                    sim_stdout = simulate_result.output.get('stdout', '')
                     logger.info(
-                        f"[PIPELINE-{pipeline_id}] Coverage {coverage_report.score*100:.1f}% below target {config.coverage_target*100:.1f}%, improving testbench..."
+                        f"[PIPELINE-{pipeline_id}] Improving testbench (iteration {iterations_used})..."
+                    )
+                    await _emit_start("improve")
+                    # Use coverage report if available, else create empty one for sim failures
+                    improve_coverage = coverage_report if final_coverage else CoverageReport(
+                        line_coverage=0.0, toggle_coverage=0.0, branch_coverage=0.0, score=0.0,
+                        uncovered_lines=[f"Simulation failed: {sim_stdout[:200]}"] if sim_stdout else [],
                     )
                     improve_result, improved_testbench = await improve_testbench_step(
                         rtl_code,
                         current_testbench,
-                        coverage_report,
+                        improve_coverage,
                         config.coverage_target,
                         test_plan.module_name,
                         llm=llm_provider,

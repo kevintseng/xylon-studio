@@ -72,8 +72,10 @@ async def run_simulate_step(
             coverage=True,  # Always enable so testbenches with verilated_cov.h link
         )
 
-        # Determine pass/fail from stdout
-        test_passed = _extract_test_result(result.get('stdout', ''))
+        # Determine pass/fail from stdout content AND exit code
+        sim_success = result.get('success', False)
+        stdout_passed = _extract_test_result(result.get('stdout', ''))
+        test_passed = sim_success and stdout_passed
         status = StepStatus.PASSED if test_passed else StepStatus.FAILED
 
         step_result = StepResult(

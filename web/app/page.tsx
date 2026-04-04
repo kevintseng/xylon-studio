@@ -263,6 +263,38 @@ endmodule`}</code>
         </div>
       </section>
 
+      {/* ── Comparison ── */}
+      <section className="py-24 border-t border-slate-800">
+        <div className="container mx-auto px-8">
+          <h2 className="text-3xl lg:text-4xl font-bold text-center mb-16">
+            {t('landing.compare.title')}
+          </h2>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="border-b border-slate-700">
+                  <th className="text-left py-3 px-4 text-slate-400 font-medium">{t('landing.compare.feature')}</th>
+                  <th className="py-3 px-4 text-blue-400 font-semibold">XylonStudio</th>
+                  <th className="py-3 px-4 text-slate-400 font-medium">{t('landing.compare.commercial')}</th>
+                  <th className="py-3 px-4 text-slate-400 font-medium">{t('landing.compare.manual')}</th>
+                </tr>
+              </thead>
+              <tbody className="text-slate-300">
+                {['price', 'testplan', 'testbench', 'coverage', 'llm', 'education'].map((row) => (
+                  <tr key={row} className="border-b border-slate-800">
+                    <td className="py-3 px-4 text-slate-400">{t(`landing.compare.row.${row}`)}</td>
+                    <td className="py-3 px-4 text-center text-green-400">{t(`landing.compare.xylon.${row}`)}</td>
+                    <td className="py-3 px-4 text-center">{t(`landing.compare.comm.${row}`)}</td>
+                    <td className="py-3 px-4 text-center">{t(`landing.compare.man.${row}`)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       {/* ── Open Source ── */}
       <section className="py-16 border-t border-slate-800">
         <div className="container mx-auto px-8 text-center">

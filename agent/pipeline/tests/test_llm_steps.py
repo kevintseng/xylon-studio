@@ -269,9 +269,11 @@ async def test_generate_testbench_llm_failure(mock_llm):
 @pytest.mark.asyncio
 async def test_improve_testbench_generates_improvements(mock_llm, coverage_low):
     """Test testbench improvement with coverage below target."""
-    improvement_code = "// Additional test for edge case coverage\na = 8'd1; b = 8'd0;\n#10;\nassert(sum == 9'd1);"
+    # LLM returns a COMPLETE improved testbench (not a fragment)
+    improved_code = EXPECTED_TESTBENCH.rstrip() + "\n// Extra edge case test\n"
+    # Wrap in a code block as the LLM would
     improve_response = MagicMock()
-    improve_response.text = improvement_code
+    improve_response.text = "```cpp\n" + improved_code + "\n```"
     improve_response.provider = MagicMock(value="deepseek")
     improve_response.model = "deepseek-coder-v2"
     improve_response.cost_usd = 0.001
@@ -291,8 +293,8 @@ async def test_improve_testbench_generates_improvements(mock_llm, coverage_low):
     assert step_result.status == StepStatus.PASSED
     assert step_result.step_name == "improve"
     assert improved_tb is not None
-    assert len(improved_tb) > len(EXPECTED_TESTBENCH)
-    assert "Iteration 1" in improved_tb or "iteration" in improved_tb.lower()
+    assert "#include" in improved_tb
+    assert "int main" in improved_tb
 
 
 @pytest.mark.asyncio

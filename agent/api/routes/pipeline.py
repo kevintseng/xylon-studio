@@ -205,7 +205,13 @@ async def pipeline_websocket(ws: WebSocket):
             generate_test_plan=llm_config is not None,
         )
 
-        # Callback to stream step results
+        # Callback to stream step events
+        async def on_step_started(step_name: str):
+            await ws.send_json({
+                "type": "step_started",
+                "step_name": step_name,
+            })
+
         async def on_step_complete(step: StepResult):
             await ws.send_json({
                 "type": "step_complete",
@@ -218,6 +224,7 @@ async def pipeline_websocket(ws: WebSocket):
             testbench_code=testbench_code,
             config=config,
             on_step_complete=on_step_complete,
+            on_step_started=on_step_started,
         )
 
         # Send final result

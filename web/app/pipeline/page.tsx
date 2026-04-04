@@ -158,10 +158,13 @@ export default function PipelinePage() {
   const [error, setError] = useState<string | null>(null)
   const [elapsed, setElapsed] = useState(0)
   const [activeStep, setActiveStep] = useState<string | null>(null)
+  const [stepElapsed, setStepElapsed] = useState(0)
   const [expandedStep, setExpandedStep] = useState<string | null>(null)
 
   const wsRef = useRef<WebSocket | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const stepStartRef = useRef<number>(0)
 
   const handleStop = useCallback(() => {
     if (wsRef.current) {
@@ -172,7 +175,13 @@ export default function PipelinePage() {
       clearInterval(timerRef.current)
       timerRef.current = null
     }
+    if (stepTimerRef.current) {
+      clearInterval(stepTimerRef.current)
+      stepTimerRef.current = null
+    }
     setRunning(false)
+    setActiveStep(null)
+    setStepElapsed(0)
   }, [])
 
   const handleRun = useCallback(() => {
@@ -230,9 +239,19 @@ export default function PipelinePage() {
         return
       }
 
-      if (data.type === 'step_complete') {
+      if (data.type === 'step_started') {
+        setActiveStep(String(data.step_name))
+        setStepElapsed(0)
+        stepStartRef.current = Date.now()
+        if (stepTimerRef.current) clearInterval(stepTimerRef.current)
+        stepTimerRef.current = setInterval(() => {
+          setStepElapsed(Math.floor((Date.now() - stepStartRef.current) / 1000))
+        }, 1000)
+      } else if (data.type === 'step_complete') {
         const step = data.step as StepState
         setActiveStep(null)
+        setStepElapsed(0)
+        if (stepTimerRef.current) { clearInterval(stepTimerRef.current); stepTimerRef.current = null }
 
         setSteps((prev) => {
           const updated = [...prev]
@@ -241,11 +260,6 @@ export default function PipelinePage() {
             updated[idx] = step
           } else {
             updated.push(step)
-          }
-          // Mark next pending step as running
-          const nextPending = updated.find((s) => s.status === 'pending')
-          if (nextPending) {
-            setActiveStep(nextPending.step_name)
           }
           return updated
         })
@@ -509,6 +523,11 @@ export default function PipelinePage() {
                         </div>
                       </div>
 
+                      {status === 'running' && (
+                        <p className="text-xs text-blue-400/80 mt-1 max-w-md animate-pulse">
+                          {t(`pipeline.progress.${step.step_name}`)}
+                        </p>
+                      )}
                       {educationMode && status !== 'running' && (
                         <p className="text-xs text-slate-500 mt-1 max-w-md">
                           {t(`pipeline.education.${step.step_name}`)}
@@ -516,7 +535,12 @@ export default function PipelinePage() {
                       )}
 
                       <div className="flex items-center gap-3 text-sm">
-                        {stepData?.duration_seconds !== undefined && (
+                        {status === 'running' && stepElapsed > 0 && (
+                          <span className="text-blue-400 font-mono text-xs tabular-nums">
+                            {stepElapsed}s
+                          </span>
+                        )}
+                        {status !== 'running' && stepData?.duration_seconds !== undefined && (
                           <span className="text-slate-400 font-mono text-xs">
                             {formatDuration(stepData.duration_seconds)}
                           </span>

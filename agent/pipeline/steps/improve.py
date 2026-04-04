@@ -43,17 +43,23 @@ achieved {current_coverage:.1%} coverage, below the target of {target_coverage:.
 
 ## Task
 
-Generate ADDITIONAL test cases (stimulus sequences) that target the uncovered areas \
-listed above. These should be appended to the existing testbench.
+Generate a COMPLETE improved C++ testbench that includes ALL existing tests \
+plus NEW test cases targeting the uncovered areas listed above.
 
 Requirements:
-1. Only provide NEW test cases - this will be inserted into the existing testbench
-2. Follow the same style and structure as existing test cases
-3. Target specific uncovered signals and branches identified above
-4. Use the same SystemVerilog/C++ patterns as the existing testbench
+1. Keep ALL existing test cases that pass. FIX any failing test assertions.
+2. ADD new test cases targeting uncovered signals and branches
+3. Output must be a complete, compilable C++ file with #include, main(), and VerilatedCov::write("coverage.dat")
+4. TIMING RULES (critical for correctness):
+   - Sequential logic: registers update on RISING clock edge only
+   - Use tick() helper: dut->clk=1; dut->eval(); dut->clk=0; dut->eval();
+   - Check outputs AFTER tick(), not before
+   - Reset: set rst_n=0, call tick(), THEN check outputs
+   - DO NOT check register outputs before a clock edge
 5. Include clear comments explaining what each new test targets
+6. Print "PASS" or "FAIL" summary at the end
 
-Output ONLY the new test code to be appended, wrapped in a code block.
+Output ONLY the complete C++ testbench code, wrapped in a code block.
 """
 
 
@@ -120,9 +126,13 @@ async def improve_testbench_step(
             temperature=0.3,
         )
 
-        # Extract new test code and append to existing testbench
-        new_code = _extract_code_block(response.text)
-        improved_tb = testbench + f"\n\n// Iteration {iteration} improvements:\n" + new_code
+        # Extract the complete improved testbench from LLM response
+        improved_tb = _extract_code_block(response.text)
+
+        # Validate it looks like a complete C++ file
+        if '#include' not in improved_tb or 'int main' not in improved_tb:
+            # LLM returned a fragment, not a complete file — fall back to original
+            improved_tb = testbench
 
         duration = time.time() - start_time
         logger.info(f"Testbench improvement generated: duration={duration:.2f}s")
@@ -135,7 +145,7 @@ async def improve_testbench_step(
             output={
                 "iteration": iteration,
                 "previous_score": coverage.score,
-                "tb_lines_added": len(new_code.split('\n')),
+                "tb_lines": len(improved_tb.split('\n')),
                 "llm_provider": response.provider.value,
                 "llm_model": response.model,
                 "llm_latency_ms": response.latency_ms,
