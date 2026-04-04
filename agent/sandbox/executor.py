@@ -91,6 +91,7 @@ class SandboxExecutor:
         command: List[str],
         timeout: Optional[int] = None,
         workdir: Optional[str] = None,
+        env: Optional[dict] = None,
     ) -> ExecutionResult:
         """
         Execute command in sandbox container.
@@ -123,6 +124,10 @@ class SandboxExecutor:
 
         if workdir:
             docker_cmd.extend(["-w", workdir])
+
+        if env:
+            for k, v in env.items():
+                docker_cmd.extend(["-e", f"{k}={v}"])
 
         docker_cmd.append(self.container_name)
         docker_cmd.extend(command)

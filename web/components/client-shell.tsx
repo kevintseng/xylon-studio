@@ -5,6 +5,8 @@ import { I18nProvider, useI18n } from '@/lib/i18n'
 import { LanguageSwitcher } from '@/components/language-switcher'
 import { WorkspaceSelector } from '@/components/workspace-selector'
 
+const showFeatures = process.env.NEXT_PUBLIC_SHOW_FEATURES !== 'false'
+
 function Header() {
   const { t } = useI18n()
 
@@ -23,15 +25,22 @@ function Header() {
           <a href="/" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all">
             {t('nav.home')}
           </a>
-          <a href="/design" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all">
-            {t('nav.design')}
-          </a>
-          <a href="/verify" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all">
-            {t('nav.verify')}
-          </a>
-          <a href="/history" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all">
-            {t('nav.history')}
-          </a>
+          {showFeatures && (
+            <>
+              <a href="/design" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all">
+                {t('nav.design')}
+              </a>
+              <a href="/verify" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all">
+                {t('nav.verify')}
+              </a>
+              <a href="/pipeline" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all">
+                {t('nav.pipeline')}
+              </a>
+              <a href="/history" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all">
+                {t('nav.history')}
+              </a>
+            </>
+          )}
           <div className="w-px h-5 bg-slate-700 mx-1" />
           <WorkspaceSelector />
           <LanguageSwitcher />

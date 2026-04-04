@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from agent.api.routes import design, verification
+from agent.api.routes import design, verification, pipeline
 
 # Configure logging
 logging.basicConfig(
@@ -42,6 +42,7 @@ app.add_middleware(
 # Include routers
 app.include_router(design.router, prefix="/api", tags=["design"])
 app.include_router(verification.router, prefix="/api", tags=["verification"])
+app.include_router(pipeline.router, prefix="/api", tags=["pipeline"])
 
 
 @app.get("/")

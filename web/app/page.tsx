@@ -35,6 +35,8 @@ const FEATURE_COLORS: Record<string, { border: string; bg: string; text: string 
 
 const AUDIENCES = ['a1', 'a2', 'a3'] as const
 
+const showFeatures = process.env.NEXT_PUBLIC_SHOW_FEATURES !== 'false'
+
 export default function Home() {
   const { t } = useI18n()
   const [email, setEmail] = useState('')
@@ -92,7 +94,7 @@ export default function Home() {
                 {t('home.cta.primary')}
               </a>
               <a
-                href="/design"
+                href={showFeatures ? '/design' : '#screenshots'}
                 className="px-6 py-3 rounded-lg font-semibold text-sm bg-slate-800 text-slate-200 border border-slate-700 hover:bg-slate-700 active:scale-[0.98] transition-all"
               >
                 {t('home.cta.secondary')}
@@ -174,6 +176,39 @@ endmodule`}</code>
                 {i < PIPELINE_STEPS.length - 1 && (
                   <div className="hidden lg:block w-8 h-px bg-gradient-to-r from-slate-700 to-slate-600 mx-1" />
                 )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Screenshots ── */}
+      <section id="screenshots" className="py-24 border-t border-slate-800">
+        <div className="container mx-auto px-8">
+          <div className="text-center mb-16">
+            <h2 className="text-3xl lg:text-4xl font-bold mb-4">{t('landing.screenshots.title')}</h2>
+            <p className="text-slate-400 max-w-2xl mx-auto">{t('landing.screenshots.subtitle')}</p>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-8">
+            {[
+              { src: '/screenshots/02-design-result.png', key: 'design' },
+              { src: '/screenshots/03-verify-result.png', key: 'verify' },
+              { src: '/screenshots/04-history.png', key: 'history' },
+              { src: '/screenshots/01-homepage.png', key: 'homepage' },
+            ].map(({ src, key }) => (
+              <div key={key} className="group">
+                <div className="rounded-xl border border-slate-700 overflow-hidden shadow-2xl shadow-black/40 group-hover:border-slate-500 transition-colors">
+                  <img
+                    src={src}
+                    alt={t(`landing.screenshots.${key}`)}
+                    className="w-full"
+                    loading="lazy"
+                  />
+                </div>
+                <p className="text-sm text-slate-400 text-center mt-3">
+                  {t(`landing.screenshots.${key}`)}
+                </p>
               </div>
             ))}
           </div>
