@@ -394,7 +394,7 @@ def record_llm_cost(
         return value.decode() if isinstance(value, bytes) else value
 
     new_spent_usd = results[0]  # Updated spent_today_usd (float from HINCRBYFLOAT)
-    results[1]  # Updated request_count_today (int from HINCRBY)
+    # results[1] is request_count_today (from HINCRBY) — pipeline already executed, not needed
     daily_budget_usd = float(decode_if_bytes(results[2]))
     alert_sent_80 = decode_if_bytes(results[3]) == 'True' if results[3] else False
     alert_sent_90 = decode_if_bytes(results[4]) == 'True' if results[4] else False

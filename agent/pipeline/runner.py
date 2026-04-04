@@ -303,7 +303,6 @@ async def run_pipeline(
 
                 # If target not met (or sim failed) and iterations remaining, improve testbench
                 if iteration < config.max_iterations - 1:
-                    simulate_result.output.get('stderr', '') if simulate_result.status != StepStatus.PASSED else ''
                     sim_stdout = simulate_result.output.get('stdout', '')
                     logger.info(
                         f"[PIPELINE-{pipeline_id}] Improving testbench (iteration {iterations_used})..."
