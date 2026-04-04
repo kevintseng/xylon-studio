@@ -1,6 +1,6 @@
 # XylonStudio
 
-AI-driven chip design automation platform.
+Open source chip verification pipeline. Learn. Verify. Tape Out.
 
 🌐 **[xylonstud.io](https://xylonstud.io)** | 📖 **[繁體中文](README.zh-TW.md)**
 
@@ -14,30 +14,39 @@ https://github.com/user-attachments/assets/b3598b06-df5a-4c50-8fd3-f27e0ca183e0
 
 ## Overview
 
-XylonStudio automates chip design workflows using AI agents and open-source EDA tools.
+XylonStudio is an AI-assisted chip verification platform. Auto-generate test plans, testbenches, and coverage reports from your RTL. Open source, pluggable LLM, education-first.
 
 **Key Features:**
-- Natural language to RTL generation
-- Automated testbench creation
-- Timing optimization
-- Layout verification
+- AI-generated verification test plans from RTL analysis
+- C++ Verilator testbench generation with coverage support
+- Coverage-driven iteration loop (auto-improve until target met)
+- Real Verilator simulation in Docker containers
+- Pluggable LLM (Ollama, vLLM — bring your own model)
+- Education mode with step-by-step explanations
+- Pipeline visualization with real-time WebSocket streaming
 
 ---
 
 ## Architecture
 
 ```
-Natural Language Spec
+RTL Code
     ↓
-Design Agent (RTL Generation)
+Lint (Verilator)
     ↓
-Verification Agent (Testbench + Coverage)
+Test Plan Generation (LLM)
     ↓
-Optimization Agent (Timing Closure)
+Testbench Generation (LLM)
     ↓
-DRC Agent (Layout Verification)
-    ↓
-GDSII Output
+┌─── Simulation (Verilator) ◄──┐
+│        ↓                      │
+│   Coverage Analysis           │
+│        ↓                      │
+│   Target met? ── No ── Improve Testbench (LLM)
+│        │
+│       Yes
+│        ↓
+└── Coverage Report
 ```
 
 ---
@@ -47,23 +56,22 @@ GDSII Output
 **Backend:**
 - Python 3.11+
 - FastAPI
-- vLLM (LLM inference)
-- PostgreSQL, Redis
+- Async pipeline runner with step callbacks
 
-**LLM:**
-- DeepSeek Coder V2 (236B) - open-source base model
-- Self-hosted deployment supported
+**LLM (bring your own):**
+- Ollama (qwen2.5-coder, deepseek-coder, etc.)
+- vLLM (self-hosted)
+- Any OpenAI-compatible API
 
-**EDA Tools:**
+**EDA Tools (Docker):**
+- Verilator (lint, simulation, coverage)
 - Yosys (synthesis)
-- Verilator (simulation)
-- OpenROAD (place & route)
-- Magic (DRC/LVS)
 
 **Frontend:**
-- Next.js 16
+- Next.js 14
 - TypeScript
 - Tailwind CSS
+- WebSocket for real-time pipeline updates
 
 ---
 
@@ -72,7 +80,8 @@ GDSII Output
 ### Prerequisites
 - Python 3.11+
 - Node.js 20+
-- Claude API key or OpenAI API key
+- Docker (for Verilator/Yosys containers)
+- Ollama or vLLM endpoint (for LLM features)
 
 ### Installation
 
@@ -87,12 +96,8 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# Setup environment
-cp ../.env.example ../.env
-# Edit .env and add your LLM API key
-
 # Start API server
-python -m agent.main
+uvicorn agent.api.main:app --host 0.0.0.0 --port 5000
 
 # Frontend setup (in another terminal)
 cd ../web
@@ -100,17 +105,43 @@ npm install
 npm run dev
 ```
 
-### Example Usage
+### Example: Run Pipeline
 
 ```bash
-# Generate RTL
-curl -X POST http://localhost:5000/api/generate \
+# Phase A: Lint + simulate with your own testbench
+curl -X POST http://localhost:5000/api/pipeline/run \
   -H "Content-Type: application/json" \
   -d '{
-    "description": "16-bit barrel shifter with pipeline",
-    "target_freq": "2 GHz"
+    "rtl_code": "module adder(input [7:0] a, b, output [8:0] sum); assign sum = a + b; endmodule",
+    "testbench_code": "...",
+    "coverage_target": 0.80
+  }'
+
+# Phase B: LLM generates test plan + testbench automatically
+curl -X POST http://localhost:5000/api/pipeline/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rtl_code": "module adder(input [7:0] a, b, output [8:0] sum); assign sum = a + b; endmodule",
+    "coverage_target": 0.80,
+    "llm_config": {
+      "type": "ollama",
+      "endpoint": "http://localhost:11434",
+      "model": "qwen2.5-coder:32b"
+    }
   }'
 ```
+
+---
+
+## Example Designs
+
+| Design | Type | Tests | Line Coverage |
+|--------|------|-------|---------------|
+| [8-bit Adder](examples/adder/) | Combinational | 25 | 100% |
+| [8-bit Counter](examples/counter/) | Sequential | 10 | 100% |
+| [Traffic Light FSM](examples/fsm/) | FSM | 9 | 79% |
+
+Each example includes RTL source and a verified C++ Verilator testbench.
 
 ---
 
@@ -118,15 +149,19 @@ curl -X POST http://localhost:5000/api/generate \
 
 ```
 xylon/
-├── agent/              # AI agent service (Python)
-│   ├── dragons/        # Agent implementations
-│   ├── core/           # LLM gateway, orchestrator
-│   ├── api/            # FastAPI routes
-│   └── tests/          # Test suite
-├── web/                # Web UI (Next.js)
-├── scripts/            # Deployment scripts
-├── docs/               # Documentation
-└── examples/           # Example designs
+├── agent/                  # Backend (Python/FastAPI)
+│   ├── core/               # LLM provider abstraction
+│   ├── pipeline/           # Pipeline runner + step functions
+│   │   ├── steps/          # lint, test_plan, testbench_gen, simulate, coverage, improve
+│   │   └── tests/          # 12 unit/integration tests
+│   ├── api/                # REST + WebSocket endpoints
+│   └── sandbox/            # Docker EDA container management
+├── web/                    # Frontend (Next.js)
+│   ├── app/                # Pages: home, design, verify, pipeline, history
+│   ├── components/         # UI components
+│   └── lib/                # i18n (EN + zh-TW)
+├── examples/               # Example RTL designs with testbenches
+└── docs/                   # Design documents
 ```
 
 ---
@@ -137,15 +172,13 @@ xylon/
 
 ```bash
 cd agent
-python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
 
 # Run tests
-pytest agent/tests/
+pytest agent/pipeline/tests/ -v
 
 # Start API server
-python -m agent.main
+uvicorn agent.api.main:app --reload --port 5000
 ```
 
 ### Frontend
@@ -158,11 +191,14 @@ npm run dev
 
 ---
 
-## Documentation
+## API Endpoints
 
-- [API Reference](docs/API.md) - API documentation
-- [Contributing](CONTRIBUTING.md) - Contribution guidelines
-- [Security](SECURITY.md) - Security policy
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/pipeline/run` | Run verification pipeline (REST) |
+| WS | `/api/pipeline/ws` | Run pipeline with real-time step streaming |
+| POST | `/api/design/generate` | Generate RTL from description |
+| POST | `/api/verification/verify` | Verify RTL with testbench |
 
 ---
 
@@ -174,17 +210,12 @@ XylonStudio uses a **dual-licensing model**:
 The core platform (this repository) is licensed under the **MIT License**:
 - ✅ Free to use, modify, and distribute
 - ✅ Commercial use allowed
-- ✅ No restrictions on enterprise or hosted services
 - ✅ Open source with minimal requirements
 
 See [LICENSE](LICENSE) for full terms.
 
 ### Proprietary Enterprise Features
-Advanced enterprise features are available under a separate commercial license:
-- Advanced optimization algorithms
-- Enterprise-grade security features
-- Multi-tenant architecture
-- Priority support and SLA
+Advanced enterprise features are available under a separate commercial license.
 
 ---
 
@@ -200,4 +231,4 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for gui
 
 ---
 
-**Built with**: OpenROAD, DeepSeek Coder, vLLM, Verilator
+**Built with**: Verilator, Yosys, Ollama, FastAPI, Next.js

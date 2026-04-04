@@ -1,50 +1,24 @@
-# 16-bit Barrel Shifter Example
+# 16-bit Barrel Shifter
 
-Logarithmic barrel shifter with multi-directional shift capabilities - demonstrates XylonStudio's ability to generate complex combinational logic.
+16-bit logarithmic barrel shifter with left/right shift and rotation.
 
-## Features
+## Files
 
-- 16-bit data path
-- Shift amounts: 0-15 positions
-- Four shift modes: left, right, rotate left, rotate right
-- Logarithmic architecture (4 stages)
-- Fully combinational
+| File | Description |
+|------|-------------|
+| `barrel_shifter_16bit.v` | Verilog RTL source |
 
-## Shift Modes
+## Ports
 
-| shift_dir | Mode | Description |
-|-----------|------|-------------|
-| 00 | Left Shift | Logical left shift (fill with 0) |
-| 01 | Right Shift | Logical right shift (fill with 0) |
-| 10 | Rotate Left | Circular left rotation |
-| 11 | Rotate Right | Circular right rotation |
+| Port | Width | Direction | Description |
+|------|-------|-----------|-------------|
+| clk | 1 | Input | Clock |
+| rst_n | 1 | Input | Active-low reset |
+| data_in | 16 | Input | Data input |
+| shift_amt | 4 | Input | Shift amount (0-15) |
+| shift_dir | 1 | Input | 0=left, 1=right |
+| data_out | 16 | Output | Shifted output |
 
-## Usage
+## Notes
 
-### Web UI
-
-**Description**: "16-bit barrel shifter with multi-directional shift and rotation"  
-**Target Frequency**: "500 MHz"
-
-### Expected Performance
-
-- **Delay**: ~4 levels of logic
-- **Area**: ~1000 µm² @ 7nm
-- **Power**: < 5 mW @ 500 MHz
-
-## Verification Example
-
-Test all shift amounts and directions:
-
-```python
-test_vectors = []
-for shift in range(16):
-    for direction in [0, 1, 2, 3]:
-        test_vectors.append({
-            'data_in': 0xACE1,
-            'shift_amount': shift,
-            'shift_dir': direction
-        })
-```
-
-Expected test coverage: 100% (pure combinational logic)
+2-stage pipelined sequential design. Testbench not yet included — good candidate for LLM-generated testbench via the pipeline.

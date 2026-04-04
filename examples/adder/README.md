@@ -1,75 +1,25 @@
-# 8-bit Adder Example
+# 8-bit Adder
 
-Simple 8-bit ripple carry adder with overflow detection, demonstrating XylonStudio's RTL generation capabilities.
+8-bit ripple carry adder with carry-in, carry-out, and signed overflow detection.
 
-## Features
+## Files
 
-- 8-bit addition with carry-in
-- Carry-out generation
-- Overflow detection for signed arithmetic
-- Clean, synthesizable Verilog
+| File | Description |
+|------|-------------|
+| `adder_8bit.v` | Verilog RTL source |
+| `tb_adder_8bit.cpp` | C++ Verilator testbench (25 tests, 100% line coverage) |
 
-## Usage with XylonStudio
-
-### 1. Using the Web UI
-
-Navigate to `http://localhost:3000/design` and enter:
-
-**Description**: "8-bit ripple carry adder with overflow detection"  
-**Target Frequency**: "100 MHz"
-
-### 2. Using the API
-
-```bash
-curl -X POST http://localhost:5000/api/design/generate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "description": "8-bit ripple carry adder with overflow detection",
-    "target_freq": "100 MHz"
-  }'
-```
-
-## Verification
-
-Use Verification Dragon to test:
-
-```bash
-curl -X POST http://localhost:5000/api/verification/verify \
-  -H "Content-Type: application/json" \
-  -d '{
-    "module_name": "adder_8bit",
-    "code": "<paste RTL code here>"
-  }'
-```
-
-## Expected Results
-
-- **Lines of Code**: ~30
-- **Quality Score**: 0.95+
-- **Lint Warnings**: 0
-- **Test Coverage**: 95%+
-
-## Circuit Details
-
-### Ports
+## Ports
 
 | Port | Width | Direction | Description |
 |------|-------|-----------|-------------|
-| a    | 8     | Input     | First operand |
-| b    | 8     | Input     | Second operand |
-| cin  | 1     | Input     | Carry-in |
-| sum  | 8     | Output    | Addition result |
-| cout | 1     | Output    | Carry-out |
-| overflow | 1 | Output    | Overflow flag (signed) |
+| a | 8 | Input | First operand |
+| b | 8 | Input | Second operand |
+| cin | 1 | Input | Carry-in |
+| sum | 8 | Output | Addition result |
+| cout | 1 | Output | Carry-out |
+| overflow | 1 | Output | Signed overflow flag |
 
-### Timing
+## Test Coverage
 
-Combinational logic only - no clock required.
-
-Critical path: Through all 8 bit positions (ripple carry).
-
-### Area Estimate
-
-- **Logic Gates**: ~50 (8 full adders + overflow detection)
-- **Target Technology**: Generic ASIC
-- **Estimated Area**: ~500 µm² @ 7nm
+Combinational logic, no clock. Tests: zero inputs, simple add, carry-in, unsigned overflow (255+1), max+max, signed overflow (127+1, 128+128), per-bit toggle coverage.

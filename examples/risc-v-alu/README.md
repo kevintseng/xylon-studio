@@ -1,6 +1,12 @@
-# RISC-V ALU Example
+# RISC-V ALU
 
-32-bit Arithmetic Logic Unit supporting RV32I base instruction set - demonstrates XylonStudio's capability to generate processor components.
+32-bit ALU supporting RV32I base instruction set.
+
+## Files
+
+| File | Description |
+|------|-------------|
+| `riscv_alu.v` | Verilog RTL source |
 
 ## Supported Operations
 
@@ -19,59 +25,15 @@
 
 ## Ports
 
-- **operand_a** [31:0]: First operand
-- **operand_b** [31:0]: Second operand
-- **alu_op** [3:0]: Operation select
-- **result** [31:0]: Operation result
-- **zero**: Result is zero flag
-- **negative**: Result is negative flag (MSB)
+| Port | Width | Direction | Description |
+|------|-------|-----------|-------------|
+| operand_a | 32 | Input | First operand |
+| operand_b | 32 | Input | Second operand |
+| alu_op | 4 | Input | Operation select |
+| result | 32 | Output | Operation result |
+| zero | 1 | Output | Result is zero flag |
+| negative | 1 | Output | Result is negative flag |
 
-## Usage
+## Notes
 
-### Design Dragon Prompt
-
-**Description**: "32-bit RISC-V ALU supporting RV32I base integer operations including ADD, SUB, logical operations, and shifts"
-
-**Target Frequency**: "2 GHz"
-
-### Verification
-
-Comprehensive testbench should verify:
-
-1. **Arithmetic**: ADD, SUB with various operands
-2. **Logical**: AND, OR, XOR truth tables
-3. **Shifts**: All shift amounts (0-31)
-4. **Comparisons**: SLT, SLTU edge cases
-5. **Flags**: zero and negative flags
-
-Expected test cases: 1000+  
-Expected coverage: 95%+
-
-## Performance Targets
-
-- **Critical Path**: ADD/SUB operation
-- **Target Frequency**: 2 GHz @ 7nm
-- **Area**: ~2000 µm²
-- **Power**: < 10 mW @ 2 GHz
-
-## Integration
-
-This ALU can be integrated into a full RISC-V processor:
-
-```verilog
-riscv_alu alu_inst (
-    .operand_a(rs1_data),
-    .operand_b(rs2_data),
-    .alu_op(alu_control),
-    .result(alu_result),
-    .zero(branch_zero),
-    .negative(branch_neg)
-);
-```
-
-## Next Steps
-
-1. Add pipeline registers for higher frequency
-2. Implement multiplication/division (RV32M)
-3. Add atomic operations (RV32A)
-4. Optimize critical paths with synthesis constraints
+Combinational logic. Testbench not yet included — good candidate for LLM-generated testbench via the pipeline.
