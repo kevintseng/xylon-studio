@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from agent.pipeline.models import StepStatus
+from agent.pipeline.models import FailureKind, StepStatus
 from agent.pipeline.steps.coverage import (
     _compute_coverage_score,
     _parse_coverage_metrics,
@@ -165,17 +165,39 @@ def test_extract_test_result_pass():
 def test_extract_test_result_fail():
     assert _extract_test_result("FAIL: assertion at line 10") is False
     assert _extract_test_result("result: FAIL") is False
+    assert _extract_test_result("PASS: 9 checks\nFAIL: 1 check") is False
 
 
-def test_extract_test_result_non_empty_output_defaults_to_pass():
-    # Non-empty output without PASS/FAIL markers defaults to True
-    # (caller validates via other means)
-    assert _extract_test_result("Simulation finished at time 1000") is True
+@pytest.mark.asyncio
+async def test_simulation_failure_has_verification_recovery_metadata(
+    mock_sandbox,
+    rtl_file,
+    tb_file,
+):
+    mock_sandbox.run_verilator_sim_string.return_value = {
+        "success": True,
+        "stdout": "FAIL: output mismatch\n",
+        "stderr": "",
+        "vcd_file": None,
+        "coverage_data": None,
+        "duration_seconds": 0.2,
+    }
+
+    result = await run_simulate_step(rtl_file, tb_file, mock_sandbox)
+
+    assert result.status == StepStatus.FAILED
+    assert result.failure_kind == FailureKind.VERIFICATION
+    assert result.recovery_code == "inspect_failing_check"
 
 
-def test_extract_test_result_empty_output_defaults_to_pass():
-    # Empty output = unknown, treated as pass per current convention
-    assert _extract_test_result("") is True
+def test_extract_test_result_non_empty_output_is_inconclusive():
+    """Arbitrary simulator output is not evidence that checks passed."""
+    assert _extract_test_result("Simulation finished at time 1000") is False
+
+
+def test_extract_test_result_empty_output_is_inconclusive():
+    """A zero-exit simulation with no self-check result must not pass."""
+    assert _extract_test_result("") is False
 
 
 # ── Coverage Step Tests ──
@@ -190,7 +212,7 @@ async def test_coverage_step_passes(mock_sandbox, rtl_file, tb_file):
         "vcd_file": None,
         "coverage_data": {
             "success": True,
-            "raw_report": "Total coverage (85/100) 85.00%",
+            "raw_report": "Coverage Summary:\n  toggle : 85.0% (85/100)",
             "summary": "",
         },
         "duration_seconds": 3.0,
@@ -199,9 +221,20 @@ async def test_coverage_step_passes(mock_sandbox, rtl_file, tb_file):
     step_result, report = await run_coverage_step(rtl_file, tb_file, mock_sandbox)
 
     assert step_result.status == StepStatus.PASSED
-    assert report is not None
-    assert report.line_coverage == pytest.approx(0.85)
-    assert report.score > 0
+    assert report.line_coverage is None
+    assert report.toggle_coverage == pytest.approx(0.85)
+    assert report.branch_coverage is None
+    assert report.score == pytest.approx(0.85)
+    assert report.metric_sources == {
+        "toggle_coverage": "verilator_summary",
+        "score": "computed_verilator_point_counts",
+    }
+    assert step_result.output["line_coverage"] is None
+    assert step_result.output["score"] == pytest.approx(0.85)
+    assert step_result.output["metric_sources"] == {
+        "toggle_coverage": "verilator_summary",
+        "score": "computed_verilator_point_counts",
+    }
 
 
 @pytest.mark.asyncio
@@ -218,36 +251,119 @@ async def test_coverage_step_sim_failure(mock_sandbox, rtl_file, tb_file):
     step_result, report = await run_coverage_step(rtl_file, tb_file, mock_sandbox)
 
     assert step_result.status == StepStatus.FAILED
-    # Coverage step returns empty CoverageReport (not None) on sim failure
-    assert report is not None
-    assert report.score == 0.0
+    assert report.score is None
+    assert report.line_coverage is None
+    assert report.metric_sources == {}
 
 
-def test_parse_coverage_metrics_total():
+@pytest.mark.asyncio
+async def test_coverage_step_marks_missing_evidence_inconclusive(
+    mock_sandbox,
+    rtl_file,
+    tb_file,
+):
+    mock_sandbox.run_verilator_sim_string.return_value = {
+        "success": True,
+        "stdout": "PASS\n",
+        "stderr": "",
+        "vcd_file": None,
+        "coverage_data": {
+            "success": False,
+            "raw_report": "",
+            "summary": "coverage.dat was not produced",
+        },
+        "duration_seconds": 0.2,
+    }
+
+    step, report = await run_coverage_step(rtl_file, tb_file, mock_sandbox)
+
+    assert report.score is None
+    assert step.failure_kind == FailureKind.INCONCLUSIVE
+    assert step.recovery_code == "collect_coverage_evidence"
+
+
+@pytest.mark.asyncio
+async def test_coverage_step_preserves_infrastructure_failure(
+    mock_sandbox,
+    rtl_file,
+    tb_file,
+):
+    mock_sandbox.run_verilator_sim_string.return_value = {
+        "success": True,
+        "stdout": "PASS\n",
+        "stderr": "",
+        "vcd_file": None,
+        "coverage_data": {
+            "success": False,
+            "raw_report": "",
+            "summary": "no such container: xylon-verilator",
+            "failure_kind": "infrastructure",
+        },
+        "duration_seconds": 0.2,
+    }
+
+    step, report = await run_coverage_step(rtl_file, tb_file, mock_sandbox)
+
+    assert report.score is None
+    assert step.failure_kind == FailureKind.INFRASTRUCTURE
+    assert step.recovery_code == "repair_toolchain"
+
+
+def test_parse_coverage_metrics_rejects_legacy_total_format():
     text = "Total coverage (85/100) 85.00%"
-    line, toggle, branch = _parse_coverage_metrics(text)
-    assert line == pytest.approx(0.85)
-    assert toggle == pytest.approx(0.85)
-    assert branch == pytest.approx(0.85)
+    report = _parse_coverage_metrics(text)
+
+    assert report.score is None
+    assert report.line_coverage is None
+    assert report.toggle_coverage is None
+    assert report.branch_coverage is None
+    assert report.metric_sources == {}
 
 
-def test_parse_coverage_metrics_from_annotations():
+def test_parse_coverage_metrics_verilator_5050_summary():
+    text = """
+Coverage Summary:
+  line      : 0.0% ( 0/ 0)
+  toggle    : 6.0% ( 3/50)
+  branch    : 0.0% ( 0/ 0)
+  expr      : 0.0% ( 0/ 0)
+  fsm_state : 0.0% ( 0/ 0)
+  fsm_arc   : 0.0% ( 0/ 0)
+"""
+    report = _parse_coverage_metrics(text)
+
+    assert report.line_coverage is None
+    assert report.toggle_coverage == pytest.approx(0.06)
+    assert report.branch_coverage is None
+    assert report.score == pytest.approx(0.06)
+    assert report.metric_sources == {
+        "toggle_coverage": "verilator_summary",
+        "score": "computed_verilator_point_counts",
+    }
+
+
+def test_parse_coverage_metrics_does_not_invent_line_coverage_from_annotations():
     text = """
 %000000 design.v:10 uncovered
 %000001 design.v:11 hit
 %000005 design.v:12 hit
 %000000 design.v:13 uncovered
 """
-    line, _, _ = _parse_coverage_metrics(text)
-    # 2 out of 4 annotated lines covered
-    assert line == pytest.approx(0.5)
+    report = _parse_coverage_metrics(text)
+
+    assert report.score is None
+    assert report.line_coverage is None
+    assert report.metric_sources == {}
 
 
 def test_parse_coverage_metrics_empty():
-    line, toggle, branch = _parse_coverage_metrics("no coverage info here")
-    assert line == 0.0
-    assert toggle == 0.0
-    assert branch == 0.0
+    report = _parse_coverage_metrics("no coverage info here")
+
+    assert report.score is None
+    assert report.line_coverage is None
+    assert report.toggle_coverage is None
+    assert report.branch_coverage is None
+    assert report.metric_sources == {}
 
 
 def test_compute_coverage_score_weighted():

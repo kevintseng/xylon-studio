@@ -1,0 +1,44 @@
+x-eda-service: &eda-service
+  image: ${XYLON_EDA_IMAGE:?Run through scripts/eda-runtime}
+  build:
+    context: .
+    dockerfile: runtime/Dockerfile
+    args:
+      BASE_IMAGE: ${BASE_IMAGE:?Run through scripts/eda-runtime}
+      VERILATOR_VERSION: ${VERILATOR_VERSION:?Run through scripts/eda-runtime}
+      VERILATOR_COMMIT: ${VERILATOR_COMMIT:?Run through scripts/eda-runtime}
+      YOSYS_VERSION: ${YOSYS_VERSION:?Run through scripts/eda-runtime}
+      YOSYS_COMMIT: ${YOSYS_COMMIT:?Run through scripts/eda-runtime}
+  command: ["sleep", "infinity"]
+  network_mode: none
+  read_only: true
+  tmpfs:
+    - /tmp:exec,mode=1777
+    - /results:exec,mode=1777
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 512
+  mem_limit: 4g
+  cpus: 2
+  restart: "no"
+  healthcheck:
+    test:
+      - CMD-SHELL
+      - >-
+        verilator --version | grep -F "Verilator ${VERILATOR_VERSION}" &&
+        yosys -V | grep -F "Yosys ${YOSYS_VERSION}"
+    interval: 10s
+    timeout: 5s
+    retries: 6
+    start_period: 10s
+
+services:
+  verilator:
+    <<: *eda-service
+    container_name: xylon-verilator
+
+  yosys:
+    <<: *eda-service
+    container_name: xylon-yosys

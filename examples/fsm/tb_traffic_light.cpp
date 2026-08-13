@@ -38,37 +38,36 @@ int main(int argc, char** argv) {
     dut = new Vtraffic_light;
 
     dut->clk = 0; dut->rst_n = 1; dut->emergency = 0;
+    dut->eval();
 
     // Reset -> RED state
     dut->rst_n = 0; tick();
     check("reset_red", 0, 1, 0, 0);
     dut->rst_n = 1;
 
-    // From debug trace:
-    //   T1-T8:   GREEN  (8 ticks)
-    //   T9-T11:  YELLOW (3 ticks)
-    //   T12-T21: RED    (10 ticks)
-    //   T22+:    GREEN  (repeat)
-
-    // GREEN phase: T1-T8
-    tick();
-    check("green_start", 1, 0, 0, 1);
-    tick_n(7);  // T2-T8
-    check("green_end", 1, 0, 0, 1);
-
-    // YELLOW phase: T9-T11
-    tick();  // T9
-    check("yellow_start", 2, 0, 1, 0);
-    tick_n(2);  // T10-T11
-    check("yellow_end", 2, 0, 1, 0);
-
-    // RED phase: T12-T21
-    tick();  // T12
-    check("red_start", 0, 1, 0, 0);
-    tick_n(9);  // T13-T21
+    // RED phase after reset: T1-T9 stay RED, T10 enters GREEN.
+    tick_n(9);
     check("red_end", 0, 1, 0, 0);
 
-    // Back to GREEN: T22
+    // GREEN phase: T10-T17
+    tick();  // T10
+    check("green_start", 1, 0, 0, 1);
+    tick_n(7);  // T11-T17
+    check("green_end", 1, 0, 0, 1);
+
+    // YELLOW phase: T18-T20
+    tick();  // T18
+    check("yellow_start", 2, 0, 1, 0);
+    tick_n(2);  // T19-T20
+    check("yellow_end", 2, 0, 1, 0);
+
+    // RED phase: T21-T30
+    tick();  // T21
+    check("red_start", 0, 1, 0, 0);
+    tick_n(9);  // T22-T30
+    check("second_red_end", 0, 1, 0, 0);
+
+    // Back to GREEN: T31
     tick();
     check("cycle2_green", 1, 0, 0, 1);
 

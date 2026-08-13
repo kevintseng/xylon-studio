@@ -1,8 +1,8 @@
 /**
  * 8-bit Ripple Carry Adder with Overflow Detection
  *
- * Example design used by the XylonStudio verification pipeline
- * Description: Simple 8-bit adder demonstrating basic RTL generation
+ * Intentionally failing adoption fixture for XylonStudio.
+ * The independent testbench must expose the marked carry-in defect.
  */
 
 module adder_8bit (
@@ -18,7 +18,8 @@ module adder_8bit (
     wire [8:0] full_sum;
 
     // Addition with carry
-    assign full_sum = {1'b0, a} + {1'b0, b} + {8'b0, cin};
+    // SEEDED BUG: carry-in is intentionally counted twice for the diagnosis task.
+    assign full_sum = {1'b0, a} + {1'b0, b} + {8'b0, cin} + {8'b0, cin};
 
     // Output assignments
     assign sum  = full_sum[7:0];

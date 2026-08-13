@@ -1,0 +1,584 @@
+"""Local application lifecycle contract tests."""
+
+from pathlib import Path
+import json
+import os
+import re
+import signal
+import shutil
+import socket
+import subprocess
+import sys
+import time
+from urllib.request import urlopen
+
+import agent.local_app as local_app
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_doctor_accepts_the_current_prebuilt_workspace_without_starting_services():
+    result = subprocess.run(
+        [sys.executable, "-m", "agent.local_app", "doctor"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "READY: local prerequisites are available" in result.stdout
+    assert "RESOURCE READY:" in result.stdout or "RESOURCE BLOCKED:" in result.stdout
+    assert "STOPPED: API http://127.0.0.1:5001" in result.stdout
+    assert "STOPPED: Web http://127.0.0.1:3000" in result.stdout
+
+
+def test_resource_preflight_allows_capacity_for_one_capped_local_run():
+    snapshot_type = getattr(local_app, "ResourceSnapshot", None)
+    evaluate = getattr(local_app, "evaluate_resource_preflight", None)
+    assert snapshot_type is not None and callable(evaluate)
+
+    snapshot = snapshot_type(
+        logical_cpus=12,
+        load_one_minute=8.0,
+        memory_free_percent=61,
+        disk_free_bytes=47 * 1024**3,
+    )
+
+    assert evaluate(snapshot) == []
+
+
+def test_resource_preflight_blocks_saturated_cpu_low_memory_and_low_disk():
+    snapshot_type = getattr(local_app, "ResourceSnapshot", None)
+    evaluate = getattr(local_app, "evaluate_resource_preflight", None)
+    assert snapshot_type is not None and callable(evaluate)
+
+    snapshot = snapshot_type(
+        logical_cpus=12,
+        load_one_minute=12.0,
+        memory_free_percent=19,
+        disk_free_bytes=9 * 1024**3,
+    )
+
+    assert evaluate(snapshot) == [
+        "CPU load 12.00 has reached 12 logical CPUs",
+        "memory free 19% is below the 20% safety floor",
+        "workspace disk free 9.0 GiB is below the 10.0 GiB safety floor",
+    ]
+
+
+def test_runtime_version_preflight_accepts_supported_python_and_node():
+    evaluate = getattr(local_app, "evaluate_runtime_version_preflight", None)
+    assert callable(evaluate)
+
+    assert evaluate("Python 3.14.6", "v24.15.0") == []
+
+
+def test_runtime_version_preflight_rejects_versions_below_supported_minimums():
+    evaluate = getattr(local_app, "evaluate_runtime_version_preflight", None)
+    assert callable(evaluate)
+
+    assert evaluate("Python 3.10.16", "v20.8.1") == [
+        "Python 3.10.16 is below the required 3.11.0",
+        "Node.js 20.8.1 is below the required 20.9.0",
+    ]
+
+
+def test_runtime_version_preflight_fails_closed_on_unrecognized_output():
+    evaluate = getattr(local_app, "evaluate_runtime_version_preflight", None)
+    assert callable(evaluate)
+
+    assert evaluate("unknown", "unavailable") == [
+        "could not determine the Python version",
+        "could not determine the Node.js version",
+    ]
+
+
+def _long_running_child(marker: str) -> subprocess.Popen[str]:
+    return subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)", marker],
+        start_new_session=True,
+        text=True,
+    )
+
+
+def _force_cleanup(child: subprocess.Popen[str]) -> None:
+    if child.poll() is None:
+        os.killpg(child.pid, signal.SIGKILL)
+        child.wait(timeout=2)
+
+
+def test_stop_terminates_the_owned_process_group():
+    process_type = getattr(local_app, "ManagedProcess", None)
+    terminate = getattr(local_app, "terminate_managed_process", None)
+    assert process_type is not None and callable(terminate)
+
+    child = _long_running_child("xylon-test-owned")
+    try:
+        record = process_type(
+            name="test",
+            pid=child.pid,
+            command_marker="xylon-test-owned",
+            log_path="test.log",
+        )
+
+        assert terminate(record, grace_seconds=0.2) == "stopped"
+        assert child.wait(timeout=2) == -signal.SIGTERM
+    finally:
+        _force_cleanup(child)
+
+
+def test_stop_preserves_a_reused_pid_when_the_command_identity_does_not_match():
+    process_type = getattr(local_app, "ManagedProcess", None)
+    terminate = getattr(local_app, "terminate_managed_process", None)
+    assert process_type is not None and callable(terminate)
+
+    child = _long_running_child("xylon-test-unrelated")
+    try:
+        record = process_type(
+            name="api",
+            pid=child.pid,
+            command_marker="agent.api.main:app",
+            log_path="api.log",
+        )
+
+        assert terminate(record, grace_seconds=0.2) == "identity_mismatch"
+        assert child.poll() is None
+    finally:
+        _force_cleanup(child)
+
+
+def test_process_identity_lookup_fails_closed_when_ps_is_not_permitted(monkeypatch):
+    def deny_ps(*_args, **_kwargs):
+        raise PermissionError("ps is blocked by the execution environment")
+
+    monkeypatch.setattr(local_app.subprocess, "run", deny_ps)
+
+    assert local_app._process_command(12345) is None
+
+
+def test_stop_preserves_a_live_process_when_identity_cannot_be_read(monkeypatch):
+    process_type = getattr(local_app, "ManagedProcess", None)
+    terminate = getattr(local_app, "terminate_managed_process", None)
+    assert process_type is not None and callable(terminate)
+
+    child = _long_running_child("xylon-test-identity-unavailable")
+    try:
+        monkeypatch.setattr(local_app, "_process_command", lambda _pid: None)
+        record = process_type(
+            name="api",
+            pid=child.pid,
+            command_marker="xylon-test-identity-unavailable",
+            log_path="api.log",
+        )
+
+        assert terminate(record, grace_seconds=0.2) == "identity_unavailable"
+        assert child.poll() is None
+    finally:
+        _force_cleanup(child)
+
+
+def _write_state(state_dir: Path, *, api_pid: int, api_marker: str, web_pid: int) -> Path:
+    state_dir.mkdir(parents=True)
+    state_path = state_dir / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "runtime_owned": False,
+                "api": {
+                    "name": "api",
+                    "pid": api_pid,
+                    "command_marker": api_marker,
+                    "log_path": "api.log",
+                },
+                "web": {
+                    "name": "web",
+                    "pid": web_pid,
+                    "command_marker": "xylon-test-web",
+                    "log_path": "web.log",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return state_path
+
+
+def test_stop_consumes_owned_state_and_removes_it_after_both_services_exit(tmp_path: Path):
+    app_type = getattr(local_app, "LocalApplication", None)
+    assert app_type is not None
+
+    api = _long_running_child("xylon-test-api")
+    web = _long_running_child("xylon-test-web")
+    state_dir = tmp_path / "local"
+    state_path = _write_state(
+        state_dir,
+        api_pid=api.pid,
+        api_marker="xylon-test-api",
+        web_pid=web.pid,
+    )
+    try:
+        app = app_type(repo_root=REPO_ROOT, state_dir=state_dir)
+
+        assert app.stop(grace_seconds=0.2) == 0
+        assert api.wait(timeout=2) == -signal.SIGTERM
+        assert web.wait(timeout=2) == -signal.SIGTERM
+        assert not state_path.exists()
+    finally:
+        _force_cleanup(api)
+        _force_cleanup(web)
+
+
+def test_stop_keeps_state_when_a_saved_pid_belongs_to_an_unrelated_process(tmp_path: Path):
+    app_type = getattr(local_app, "LocalApplication", None)
+    assert app_type is not None
+
+    api = _long_running_child("xylon-test-unrelated")
+    web = _long_running_child("xylon-test-web")
+    state_dir = tmp_path / "local"
+    state_path = _write_state(
+        state_dir,
+        api_pid=api.pid,
+        api_marker="agent.api.main:app",
+        web_pid=web.pid,
+    )
+    try:
+        app = app_type(repo_root=REPO_ROOT, state_dir=state_dir)
+
+        assert app.stop(grace_seconds=0.2) == 1
+        assert api.poll() is None
+        assert web.wait(timeout=2) == -signal.SIGTERM
+        assert state_path.exists()
+    finally:
+        _force_cleanup(api)
+        _force_cleanup(web)
+
+
+class _TestRuntime:
+    def __init__(self) -> None:
+        self.running = False
+
+    def is_running(self) -> bool:
+        return self.running
+
+    def run(self, action: str, *, timeout: float) -> bool:
+        del timeout
+        if action in {"up", "verify"}:
+            self.running = True
+            return True
+        if action == "down":
+            self.running = False
+            return True
+        return False
+
+
+def _safe_resource_probe() -> local_app.ResourceSnapshot:
+    return local_app.ResourceSnapshot(
+        logical_cpus=12,
+        load_one_minute=4.0,
+        memory_free_percent=60,
+        disk_free_bytes=40 * 1024**3,
+    )
+
+
+def _unused_port() -> int:
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
+def _http_service_command(port: int, marker: str, *, api: bool) -> list[str]:
+    response = (
+        b'{"status":"healthy","service":"xylonstudio-api","version":"1.0.0"}'
+        if api
+        else b"XylonStudio"
+    )
+    code = (
+        "from http.server import BaseHTTPRequestHandler,HTTPServer;"
+        f"body={response!r};"
+        "handler=type('Handler',(BaseHTTPRequestHandler,),{"
+        "'do_GET':lambda self:(self.send_response(200),self.end_headers(),self.wfile.write(body)),"
+        "'log_message':lambda *args:None});"
+        "HTTPServer(('127.0.0.1',int(__import__('sys').argv[1])),handler).serve_forever()"
+    )
+    return [sys.executable, "-u", "-c", code, str(port), marker]
+
+
+def test_start_status_stop_manages_real_local_http_processes_and_owned_runtime(tmp_path: Path):
+    app_type = getattr(local_app, "LocalApplication", None)
+    assert app_type is not None
+
+    api_port = _unused_port()
+    web_port = _unused_port()
+    runtime = _TestRuntime()
+    app = app_type(
+        repo_root=REPO_ROOT,
+        state_dir=tmp_path / "local",
+        api_port=api_port,
+        web_port=web_port,
+        api_command=_http_service_command(api_port, "xylon-test-api", api=True),
+        web_command=_http_service_command(web_port, "xylon-test-web", api=False),
+        api_command_marker="xylon-test-api",
+        web_command_marker="xylon-test-web",
+        runtime=runtime,
+        resource_probe=_safe_resource_probe,
+    )
+    app.state_dir.mkdir(parents=True)
+    (app.state_dir / "api.log").write_text("stale-api-log\n", encoding="utf-8")
+    (app.state_dir / "web.log").write_text("stale-web-log\n", encoding="utf-8")
+
+    try:
+        assert app.start(health_timeout=2) == 0
+        first_state = json.loads(app.state_path.read_text(encoding="utf-8"))
+        assert app.start(health_timeout=2) == 0
+        assert json.loads(app.state_path.read_text(encoding="utf-8")) == first_state
+        assert "stale-api-log" not in (app.state_dir / "api.log").read_text(encoding="utf-8")
+        assert "stale-web-log" not in (app.state_dir / "web.log").read_text(encoding="utf-8")
+        assert json.loads(urlopen(f"http://127.0.0.1:{api_port}/health").read())["status"] == "healthy"
+        assert urlopen(f"http://127.0.0.1:{web_port}/").read() == b"XylonStudio"
+        assert app.status() == 0
+        assert app.stop(grace_seconds=0.2) == 0
+        assert not (tmp_path / "local" / "state.json").exists()
+        assert runtime.running is False
+    finally:
+        app.stop(grace_seconds=0.1)
+
+
+def test_failed_web_start_rolls_back_the_api_runtime_and_partial_state(tmp_path: Path):
+    app_type = getattr(local_app, "LocalApplication", None)
+    assert app_type is not None
+
+    api_port = _unused_port()
+    web_port = _unused_port()
+    runtime = _TestRuntime()
+    app = app_type(
+        repo_root=REPO_ROOT,
+        state_dir=tmp_path / "local",
+        api_port=api_port,
+        web_port=web_port,
+        api_command=_http_service_command(api_port, "xylon-test-api", api=True),
+        web_command=[sys.executable, "-c", "raise SystemExit(7)", "xylon-test-web"],
+        api_command_marker="xylon-test-api",
+        web_command_marker="xylon-test-web",
+        runtime=runtime,
+        resource_probe=_safe_resource_probe,
+    )
+
+    assert app.start(health_timeout=0.5) == 1
+    assert local_app._port_is_open(api_port) is False
+    assert local_app._port_is_open(web_port) is False
+    assert not (tmp_path / "local" / "state.json").exists()
+    assert runtime.running is False
+
+
+def test_start_blocks_before_runtime_or_services_when_host_resources_are_unsafe(tmp_path: Path):
+    api_port = _unused_port()
+    web_port = _unused_port()
+    runtime = _TestRuntime()
+    unsafe = local_app.ResourceSnapshot(
+        logical_cpus=12,
+        load_one_minute=12.5,
+        memory_free_percent=15,
+        disk_free_bytes=8 * 1024**3,
+    )
+    app = local_app.LocalApplication(
+        repo_root=REPO_ROOT,
+        state_dir=tmp_path / "local",
+        api_port=api_port,
+        web_port=web_port,
+        api_command=_http_service_command(api_port, "xylon-test-api", api=True),
+        web_command=_http_service_command(web_port, "xylon-test-web", api=False),
+        api_command_marker="xylon-test-api",
+        web_command_marker="xylon-test-web",
+        runtime=runtime,
+        resource_probe=lambda: unsafe,
+    )
+
+    assert app.start(health_timeout=0.5) == 1
+    assert runtime.running is False
+    assert local_app._port_is_open(api_port) is False
+    assert local_app._port_is_open(web_port) is False
+    assert app.state_path.exists() is False
+
+
+def test_web_health_requires_starting_the_process_from_its_configured_workspace(tmp_path: Path):
+    api_port = _unused_port()
+    web_port = _unused_port()
+    web_workspace = tmp_path / "web-workspace"
+    web_workspace.mkdir()
+    expected_workspace = str(web_workspace)
+    web_command = _http_service_command(web_port, "xylon-test-web", api=False)
+    web_command[3] = (
+        f"from pathlib import Path; assert str(Path.cwd()) == {expected_workspace!r};"
+        + web_command[3]
+    )
+    runtime = _TestRuntime()
+
+    app = local_app.LocalApplication(
+        repo_root=REPO_ROOT,
+        state_dir=tmp_path / "local",
+        api_port=api_port,
+        web_port=web_port,
+        api_command=_http_service_command(api_port, "xylon-test-api", api=True),
+        web_command=web_command,
+        api_command_marker="xylon-test-api",
+        web_command_marker="xylon-test-web",
+        web_cwd=web_workspace,
+        runtime=runtime,
+        resource_probe=_safe_resource_probe,
+    )
+
+    try:
+        assert app.start(health_timeout=2) == 0
+    finally:
+        app.stop(grace_seconds=0.1)
+
+
+def test_status_and_stop_recognize_next_server_after_it_rewrites_its_process_title(tmp_path: Path):
+    node = shutil.which("node")
+    assert node is not None
+    api_port = _unused_port()
+    web_port = _unused_port()
+    runtime = _TestRuntime()
+    web_code = (
+        "const http=require('http');process.title='next-server';"
+        f"http.createServer((req,res)=>res.end('XylonStudio')).listen({web_port},'127.0.0.1')"
+    )
+    app = local_app.LocalApplication(
+        repo_root=REPO_ROOT,
+        state_dir=tmp_path / "local",
+        api_port=api_port,
+        web_port=web_port,
+        api_command=_http_service_command(api_port, "xylon-test-api", api=True),
+        web_command=[node, "-e", web_code],
+        api_command_marker="xylon-test-api",
+        runtime=runtime,
+        resource_probe=_safe_resource_probe,
+    )
+
+    try:
+        assert app.start(health_timeout=2) == 0
+        assert app.status() == 0
+        assert app.stop(grace_seconds=0.2) == 0
+    finally:
+        if app.state_path.exists():
+            payload = json.loads(app.state_path.read_text(encoding="utf-8"))
+            for key in ("api", "web"):
+                try:
+                    os.killpg(int(payload[key]["pid"]), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+
+def test_logs_prints_a_bounded_tail_and_the_full_log_location(tmp_path: Path, capsys):
+    app = local_app.LocalApplication(repo_root=REPO_ROOT, state_dir=tmp_path / "local")
+    app.state_dir.mkdir(parents=True)
+    (app.state_dir / "api.log").write_text("api-1\napi-2\napi-3\n", encoding="utf-8")
+    (app.state_dir / "web.log").write_text("web-1\nweb-2\nweb-3\n", encoding="utf-8")
+
+    assert app.logs(tail=2) == 0
+    output = capsys.readouterr().out
+    assert "api-1" not in output and "web-1" not in output
+    assert "api-2\napi-3" in output
+    assert "web-2\nweb-3" in output
+    assert str(app.state_dir / "api.log") in output
+
+
+def test_scripts_xylon_is_the_supported_doctor_entry_point():
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "xylon"), "doctor"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "READY: local prerequisites are available" in result.stdout
+
+
+def test_prepare_standalone_copies_public_and_static_assets_into_the_runtime(tmp_path: Path):
+    node = shutil.which("node")
+    assert node is not None
+    web_root = tmp_path / "web"
+    (web_root / "public").mkdir(parents=True)
+    (web_root / ".next" / "static" / "chunks").mkdir(parents=True)
+    (web_root / ".next" / "standalone").mkdir(parents=True)
+    (web_root / "public" / "asset.txt").write_text("public-asset", encoding="utf-8")
+    (web_root / ".next" / "static" / "chunks" / "app.js").write_text(
+        "static-asset", encoding="utf-8"
+    )
+
+    result = subprocess.run(
+        [node, str(REPO_ROOT / "web" / "scripts" / "prepare-standalone.mjs"), str(web_root)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (web_root / ".next" / "standalone" / "public" / "asset.txt").read_text() == "public-asset"
+    assert (
+        web_root / ".next" / "standalone" / ".next" / "static" / "chunks" / "app.js"
+    ).read_text() == "static-asset"
+
+
+def test_npm_start_uses_the_standalone_runtime_and_serves_its_static_assets():
+    node = shutil.which("node")
+    npm = shutil.which("npm")
+    assert node is not None and npm is not None
+    web_root = REPO_ROOT / "web"
+    prepare = subprocess.run(
+        [node, str(web_root / "scripts" / "prepare-standalone.mjs"), str(web_root)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert prepare.returncode == 0, prepare.stderr
+
+    port = _unused_port()
+    environment = os.environ.copy()
+    environment.update({"HOSTNAME": "127.0.0.1", "PORT": str(port)})
+    child = subprocess.Popen(
+        [npm, "start"],
+        cwd=web_root,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        text=True,
+    )
+    page = b""
+    output = ""
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if child.poll() is not None:
+                break
+            try:
+                page = urlopen(f"http://127.0.0.1:{port}/pipeline", timeout=0.2).read()
+                break
+            except OSError:
+                time.sleep(0.05)
+        assert page, "npm start did not honor HOSTNAME/PORT or become healthy"
+
+        asset_match = re.search(rb'src="(/_next/static/[^\"]+\.js)"', page)
+        assert asset_match is not None
+        asset = urlopen(
+            f"http://127.0.0.1:{port}{asset_match.group(1).decode()}", timeout=1
+        ).read()
+        assert len(asset) > 100
+    finally:
+        if child.poll() is None:
+            os.killpg(child.pid, signal.SIGTERM)
+        try:
+            output = child.communicate(timeout=3)[0]
+        except subprocess.TimeoutExpired:
+            os.killpg(child.pid, signal.SIGKILL)
+            output = child.communicate(timeout=3)[0]
+
+    assert 'does not work with "output: standalone"' not in output

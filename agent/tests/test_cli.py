@@ -2,11 +2,23 @@
 
 import subprocess
 import sys
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from agent import cli
+from agent.pipeline.artifacts import RerunRequest
+from agent.pipeline.models import (
+    ArtifactBundle,
+    CoverageReport,
+    PipelineConfig,
+    PipelineOutcome,
+    PipelineResult,
+    RunMode,
+    StepResult,
+    StepStatus,
+)
 
 # ── Argparse tests (no mocking needed) ──
 
@@ -21,19 +33,21 @@ def test_cli_help_exits_zero():
     assert result.returncode == 0
     assert "XylonStudio" in result.stdout
     assert "run" in result.stdout
+    assert "rerun" in result.stdout
 
 
 def test_cli_run_help_shows_args():
-    """`xylon run --help` shows all documented flags."""
+    """`xylon run --help` exposes only the supported verification contract."""
     result = subprocess.run(
         [sys.executable, "-m", "agent.cli", "run", "--help"],
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0
-    for flag in ["--testbench", "--coverage-target", "--max-iterations",
-                 "--synthesis", "--llm", "--model", "--timeout"]:
+    for flag in ["--testbench", "--coverage-target", "--synthesis", "--timeout"]:
         assert flag in result.stdout
+    for removed_flag in ["--max-iterations", "--llm", "--llm-endpoint", "--model"]:
+        assert removed_flag not in result.stdout
 
 
 def test_cli_no_command_exits_nonzero():
@@ -76,8 +90,8 @@ def test_cli_missing_testbench_file_exits_1(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cli_config_assembly_phase_a(tmp_path):
-    """Phase A (no LLM): config has synthesis_enabled from --synthesis flag."""
+async def test_cli_config_assembly_provided_testbench(tmp_path):
+    """Provided-testbench mode carries the requested synthesis setting."""
     rtl = tmp_path / "design.v"
     rtl.write_text("module m; endmodule\n")
     tb = tmp_path / "tb.cpp"
@@ -89,23 +103,22 @@ async def test_cli_config_assembly_phase_a(tmp_path):
         captured_config["config"] = kwargs["config"]
         captured_config["rtl_code"] = kwargs["rtl_code"]
         captured_config["testbench_code"] = kwargs["testbench_code"]
-        result = AsyncMock()
-        result.success = True
-        result.iterations_used = 1
-        result.final_coverage = None
-        return result
+        return PipelineResult(
+            pipeline_id="run-provided",
+            steps=[],
+            final_coverage=None,
+            success=True,
+            mode=RunMode.PROVIDED_TESTBENCH,
+            outcome=PipelineOutcome.VERIFIED,
+        )
 
     args = type("Args", (), {
         "command": "run",
         "rtl_file": str(rtl),
         "testbench": str(tb),
         "coverage_target": 0.75,
-        "max_iterations": 2,
         "synthesis": True,
-        "llm": None,
-        "llm_endpoint": "http://localhost:11434",
-        "model": "qwen2.5-coder:32b",
-        "timeout": 300,
+        "timeout": 45,
     })()
 
     with patch("agent.cli.run_pipeline", side_effect=fake_run_pipeline):
@@ -116,55 +129,143 @@ async def test_cli_config_assembly_phase_a(tmp_path):
     cfg = captured_config["config"]
     assert cfg.synthesis_enabled is True
     assert cfg.coverage_target == 0.75
-    assert cfg.max_iterations == 2
-    assert cfg.generate_testbench is False  # no LLM
-    assert cfg.generate_test_plan is False
-    assert cfg.llm_provider is None
+    assert cfg.simulation_timeout == 45
     assert captured_config["testbench_code"] == "int main() { return 0; }\n"
 
-
 @pytest.mark.asyncio
-async def test_cli_config_assembly_phase_b(tmp_path):
-    """Phase B (--llm set): config has llm_provider and generate flags."""
+async def test_cli_renders_unavailable_coverage_without_coercing_to_zero(
+    tmp_path,
+    capsys,
+):
+    """Aggregate coverage must not become fabricated type-specific percentages."""
     rtl = tmp_path / "design.v"
     rtl.write_text("module m; endmodule\n")
 
-    captured = {}
-
     async def fake_run_pipeline(**kwargs):
-        captured["config"] = kwargs["config"]
-        result = AsyncMock()
-        result.success = False
-        result.iterations_used = 0
-        result.final_coverage = None
-        return result
+        return PipelineResult(
+            pipeline_id="run-inconclusive",
+            steps=[
+                StepResult(
+                    "coverage",
+                    StepStatus.FAILED,
+                    0.1,
+                    failure_kind=None,
+                    recovery_code="collect_coverage_evidence",
+                )
+            ],
+            final_coverage=CoverageReport(
+                line_coverage=None,
+                toggle_coverage=None,
+                branch_coverage=None,
+                score=0.85,
+                metric_sources={
+                    "score": "computed_verilator_point_counts",
+                },
+            ),
+            success=False,
+            mode=RunMode.LINT_ONLY,
+            outcome=PipelineOutcome.INCONCLUSIVE,
+            artifacts=ArtifactBundle(
+                run_directory="run-inconclusive",
+                manifest_path="manifest.json",
+                checksums_path="checksums.sha256",
+                files=[],
+                rerun_argv=[
+                    "agent/venv/bin/python", "-m", "agent.cli", "rerun", "manifest.json"
+                ],
+            ),
+        )
 
     args = type("Args", (), {
         "command": "run",
         "rtl_file": str(rtl),
         "testbench": None,
         "coverage_target": 0.80,
-        "max_iterations": 3,
         "synthesis": False,
-        "llm": "ollama",
-        "llm_endpoint": "http://localhost:11434",
-        "model": "qwen2.5-coder:7b",
         "timeout": 120,
     })()
 
-    # Mock create_llm_provider so we don't actually hit Ollama
-    with patch("agent.core.llm_provider.create_llm_provider"), \
-         patch("agent.cli.run_pipeline", side_effect=fake_run_pipeline):
+    with patch("agent.cli.run_pipeline", side_effect=fake_run_pipeline):
         with pytest.raises(SystemExit) as exc:
             await cli.run_command(args)
 
-    assert exc.value.code == 1  # result.success = False
-    cfg = captured["config"]
-    assert cfg.generate_testbench is True
-    assert cfg.generate_test_plan is True
-    assert cfg.llm_provider == {
-        "type": "ollama",
-        "endpoint": "http://localhost:11434",
-        "model": "qwen2.5-coder:7b",
-        "timeout": 120,
-    }
+    assert exc.value.code == 1
+    output = capsys.readouterr().out
+    assert "line=Unavailable" in output
+    assert "toggle=Unavailable" in output
+    assert "branch=Unavailable" in output
+    assert "score=85%" in output
+    assert "outcome: inconclusive" in output
+    assert "next action: collect_coverage_evidence" in output
+    assert "run-inconclusive/manifest.json" in output
+    assert "Phase A" not in output
+    assert "FAILED" not in output
+
+
+@pytest.mark.asyncio
+async def test_cli_rerun_succeeds_when_terminal_outcome_is_reproduced(capsys):
+    replay = RerunRequest(
+        rtl_code="module broken; endmodule\n",
+        testbench_code='int main() { puts("FAIL"); }\n',
+        config=PipelineConfig(),
+        expected_outcome=PipelineOutcome.VERIFICATION_FAILED,
+        source_pipeline_id="source-run",
+    )
+    reproduced = PipelineResult(
+        pipeline_id="replay-run",
+        steps=[],
+        final_coverage=None,
+        success=False,
+        mode=RunMode.PROVIDED_TESTBENCH,
+        outcome=PipelineOutcome.VERIFICATION_FAILED,
+    )
+
+    with patch("agent.cli.load_rerun_manifest", return_value=replay), patch(
+        "agent.cli.run_pipeline",
+        new=AsyncMock(return_value=reproduced),
+    ) as run_mock:
+        with pytest.raises(SystemExit) as exc:
+            await cli.rerun_command(SimpleNamespace(manifest="manifest.json"))
+
+    assert exc.value.code == 0
+    run_mock.assert_awaited_once_with(
+        rtl_code=replay.rtl_code,
+        testbench_code=replay.testbench_code,
+        config=replay.config,
+    )
+    output = capsys.readouterr().out
+    assert "REPRODUCED" in output
+    assert "verification_failed" in output
+    assert "source-run" in output
+
+
+@pytest.mark.asyncio
+async def test_cli_rerun_fails_when_terminal_outcome_drifts(capsys):
+    replay = RerunRequest(
+        rtl_code="module m; endmodule\n",
+        testbench_code="PASS\n",
+        config=PipelineConfig(),
+        expected_outcome=PipelineOutcome.VERIFIED,
+        source_pipeline_id="source-run",
+    )
+    drifted = PipelineResult(
+        pipeline_id="replay-run",
+        steps=[],
+        final_coverage=None,
+        success=False,
+        mode=RunMode.PROVIDED_TESTBENCH,
+        outcome=PipelineOutcome.INFRASTRUCTURE_ERROR,
+    )
+
+    with patch("agent.cli.load_rerun_manifest", return_value=replay), patch(
+        "agent.cli.run_pipeline",
+        new=AsyncMock(return_value=drifted),
+    ):
+        with pytest.raises(SystemExit) as exc:
+            await cli.rerun_command(SimpleNamespace(manifest="manifest.json"))
+
+    assert exc.value.code == 1
+    output = capsys.readouterr().out
+    assert "DRIFTED" in output
+    assert "expected=verified" in output
+    assert "actual=infrastructure_error" in output
