@@ -1,15 +1,12 @@
 import type { Metadata } from 'next'
-import { Inter } from 'next/font/google'
 import './globals.css'
 import { ConsoleInit } from '@/components/console-init'
 import { BugReportButton } from '@/components/bug-report'
 import { ClientShell } from '@/components/client-shell'
 
-const inter = Inter({ subsets: ['latin'] })
-
 export const metadata: Metadata = {
-  title: 'XylonStudio - AI Chip Design Platform',
-  description: 'AI-driven chip design automation platform',
+  title: 'XylonStudio - Reproducible RTL Verification',
+  description: 'Local Verilator and Yosys verification with truthful outcomes and reproducible evidence.',
 }
 
 export default function RootLayout({
@@ -19,7 +16,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="dark">
-      <body className={inter.className}>
+      <body>
         <ConsoleInit />
         <ClientShell footer={<BugReportButton />}>
           {children}
