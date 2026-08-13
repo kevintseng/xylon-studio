@@ -1,45 +1,39 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useMemo } from 'react'
 import { useI18n } from '@/lib/i18n'
+import {
+  requestPipelineCancellation,
+  resolveLocalApiUrl,
+} from '@/lib/pipeline-client'
+import {
+  DEFAULT_PIPELINE_SCENARIO_KEY,
+  PIPELINE_SCENARIOS,
+  getPipelineScenario,
+  type PipelineScenario,
+} from '@/lib/pipeline-scenarios'
+import {
+  AGENT_WORKFLOW_STAGES,
+  buildPipelineFlow,
+  getFirstFailingSelfCheck,
+  getOutcomePresentation,
+  getPrimaryRecoveryCode,
+  getRecoveryPresentation,
+  type PipelineResult,
+  type AgentWorkflowBoundary,
+  type StepState,
+  type StepStatus,
+} from '@/lib/pipeline-contract'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
-
-type StepStatus = 'pending' | 'running' | 'passed' | 'failed' | 'error' | 'skipped'
-
-interface StepState {
-  step_name: string
-  status: StepStatus
-  duration_seconds?: number
-  output?: Record<string, unknown>
-  errors?: string[]
-  warnings?: string[]
-}
-
-interface CoverageResult {
-  line_coverage: number
-  toggle_coverage: number
-  branch_coverage: number
-  score: number
-}
-
-interface PipelineResult {
-  pipeline_id: string
-  success: boolean
-  total_duration_seconds: number
-  iterations_used: number
-  steps: StepState[]
-  final_coverage?: CoverageResult
-}
+const API_URL = resolveLocalApiUrl(process.env.NEXT_PUBLIC_API_URL)
 
 const PIPELINE_STEP_ORDER = [
+  'runtime',
   'lint',
-  'test_plan',
-  'testbench_gen',
   'simulate',
   'coverage',
-  'debug',
   'synthesis',
+  'artifacts',
 ]
 
 const STATUS_STYLES: Record<StepStatus, { bg: string; border: string; text: string; icon: string }> = {
@@ -51,109 +45,52 @@ const STATUS_STYLES: Record<StepStatus, { bg: string; border: string; text: stri
   skipped: { bg: 'bg-slate-800/30', border: 'border-slate-700/50', text: 'text-slate-600', icon: '' },
 }
 
-const EXAMPLES: Record<string, { label: string; code: string }> = {
-  adder: {
-    label: '8-bit Adder',
-    code: `module adder_8bit (
-  input  [7:0] a,
-  input  [7:0] b,
-  input        cin,
-  output [7:0] sum,
-  output       cout,
-  output       overflow
-);
-  wire [8:0] full_sum;
-  assign full_sum = {1'b0, a} + {1'b0, b} + {8'b0, cin};
-  assign sum  = full_sum[7:0];
-  assign cout = full_sum[8];
-  assign overflow = (a[7] == b[7]) && (sum[7] != a[7]);
-endmodule`,
+const OUTCOME_STYLES = {
+  positive: {
+    panel: 'border-emerald-500/50 bg-emerald-500/5',
+    badge: 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300',
   },
-  counter: {
-    label: '8-bit Counter',
-    code: `module counter_8bit (
-  input        clk,
-  input        rst_n,
-  input        enable,
-  input        up_down,
-  input        load,
-  input  [7:0] data_in,
-  output [7:0] count,
-  output       zero,
-  output       max
-);
-  reg [7:0] count_reg;
-  always @(posedge clk) begin
-    if (!rst_n)          count_reg <= 8'b0;
-    else if (load)       count_reg <= data_in;
-    else if (enable) begin
-      if (up_down) count_reg <= count_reg + 8'd1;
-      else         count_reg <= count_reg - 8'd1;
-    end
-  end
-  assign count = count_reg;
-  assign zero  = (count_reg == 8'b0);
-  assign max   = (count_reg == 8'hFF);
-endmodule`,
+  warning: {
+    panel: 'border-amber-500/50 bg-amber-500/5',
+    badge: 'border-amber-500/50 bg-amber-500/10 text-amber-300',
   },
-  fsm: {
-    label: 'Traffic Light FSM',
-    code: `module traffic_light (
-  input        clk,
-  input        rst_n,
-  input        emergency,
-  output [2:0] light,
-  output [1:0] state_out
-);
-  localparam [1:0] S_RED = 2'b00, S_GREEN = 2'b01, S_YELLOW = 2'b10;
-  localparam RED_TIME = 8'd10, GREEN_TIME = 8'd8, YELLOW_TIME = 8'd3;
-  reg [1:0] state, next_state;
-  reg [7:0] timer;
-  always @(posedge clk) begin
-    if (!rst_n) begin state <= S_RED; timer <= RED_TIME - 8'd1; end
-    else if (emergency) begin state <= S_RED; timer <= RED_TIME - 8'd1; end
-    else if (timer == 8'd0) begin
-      state <= next_state;
-      case (next_state)
-        S_RED:    timer <= RED_TIME - 8'd1;
-        S_GREEN:  timer <= GREEN_TIME - 8'd1;
-        S_YELLOW: timer <= YELLOW_TIME - 8'd1;
-        default:  timer <= RED_TIME - 8'd1;
-      endcase
-    end else timer <= timer - 8'd1;
-  end
-  always @(*) begin
-    case (state)
-      S_RED:    next_state = S_GREEN;
-      S_GREEN:  next_state = S_YELLOW;
-      S_YELLOW: next_state = S_RED;
-      default:  next_state = S_RED;
-    endcase
-  end
-  assign light[2] = (state == S_RED);
-  assign light[1] = (state == S_YELLOW);
-  assign light[0] = (state == S_GREEN);
-  assign state_out = state;
-endmodule`,
+  negative: {
+    panel: 'border-red-500/50 bg-red-500/5',
+    badge: 'border-red-500/50 bg-red-500/10 text-red-300',
+  },
+  neutral: {
+    panel: 'border-slate-600 bg-slate-800/40',
+    badge: 'border-slate-600 bg-slate-700/50 text-slate-200',
   },
 }
+
+const AGENT_BOUNDARY_STYLES: Record<AgentWorkflowBoundary, string> = {
+  human: 'border-violet-500/40 bg-violet-500/10 text-violet-200',
+  orchestrator: 'border-blue-500/40 bg-blue-500/10 text-blue-200',
+  tool: 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200',
+  decision: 'border-amber-500/40 bg-amber-500/10 text-amber-200',
+}
+
+const DEFAULT_SCENARIO = getPipelineScenario(DEFAULT_PIPELINE_SCENARIO_KEY)
 
 export default function PipelinePage() {
   const { t } = useI18n()
 
   // Form state
-  const [rtlCode, setRtlCode] = useState(EXAMPLES.adder.code)
-  const [testbenchCode, setTestbenchCode] = useState('')
+  const [rtlCode, setRtlCode] = useState(DEFAULT_SCENARIO.rtlCode)
+  const [testbenchCode, setTestbenchCode] = useState(DEFAULT_SCENARIO.testbenchCode)
+  const [selectedScenarioKey, setSelectedScenarioKey] = useState<PipelineScenario['key'] | null>(DEFAULT_SCENARIO.key)
   const [coverageTarget, setCoverageTarget] = useState(0.8)
+  const [submittedCoverageTarget, setSubmittedCoverageTarget] = useState(0.8)
   const [lintEnabled, setLintEnabled] = useState(true)
   const [synthesisEnabled, setSynthesisEnabled] = useState(false)
   const [simulationTimeout, setSimulationTimeout] = useState(300)
-  const [llmProvider, setLlmProvider] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [educationMode, setEducationMode] = useState(true)
 
   // Pipeline state
   const [running, setRunning] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
   const [steps, setSteps] = useState<StepState[]>([])
   const [result, setResult] = useState<PipelineResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -161,13 +98,48 @@ export default function PipelinePage() {
   const [activeStep, setActiveStep] = useState<string | null>(null)
   const [stepElapsed, setStepElapsed] = useState(0)
   const [expandedStep, setExpandedStep] = useState<string | null>(null)
+  const [selectedAgentStageKey, setSelectedAgentStageKey] = useState<
+    (typeof AGENT_WORKFLOW_STAGES)[number]['key']
+  >('execute')
 
   const wsRef = useRef<WebSocket | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const stepStartRef = useRef<number>(0)
 
-  const handleStop = useCallback(() => {
+  const requestedStepNames = useMemo(
+    () => PIPELINE_STEP_ORDER.filter((name) => {
+      if (name === 'lint' && !lintEnabled) return false
+      if (name === 'synthesis' && !synthesisEnabled) return false
+      if ((name === 'simulate' || name === 'coverage') && !testbenchCode.trim()) return false
+      return true
+    }),
+    [lintEnabled, synthesisEnabled, testbenchCode],
+  )
+
+  const flowNodes = useMemo(
+    () => buildPipelineFlow(requestedStepNames, steps, activeStep),
+    [requestedStepNames, steps, activeStep],
+  )
+
+  const selectedAgentStage = AGENT_WORKFLOW_STAGES.find(
+    (stage) => stage.key === selectedAgentStageKey,
+  ) ?? AGENT_WORKFLOW_STAGES[0]
+
+  const selectedScenario = selectedScenarioKey
+    ? getPipelineScenario(selectedScenarioKey)
+    : null
+
+  const invalidateDisplayedRun = useCallback(() => {
+    if (running) return
+    setSteps([])
+    setResult(null)
+    setError(null)
+    setActiveStep(null)
+    setExpandedStep(null)
+  }, [running])
+
+  const finishRun = useCallback(() => {
     if (wsRef.current) {
       wsRef.current.close()
       wsRef.current = null
@@ -181,18 +153,30 @@ export default function PipelinePage() {
       stepTimerRef.current = null
     }
     setRunning(false)
+    setCancelling(false)
     setActiveStep(null)
     setStepElapsed(0)
   }, [])
 
+  const handleCancel = useCallback(() => {
+    if (requestPipelineCancellation(wsRef.current)) {
+      setCancelling(true)
+      return
+    }
+
+    finishRun()
+  }, [finishRun])
+
   const handleRun = useCallback(() => {
     setRunning(true)
+    setCancelling(false)
     setSteps([])
     setResult(null)
     setError(null)
     setElapsed(0)
     setActiveStep(null)
     setExpandedStep(null)
+    setSubmittedCoverageTarget(coverageTarget)
 
     // Start elapsed timer
     const startTime = Date.now()
@@ -201,16 +185,11 @@ export default function PipelinePage() {
     }, 1000)
 
     // Initialize steps as pending
-    const initialSteps: StepState[] = PIPELINE_STEP_ORDER
-      .filter((name) => {
-        if (name === 'lint' && !lintEnabled) return false
-        if (name === 'synthesis' && !synthesisEnabled) return false
-        if (name === 'test_plan' && !llmProvider) return false
-        if (name === 'testbench_gen' && !llmProvider) return false
-        if (name === 'debug' && !llmProvider) return false
-        return true
-      })
-      .map((name) => ({ step_name: name, status: 'pending' as StepStatus }))
+    const initialSteps: StepState[] = requestedStepNames.map((name) => ({
+        step_name: name,
+        status: 'pending' as StepStatus,
+        required: true,
+      }))
     setSteps(initialSteps)
 
     // Connect WebSocket
@@ -226,8 +205,6 @@ export default function PipelinePage() {
         lint_enabled: lintEnabled,
         synthesis_enabled: synthesisEnabled,
         simulation_timeout: simulationTimeout,
-        llm_provider: llmProvider || null,
-        mode: 'professional',
       }))
     }
 
@@ -237,7 +214,7 @@ export default function PipelinePage() {
         data = JSON.parse(event.data)
       } catch {
         setError(t('pipeline.error.connection'))
-        handleStop()
+        finishRun()
         return
       }
 
@@ -267,22 +244,22 @@ export default function PipelinePage() {
         })
       } else if (data.type === 'pipeline_complete') {
         setResult(data.result as PipelineResult)
-        handleStop()
+        finishRun()
       } else if (data.type === 'error') {
         setError(String(data.message ?? 'Unknown error'))
-        handleStop()
+        finishRun()
       }
     }
 
     ws.onerror = () => {
       setError(t('pipeline.error.connection'))
-      handleStop()
+      finishRun()
     }
 
     ws.onclose = () => {
-      handleStop()
+      finishRun()
     }
-  }, [rtlCode, testbenchCode, coverageTarget, lintEnabled, synthesisEnabled, simulationTimeout, llmProvider, handleStop, t])
+  }, [rtlCode, testbenchCode, coverageTarget, lintEnabled, synthesisEnabled, simulationTimeout, finishRun, requestedStepNames, t])
 
   const formatDuration = (seconds: number) => {
     if (seconds < 1) return '<1s'
@@ -290,10 +267,10 @@ export default function PipelinePage() {
     return `${Math.floor(seconds / 60)}m ${(seconds % 60).toFixed(0)}s`
   }
 
-  const getStepStatus = (stepName: string): StepStatus => {
-    if (activeStep === stepName) return 'running'
-    const step = steps.find((s) => s.step_name === stepName)
-    return step?.status ?? 'pending'
+  const formatCoverageValue = (value: unknown) => {
+    return typeof value === 'number'
+      ? `${(value * 100).toFixed(1)}%`
+      : t('common.unavailable')
   }
 
   return (
@@ -302,22 +279,124 @@ export default function PipelinePage() {
         <h1 className="text-3xl font-bold mb-2">{t('pipeline.title')}</h1>
         <p className="text-muted-foreground mb-8">{t('pipeline.subtitle')}</p>
 
+        <section className="mb-8 rounded-xl border border-slate-700 bg-slate-900/40 p-4 sm:p-5" aria-labelledby="agent-workflow-title">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 id="agent-workflow-title" className="text-base font-semibold text-slate-100">
+                {t('pipeline.agent.title')}
+              </h2>
+              <p className="mt-1 text-sm text-slate-400">{t('pipeline.agent.subtitle')}</p>
+            </div>
+            <p className="mt-2 text-xs text-slate-500 sm:mt-0">{t('pipeline.agent.boundaryHint')}</p>
+          </div>
+
+          <ol className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5" aria-label={t('pipeline.agent.title')}>
+            {AGENT_WORKFLOW_STAGES.map((stage, index) => {
+              const selected = stage.key === selectedAgentStage.key
+              return (
+                <li key={stage.key} className="relative last:col-span-2 sm:last:col-span-1">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAgentStageKey(stage.key)}
+                    aria-pressed={selected}
+                    aria-controls="agent-stage-detail"
+                    className={`h-full w-full rounded-lg border p-3 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
+                      selected
+                        ? AGENT_BOUNDARY_STYLES[stage.boundary]
+                        : 'border-slate-700 bg-slate-800/50 text-slate-300 hover:border-slate-500 hover:bg-slate-800'
+                    }`}
+                  >
+                    <span className="block text-[11px] font-mono text-current opacity-70">
+                      {String(index + 1).padStart(2, '0')}
+                    </span>
+                    <span className="mt-1 block text-sm font-medium">{t(stage.titleKey)}</span>
+                  </button>
+                </li>
+              )
+            })}
+          </ol>
+
+          <div id="agent-stage-detail" className="mt-3 rounded-lg border border-slate-700 bg-slate-950/60 p-3" aria-live="polite">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-medium text-slate-100">{t(selectedAgentStage.titleKey)}</p>
+              <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${AGENT_BOUNDARY_STYLES[selectedAgentStage.boundary]}`}>
+                {t(`pipeline.agent.boundary.${selectedAgentStage.boundary}`)}
+              </span>
+            </div>
+            <p className="mt-1 text-sm text-slate-300">{t(selectedAgentStage.detailKey)}</p>
+          </div>
+        </section>
+
         <div className="grid lg:grid-cols-5 gap-8">
           {/* Left: Input form */}
           <div className="lg:col-span-2 space-y-4">
-            {/* Example selector */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-400">{t('pipeline.examples')}:</span>
-              {Object.entries(EXAMPLES).map(([key, ex]) => (
+            {/* Complete adoption scenarios */}
+            <section aria-labelledby="pipeline-scenarios-title">
+              <div className="flex items-end justify-between gap-3">
+                <div>
+                  <h2 id="pipeline-scenarios-title" className="text-sm font-semibold text-slate-100">
+                    {t('pipeline.scenario.title')}
+                  </h2>
+                  <p className="mt-1 text-xs leading-5 text-slate-400">{t('pipeline.scenario.hint')}</p>
+                </div>
+              </div>
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {PIPELINE_SCENARIOS.map((scenario) => {
+                const selected = selectedScenarioKey === scenario.key
+                return (
                 <button
-                  key={key}
-                  onClick={() => { setRtlCode(ex.code); setTestbenchCode('') }}
+                  key={scenario.key}
+                  type="button"
+                  onClick={() => {
+                    invalidateDisplayedRun()
+                    setSelectedScenarioKey(scenario.key)
+                    setRtlCode(scenario.rtlCode)
+                    setTestbenchCode(scenario.testbenchCode)
+                  }}
                   disabled={running}
-                  className="px-2 py-1 text-xs rounded border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-slate-100 disabled:opacity-50 transition-all"
+                  aria-pressed={selected}
+                  className={`rounded-lg border p-3 text-left transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:opacity-50 ${
+                    selected
+                      ? scenario.kind === 'diagnostic'
+                        ? 'border-amber-400 bg-amber-500/10'
+                        : 'border-blue-400 bg-blue-500/10'
+                      : 'border-slate-700 bg-slate-800/60 hover:border-slate-500 hover:bg-slate-800'
+                  }`}
                 >
-                  {ex.label}
+                  <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                    scenario.kind === 'diagnostic'
+                      ? 'border-amber-500/40 text-amber-300'
+                      : 'border-emerald-500/40 text-emerald-300'
+                  }`}>
+                    {t(`pipeline.scenario.kind.${scenario.kind}`)}
+                  </span>
+                  <span className="mt-2 block text-sm font-medium text-slate-100">{t(scenario.titleKey)}</span>
+                  <span className="mt-1 block text-xs leading-5 text-slate-400">{t(scenario.descriptionKey)}</span>
                 </button>
-              ))}
+                )
+              })}
+              </div>
+            </section>
+
+            <div className={`rounded-lg border p-3 ${
+              selectedScenario?.kind === 'diagnostic'
+                ? 'border-amber-500/40 bg-amber-500/5'
+                : 'border-slate-700 bg-slate-900/50'
+            }`} aria-live="polite">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-medium text-slate-100">
+                  {selectedScenario ? t(selectedScenario.titleKey) : t('pipeline.scenario.custom.title')}
+                </p>
+                <span className="rounded-full border border-slate-600 px-2 py-0.5 text-[11px] text-slate-300">
+                  {t('pipeline.scenario.expected')}: {' '}
+                  {selectedScenario
+                    ? t(`pipeline.outcome.${selectedScenario.expectedOutcome}.title`)
+                    : t('common.unavailable')}
+                </span>
+              </div>
+              <p className="mt-1 text-xs leading-5 text-slate-400">
+                {selectedScenario ? t(selectedScenario.descriptionKey) : t('pipeline.scenario.custom.description')}
+              </p>
             </div>
 
             <div>
@@ -327,22 +406,36 @@ export default function PipelinePage() {
               <textarea
                 id="pipeline-rtl"
                 value={rtlCode}
-                onChange={(e) => setRtlCode(e.target.value)}
+                onChange={(e) => {
+                  invalidateDisplayedRun()
+                  setSelectedScenarioKey(null)
+                  setRtlCode(e.target.value)
+                }}
                 placeholder={t('pipeline.placeholder.rtl')}
                 className="w-full min-h-[200px] px-3 py-2 border border-slate-600 rounded-md bg-slate-800 text-slate-100 font-mono text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all"
                 disabled={running}
               />
+              <p className="mt-2 text-xs text-slate-400" id="pipeline-testbench-help">
+                {testbenchCode.trim()
+                  ? t('pipeline.intent.provided')
+                  : t('pipeline.intent.lintOnly')}
+              </p>
             </div>
 
             <div>
               <label htmlFor="pipeline-testbench" className="block text-sm font-medium mb-2">
-                {t('pipeline.label.testbench')} <span className="text-slate-500 text-xs">{t('design.optional')}</span>
+                {t('pipeline.label.testbench')} <span className="text-slate-500 text-xs">{t('pipeline.optional')}</span>
               </label>
               <textarea
                 id="pipeline-testbench"
                 value={testbenchCode}
-                onChange={(e) => setTestbenchCode(e.target.value)}
+                onChange={(e) => {
+                  invalidateDisplayedRun()
+                  setSelectedScenarioKey(null)
+                  setTestbenchCode(e.target.value)
+                }}
                 placeholder={t('pipeline.placeholder.testbench')}
+                aria-describedby="pipeline-testbench-help"
                 className="w-full min-h-[100px] px-3 py-2 border border-slate-600 rounded-md bg-slate-800 text-slate-100 font-mono text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all"
                 disabled={running}
               />
@@ -368,7 +461,10 @@ export default function PipelinePage() {
                       type="number"
                       min={0} max={1} step={0.05}
                       value={coverageTarget}
-                      onChange={(e) => setCoverageTarget(Number(e.target.value))}
+                      onChange={(e) => {
+                        invalidateDisplayedRun()
+                        setCoverageTarget(Number(e.target.value))
+                      }}
                       className="w-full px-2 py-1.5 border border-slate-600 rounded bg-slate-800 text-sm"
                       disabled={running}
                     />
@@ -380,7 +476,10 @@ export default function PipelinePage() {
                       type="number"
                       min={10} max={3600}
                       value={simulationTimeout}
-                      onChange={(e) => setSimulationTimeout(Number(e.target.value))}
+                      onChange={(e) => {
+                        invalidateDisplayedRun()
+                        setSimulationTimeout(Number(e.target.value))
+                      }}
                       className="w-full px-2 py-1.5 border border-slate-600 rounded bg-slate-800 text-sm"
                       disabled={running}
                     />
@@ -391,7 +490,10 @@ export default function PipelinePage() {
                     <input
                       type="checkbox"
                       checked={lintEnabled}
-                      onChange={(e) => setLintEnabled(e.target.checked)}
+                      onChange={(e) => {
+                        invalidateDisplayedRun()
+                        setLintEnabled(e.target.checked)
+                      }}
                       disabled={running}
                       className="rounded"
                     />
@@ -401,26 +503,15 @@ export default function PipelinePage() {
                     <input
                       type="checkbox"
                       checked={synthesisEnabled}
-                      onChange={(e) => setSynthesisEnabled(e.target.checked)}
+                      onChange={(e) => {
+                        invalidateDisplayedRun()
+                        setSynthesisEnabled(e.target.checked)
+                      }}
                       disabled={running}
                       className="rounded"
                     />
                     {t('pipeline.label.synthesis')}
                   </label>
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">{t('pipeline.label.llm')}</label>
-                  <select
-                    value={llmProvider}
-                    onChange={(e) => setLlmProvider(e.target.value)}
-                    disabled={running}
-                    className="w-full px-2 py-1.5 border border-slate-600 rounded bg-slate-800 text-sm"
-                  >
-                    <option value="">{t('pipeline.llm.none')}</option>
-                    <option value="ollama">Ollama</option>
-                    <option value="claude">Claude</option>
-                    <option value="vllm">vLLM</option>
-                  </select>
                 </div>
               </div>
             )}
@@ -442,15 +533,19 @@ export default function PipelinePage() {
             {/* Run/Stop button */}
             {running ? (
               <button
-                onClick={handleStop}
-                className="w-full bg-red-600 text-white px-6 py-3 rounded-md font-medium hover:bg-red-500 transition-all"
+                onClick={handleCancel}
+                disabled={cancelling}
+                aria-live="polite"
+                className="w-full bg-red-600 text-white px-6 py-3 rounded-md font-medium hover:bg-red-500 disabled:cursor-wait disabled:opacity-70 transition-all"
               >
                 <span className="flex items-center justify-center gap-2">
                   <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
                     <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
-                  {t('pipeline.btn.stop')} ({elapsed}s)
+                  {cancelling
+                    ? t('pipeline.btn.cancelling')
+                    : `${t('pipeline.btn.stop')} (${elapsed}s)`}
                 </span>
               </button>
             ) : (
@@ -466,18 +561,60 @@ export default function PipelinePage() {
 
           {/* Right: Pipeline visualization */}
           <div className="lg:col-span-3">
+            <section className="mb-4" aria-labelledby="gate-flow-title">
+              <div className="flex items-end justify-between gap-3">
+                <div>
+                  <h2 id="gate-flow-title" className="text-base font-semibold text-slate-100">
+                    {t('pipeline.flow.title')}
+                  </h2>
+                  <p className="mt-1 text-xs text-slate-400">{t('pipeline.flow.subtitle')}</p>
+                </div>
+                <span className="hidden text-xs text-slate-500 sm:block">{t('pipeline.flow.hint')}</span>
+              </div>
+
+              <ol className="mt-3 flex flex-col gap-2 sm:flex-row sm:gap-1 sm:overflow-x-auto" aria-label={t('pipeline.flow.title')}>
+                {flowNodes.map((node, index) => {
+                  const style = STATUS_STYLES[node.status]
+                  const selected = expandedStep === node.step_name
+                  return (
+                    <li key={node.step_name} className="flex min-w-0 items-center gap-1 sm:min-w-[7.5rem] sm:flex-1">
+                      <button
+                        type="button"
+                        onClick={() => node.has_evidence && setExpandedStep(selected ? null : node.step_name)}
+                        disabled={!node.has_evidence}
+                        aria-pressed={node.has_evidence ? selected : undefined}
+                        aria-controls={node.has_evidence ? `pipeline-step-detail-${node.step_name}` : undefined}
+                        className={`min-w-0 flex-1 rounded-lg border px-3 py-2 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-default ${style.border} ${style.bg}`}
+                      >
+                        <span className={`block truncate text-xs font-medium ${style.text}`}>
+                          {t(`pipeline.step.${node.step_name}`)}
+                        </span>
+                        <span className={`mt-1 block text-[11px] ${style.text}`}>
+                          {t(`pipeline.status.${node.status}`)}
+                          {node.has_evidence ? ` · ${t('pipeline.flow.evidence')}` : ''}
+                        </span>
+                      </button>
+                      {index < flowNodes.length - 1 && (
+                        <span aria-hidden="true" className="w-4 shrink-0 text-center text-slate-600">
+                          <span className="sm:hidden">↓</span>
+                          <span className="hidden sm:inline">→</span>
+                        </span>
+                      )}
+                    </li>
+                  )
+                })}
+              </ol>
+            </section>
+
             {/* Step flow */}
             <div className="space-y-3">
-              {(steps.length > 0 ? steps : PIPELINE_STEP_ORDER.map((name) => ({
-                step_name: name,
-                status: 'pending' as StepStatus,
-              }))).map((step) => {
-                const status = getStepStatus(step.step_name)
+              {flowNodes.map((step) => {
+                const status = step.status
                 const style = STATUS_STYLES[status]
                 const stepData = steps.find((s) => s.step_name === step.step_name)
 
                 const isExpanded = expandedStep === step.step_name
-                const hasOutput = stepData && (stepData.output || stepData.errors?.length || stepData.warnings?.length)
+                const hasOutput = step.has_evidence
 
                 return (
                   <div
@@ -560,7 +697,7 @@ export default function PipelinePage() {
 
                     {/* Expanded detail panel */}
                     {isExpanded && stepData && (
-                      <div className="px-4 pb-4 space-y-3 border-t border-slate-700/50">
+                      <div id={`pipeline-step-detail-${step.step_name}`} className="px-4 pb-4 space-y-3 border-t border-slate-700/50">
                         {/* Errors */}
                         {stepData.errors && stepData.errors.length > 0 && (
                           <div className="mt-3 p-3 bg-red-500/5 border border-red-500/20 rounded">
@@ -592,21 +729,39 @@ export default function PipelinePage() {
                             <div className="mt-3">
                               {/* Coverage metrics */}
                               {step.step_name === 'coverage' && (
-                                <div className="grid grid-cols-4 gap-2 mb-3">
-                                  {(['line_coverage', 'toggle_coverage', 'branch_coverage', 'coverage_score'] as const).map((key) => {
-                                    const val = output[key] as number | undefined
-                                    if (val === undefined) return null
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+                                  {([
+                                    ['line_coverage', 'pipeline.coverage.line_coverage'],
+                                    ['toggle_coverage', 'pipeline.coverage.toggle_coverage'],
+                                    ['branch_coverage', 'pipeline.coverage.branch_coverage'],
+                                    ['score', 'pipeline.coverage.coverage_score'],
+                                  ] as const).map(([key, label]) => {
+                                    const val = output[key]
+                                    const sources = (output.metric_sources ?? {}) as Record<string, string>
                                     return (
                                       <div key={key} className="p-2 bg-slate-800 rounded text-center">
-                                        <p className="text-xs text-slate-400">{t(`pipeline.coverage.${key}`)}</p>
+                                        <p className="text-xs text-slate-400">{t(label)}</p>
                                         <p className="text-lg font-bold text-slate-200">
-                                          {(val * 100).toFixed(1)}%
+                                          {formatCoverageValue(val)}
+                                        </p>
+                                        <p className="mt-1 text-[11px] font-mono text-slate-500 break-all">
+                                          {sources[key] ?? t('common.unavailable')}
                                         </p>
                                       </div>
                                     )
                                   })}
                                 </div>
                               )}
+
+                              {step.step_name === 'runtime' && typeof output.verified === 'boolean' ? (
+                                <div className="p-3 bg-slate-800 rounded">
+                                  <p className={`text-xs font-medium ${output.verified ? 'text-emerald-300' : 'text-red-300'}`}>
+                                    {output.verified
+                                      ? t('pipeline.detail.runtimeVerified')
+                                      : t('pipeline.detail.runtimeRejected')}
+                                  </p>
+                                </div>
+                              ) : null}
 
                               {step.step_name === 'lint' && typeof output.warning_count === 'number' ? (
                                 <div className="p-2 bg-slate-800 rounded">
@@ -621,6 +776,28 @@ export default function PipelinePage() {
                                   <p className={`text-xs ${output.test_passed ? 'text-green-400' : 'text-red-400'}`}>
                                     {output.test_passed ? t('pipeline.detail.simPass') : t('pipeline.detail.simFail')}
                                   </p>
+                                </div>
+                              ) : null}
+
+                              {step.step_name === 'synthesis' && typeof output.gate_count === 'number' ? (
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div className="p-2 bg-slate-800 rounded">
+                                    <p className="text-xs text-slate-400">{t('pipeline.detail.cells')}</p>
+                                    <p className="text-lg font-semibold">{output.gate_count}</p>
+                                  </div>
+                                  <div className="p-2 bg-slate-800 rounded">
+                                    <p className="text-xs text-slate-400">{t('pipeline.detail.wires')}</p>
+                                    <p className="text-lg font-semibold">{String(output.wires ?? t('common.unavailable'))}</p>
+                                  </div>
+                                </div>
+                              ) : null}
+
+                              {step.step_name === 'artifacts' && output.manifest_path ? (
+                                <div className="p-3 bg-slate-800 rounded">
+                                  <p className="text-xs text-slate-400">{t('pipeline.result.manifest')}</p>
+                                  <code className="text-xs text-slate-200 break-all">
+                                    {String(output.run_directory)}/{String(output.manifest_path)}
+                                  </code>
                                 </div>
                               ) : null}
 
@@ -652,61 +829,149 @@ export default function PipelinePage() {
             </div>
 
             {/* Final result */}
-            {result && (
-              <div className={`mt-6 p-6 rounded-lg border ${result.success ? 'border-green-500/50 bg-green-500/5' : 'border-red-500/50 bg-red-500/5'}`}>
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-xl font-semibold">
-                    {result.success ? t('pipeline.result.success') : t('pipeline.result.failure')}
-                  </h2>
-                  <span className="text-sm text-slate-400 font-mono">
-                    {result.pipeline_id}
-                  </span>
-                </div>
+            {result && (() => {
+              const outcome = getOutcomePresentation(result.outcome)
+              const outcomeStyle = OUTCOME_STYLES[outcome.tone]
+              const recoveryCode = getPrimaryRecoveryCode(result.outcome, result.steps)
+              const recovery = getRecoveryPresentation(recoveryCode)
+              const firstFailingSelfCheck = getFirstFailingSelfCheck(result.steps)
+              const manifestPath = result.artifacts
+                ? `.xylon/runs/${result.artifacts.run_directory}/${result.artifacts.manifest_path}`
+                : null
+              const rerunCommand = manifestPath
+                ? `agent/venv/bin/python -m agent.cli rerun ${manifestPath}`
+                : null
 
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="p-3 bg-slate-800 rounded-lg text-center">
-                    <p className="text-xs text-slate-400">{t('pipeline.result.duration')}</p>
-                    <p className="text-lg font-bold">{formatDuration(result.total_duration_seconds)}</p>
-                  </div>
-                  <div className="p-3 bg-slate-800 rounded-lg text-center">
-                    <p className="text-xs text-slate-400">{t('pipeline.result.iterations')}</p>
-                    <p className="text-lg font-bold">{result.iterations_used}</p>
-                  </div>
-                  <div className="p-3 bg-slate-800 rounded-lg text-center">
-                    <p className="text-xs text-slate-400">{t('pipeline.result.steps')}</p>
-                    <p className="text-lg font-bold">
-                      {result.steps.filter((s) => s.status === 'passed').length}/{result.steps.length}
-                    </p>
-                  </div>
-                </div>
-
-                {result.final_coverage && (
-                  <div className="mt-4 p-4 bg-slate-800 rounded-lg">
-                    <p className="text-sm font-medium mb-3">{t('pipeline.result.coverage')}</p>
-                    <div className="grid grid-cols-4 gap-3">
-                      <div className="text-center">
-                        <p className="text-xs text-slate-400">{t('pipeline.coverage.line_coverage')}</p>
-                        <p className="text-xl font-bold">{(result.final_coverage.line_coverage * 100).toFixed(1)}%</p>
+              return (
+                <section
+                  className={`mt-6 p-5 sm:p-6 rounded-xl border ${outcomeStyle.panel}`}
+                  aria-labelledby="pipeline-outcome-title"
+                  aria-live="polite"
+                >
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <div className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${outcomeStyle.badge}`}>
+                        {result.outcome}
                       </div>
-                      <div className="text-center">
-                        <p className="text-xs text-slate-400">{t('pipeline.coverage.toggle_coverage')}</p>
-                        <p className="text-xl font-bold">{(result.final_coverage.toggle_coverage * 100).toFixed(1)}%</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-xs text-slate-400">{t('pipeline.coverage.branch_coverage')}</p>
-                        <p className="text-xl font-bold">{(result.final_coverage.branch_coverage * 100).toFixed(1)}%</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-xs text-slate-400">{t('pipeline.coverage.coverage_score')}</p>
-                        <p className={`text-xl font-bold ${result.final_coverage.score >= coverageTarget ? 'text-green-400' : 'text-amber-400'}`}>
-                          {(result.final_coverage.score * 100).toFixed(1)}%
-                        </p>
-                      </div>
+                      <h2 id="pipeline-outcome-title" className="mt-3 text-2xl font-semibold tracking-tight">
+                        {t(outcome.titleKey)}
+                      </h2>
+                      <p className="mt-1 max-w-2xl text-sm text-slate-300">
+                        {t(outcome.detailKey)}
+                      </p>
+                    </div>
+                    <div className="text-left sm:text-right">
+                      <p className="text-xs uppercase tracking-wide text-slate-500">{t('pipeline.result.runId')}</p>
+                      <code className="text-xs text-slate-300 break-all">{result.pipeline_id}</code>
                     </div>
                   </div>
-                )}
-              </div>
-            )}
+
+                  {recovery && (
+                    <div className="mt-5 rounded-lg border border-slate-600 bg-slate-900/50 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                        {t('pipeline.result.nextAction')}
+                      </p>
+                      <p className="mt-1 font-medium text-slate-100">{t(recovery.titleKey)}</p>
+                      <p className="mt-1 text-sm text-slate-300">{t(recovery.detailKey)}</p>
+                      {firstFailingSelfCheck && (
+                        <div className="mt-3 rounded-md border border-red-900/70 bg-red-950/40 p-3">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-red-300">
+                            {t('pipeline.result.firstFailure')}
+                          </p>
+                          <code className="mt-1 block break-words text-xs text-red-100">
+                            {firstFailingSelfCheck}
+                          </code>
+                        </div>
+                      )}
+                      {recoveryCode && (
+                        <code className="mt-2 block text-[11px] text-slate-500">{recoveryCode}</code>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <div className="p-3 bg-slate-900/60 rounded-lg">
+                      <p className="text-xs text-slate-400">{t('pipeline.result.mode')}</p>
+                      <p className="mt-1 text-sm font-semibold break-words">{result.mode}</p>
+                    </div>
+                    <div className="p-3 bg-slate-900/60 rounded-lg">
+                      <p className="text-xs text-slate-400">{t('pipeline.result.duration')}</p>
+                      <p className="mt-1 text-lg font-bold">{formatDuration(result.total_duration_seconds)}</p>
+                    </div>
+                    <div className="p-3 bg-slate-900/60 rounded-lg">
+                      <p className="text-xs text-slate-400">{t('pipeline.result.iterations')}</p>
+                      <p className="mt-1 text-lg font-bold">{result.iterations_used}</p>
+                    </div>
+                    <div className="p-3 bg-slate-900/60 rounded-lg">
+                      <p className="text-xs text-slate-400">{t('pipeline.result.gates')}</p>
+                      <p className="mt-1 text-lg font-bold">
+                        {result.steps.filter((s) => s.status === 'passed').length}/{result.steps.length}
+                      </p>
+                    </div>
+                  </div>
+
+                  {result.final_coverage && (
+                    <div className="mt-4 p-4 bg-slate-900/60 rounded-lg">
+                      <p className="text-sm font-medium mb-3">{t('pipeline.result.coverage')}</p>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        {([
+                          ['line_coverage', 'pipeline.coverage.line_coverage'],
+                          ['toggle_coverage', 'pipeline.coverage.toggle_coverage'],
+                          ['branch_coverage', 'pipeline.coverage.branch_coverage'],
+                          ['score', 'pipeline.coverage.coverage_score'],
+                        ] as const).map(([key, label]) => {
+                          const value = result.final_coverage?.[key]
+                          const source = result.final_coverage?.metric_sources[key]
+                          return (
+                            <div key={key} className="text-center">
+                              <p className="text-xs text-slate-400">{t(label)}</p>
+                              <p className={`text-xl font-bold ${
+                                key === 'score' && typeof value === 'number'
+                                  ? value >= submittedCoverageTarget
+                                    ? 'text-emerald-300'
+                                    : 'text-amber-300'
+                                  : 'text-slate-100'
+                              }`}>
+                                {formatCoverageValue(value)}
+                              </p>
+                              {key === 'score' && (
+                                <p className="text-[11px] text-slate-500">
+                                  {t('pipeline.result.target')}: {formatCoverageValue(submittedCoverageTarget)}
+                                </p>
+                              )}
+                              <p className="mt-1 text-[11px] font-mono text-slate-500 break-all">
+                                {source ?? t('common.unavailable')}
+                              </p>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {result.artifacts && manifestPath && rerunCommand && (
+                    <details className="mt-4 rounded-lg border border-slate-700 bg-slate-900/40 p-4">
+                      <summary className="cursor-pointer text-sm font-medium text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 rounded">
+                        {t('pipeline.result.artifacts')} ({result.artifacts.files.length})
+                      </summary>
+                      <div className="mt-3 space-y-3 text-xs">
+                        <div>
+                          <p className="text-slate-500">{t('pipeline.result.manifest')}</p>
+                          <code className="mt-1 block break-all text-slate-200">{manifestPath}</code>
+                        </div>
+                        <div>
+                          <p className="text-slate-500">{t('pipeline.result.rerun')}</p>
+                          <code className="mt-1 block break-all rounded bg-slate-950 p-2 text-slate-200">{rerunCommand}</code>
+                        </div>
+                        <p className="text-slate-400">
+                          {result.artifacts.checksums_path} · {t('pipeline.result.integrityChecked')}
+                        </p>
+                      </div>
+                    </details>
+                  )}
+                </section>
+              )
+            })()}
 
             {/* Connection error */}
             {error && !result && (

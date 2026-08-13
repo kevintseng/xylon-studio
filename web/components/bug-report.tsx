@@ -62,15 +62,11 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
   const [severity, setSeverity] = useState<BugReportData['severity']>('medium')
   const [screenshot, setScreenshot] = useState<string | null>(null)
   const [capturingScreenshot, setCapturingScreenshot] = useState(false)
-  const [consoleLogs, setConsoleLogs] = useState('')
+  const [consoleLogs] = useState(() => consoleCollector.getFormattedLog())
   const [submitted, setSubmitted] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
   const dialogRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    setConsoleLogs(consoleCollector.getFormattedLog())
-  }, [])
 
   useEffect(() => {
     const dialog = dialogRef.current
@@ -276,7 +272,7 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
             <textarea
               value={steps}
               onChange={(e) => setSteps(e.target.value)}
-              placeholder="1. Go to Design Dragon page&#10;2. Enter '8-bit counter'&#10;3. Click Generate RTL&#10;4. See error..."
+              placeholder="1. Open Run verification&#10;2. Load the 8-bit counter example&#10;3. Run the pipeline&#10;4. Open the failed gate..."
               className="w-full min-h-[80px] px-3 py-2 border rounded-md text-sm"
             />
           </div>
