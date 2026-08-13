@@ -9,7 +9,7 @@ import logging
 import re
 import time
 
-from agent.pipeline.models import StepResult, StepStatus
+from agent.pipeline.models import FailureKind, StepResult, StepStatus
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +49,24 @@ async def run_synthesis_step(
         if not result.get("success", False):
             errors = []
             stderr = result.get("stderr", "")
+            raw_failure_kind = result.get("failure_kind")
+            failure_kind = (
+                FailureKind(raw_failure_kind)
+                if raw_failure_kind
+                else FailureKind.CONFIGURATION
+            )
+            recovery_code = (
+                "repair_toolchain"
+                if failure_kind == FailureKind.INFRASTRUCTURE
+                else "correct_rtl"
+            )
             if stderr:
                 # Extract Yosys error lines
                 for line in stderr.split("\n"):
                     if "ERROR" in line or "error" in line.lower():
                         errors.append(line.strip())
+            if failure_kind == FailureKind.INFRASTRUCTURE and not errors and stderr:
+                errors.append(stderr.strip())
             if not errors:
                 errors = ["Synthesis failed (no specific error captured)"]
 
@@ -67,12 +80,26 @@ async def run_synthesis_step(
                 },
                 errors=errors,
                 warnings=[],
+                failure_kind=failure_kind,
+                recovery_code=recovery_code,
             )
 
         # Parse detailed stats from Yosys output
         stdout = result.get("stdout", "")
         stats = _parse_yosys_stats(stdout)
-        gate_count = result.get("gate_count", 0)
+        if not stats["statistics_found"]:
+            return StepResult(
+                step_name=STEP_NAME,
+                status=StepStatus.FAILED,
+                duration_seconds=duration,
+                output={"stdout": stdout[-2000:]},
+                errors=["Yosys completed without parseable module statistics"],
+                warnings=[],
+                failure_kind=FailureKind.INCONCLUSIVE,
+                recovery_code="inspect_synthesis_report",
+            )
+
+        gate_count = stats["cell_count"]
 
         return StepResult(
             step_name=STEP_NAME,
@@ -100,6 +127,8 @@ async def run_synthesis_step(
             output={},
             errors=[f"Synthesis error: {e}"],
             warnings=[],
+            failure_kind=FailureKind.INFRASTRUCTURE,
+            recovery_code="repair_toolchain",
         )
 
 
@@ -118,34 +147,46 @@ def _parse_yosys_stats(stdout: str) -> dict:
           $_OR_                         4
           $_XOR_                        3
     """
-    stats: dict = {"cells": {}, "wires": 0, "wire_bits": 0, "memories": 0, "memory_bits": 0}
+    stats: dict = {
+        "cells": {},
+        "cell_count": 0,
+        "wires": 0,
+        "wire_bits": 0,
+        "memories": 0,
+        "memory_bits": 0,
+        "statistics_found": False,
+    }
 
     for raw_line in stdout.split("\n"):
         line = raw_line.strip()
 
         # Parse numeric stats
-        wires_match = re.match(r"Number of wires:\s+(\d+)", line)
+        wires_match = re.match(r"(\d+)\s+wires$", line)
         if wires_match:
             stats["wires"] = int(wires_match.group(1))
 
-        wire_bits_match = re.match(r"Number of wire bits:\s+(\d+)", line)
+        wire_bits_match = re.match(r"(\d+)\s+wire bits$", line)
         if wire_bits_match:
             stats["wire_bits"] = int(wire_bits_match.group(1))
 
-        mem_match = re.match(r"Number of memories:\s+(\d+)", line)
+        mem_match = re.match(r"(\d+)\s+memories$", line)
         if mem_match:
             stats["memories"] = int(mem_match.group(1))
 
-        mem_bits_match = re.match(r"Number of memory bits:\s+(\d+)", line)
+        mem_bits_match = re.match(r"(\d+)\s+memory bits$", line)
         if mem_bits_match:
             stats["memory_bits"] = int(mem_bits_match.group(1))
 
-        # Parse cell breakdown (indented lines like "  $_AND_  3")
-        # Use raw_line to preserve leading whitespace for the indent check
-        cell_match = re.match(r"\s+(\S+)\s+(\d+)", raw_line)
-        if cell_match and cell_match.group(1).startswith("$"):
-            cell_name = cell_match.group(1)
-            cell_count = int(cell_match.group(2))
+        cell_total_match = re.match(r"(\d+)\s+cells$", line)
+        if cell_total_match:
+            stats["cell_count"] = int(cell_total_match.group(1))
+            stats["statistics_found"] = True
+
+        # Yosys 0.65 emits cell rows as "36   $_AND_".
+        cell_match = re.match(r"(\d+)\s+(\$\S+)$", line)
+        if cell_match:
+            cell_count = int(cell_match.group(1))
+            cell_name = cell_match.group(2)
             stats["cells"][cell_name] = cell_count
 
     return stats

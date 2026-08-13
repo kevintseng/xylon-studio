@@ -23,11 +23,19 @@ logger = logging.getLogger(__name__)
 class ExecutionError(Exception):
     """Raised when sandbox execution fails."""
 
-    def __init__(self, message: str, stdout: str = "", stderr: str = "", exit_code: int = -1):
+    def __init__(
+        self,
+        message: str,
+        stdout: str = "",
+        stderr: str = "",
+        exit_code: int = -1,
+        failure_kind: str = "infrastructure",
+    ):
         self.message = message
         self.stdout = stdout
         self.stderr = stderr
         self.exit_code = exit_code
+        self.failure_kind = failure_kind
         super().__init__(self.message)
 
 
@@ -52,6 +60,7 @@ class ExecutionResult:
     stderr: str
     exit_code: int
     duration_seconds: float
+    failure_kind: str | None = None
     timestamp: str = None
 
     def __post_init__(self):
@@ -76,6 +85,16 @@ class SandboxExecutor:
     MAX_OUTPUT_SIZE = 10 * 1024 * 1024  # 10 MB
     DEFAULT_TIMEOUT = 60  # seconds
 
+    _INFRASTRUCTURE_PATTERNS = (
+        "error response from daemon",
+        "cannot connect to the docker daemon",
+        "container is not running",
+        "is not running",
+        "no such container",
+        "executable file not found in $path",
+        "permission denied while trying to connect to the docker daemon",
+    )
+
     def __init__(self, container_name: str):
         """
         Initialize executor.
@@ -84,6 +103,14 @@ class SandboxExecutor:
             container_name: Docker container to execute commands in
         """
         self.container_name = container_name
+
+    @classmethod
+    def _classify_failure(cls, stderr: str) -> str | None:
+        """Classify only explicit host/container/toolchain failures."""
+        normalized = stderr.lower()
+        if any(pattern in normalized for pattern in cls._INFRASTRUCTURE_PATTERNS):
+            return "infrastructure"
+        return None
 
     def execute(
         self,
@@ -175,6 +202,7 @@ class SandboxExecutor:
                 stderr=stderr,
                 exit_code=result.returncode,
                 duration_seconds=duration,
+                failure_kind=None if success else self._classify_failure(stderr),
             )
 
         except subprocess.TimeoutExpired as e:

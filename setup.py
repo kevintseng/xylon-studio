@@ -7,7 +7,7 @@ from setuptools import setup, find_packages
 setup(
     name="xylonstudio",
     version="1.0.0",
-    description="XylonStudio - AI-driven chip design platform",
+    description="XylonStudio - reproducible local RTL verification",
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     author="XylonStudio Team",
@@ -30,11 +30,9 @@ setup(
     install_requires=[
         "fastapi>=0.110.0",
         "uvicorn[standard]>=0.27.1",
-        "pydantic>=2.6.3",
+        "pydantic>=2.13.4,<3",
         "pydantic-settings>=2.2.1",
-        "openai>=1.13.3",
         "httpx>=0.27.0",
-        "tenacity>=8.2.3",
         "python-dotenv>=1.0.1",
     ],
 )

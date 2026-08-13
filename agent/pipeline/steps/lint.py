@@ -3,7 +3,7 @@
 import asyncio
 import logging
 
-from agent.pipeline.models import StepResult, StepStatus
+from agent.pipeline.models import FailureKind, StepResult, StepStatus
 from agent.sandbox.manager import SandboxManager
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,22 @@ async def run_lint_step(
         warnings = result.get('warnings', [])
         errors = result.get('errors', [])
 
+        raw_failure_kind = result.get('failure_kind')
+        failure_kind = FailureKind(raw_failure_kind) if raw_failure_kind else None
+        if failure_kind is None and any(
+            '%Error-UNSUPPORTED' in error for error in errors
+        ):
+            failure_kind = FailureKind.UNSUPPORTED
+        elif errors and failure_kind is None:
+            failure_kind = FailureKind.CONFIGURATION
         status = StepStatus.PASSED if not errors else StepStatus.FAILED
+        recovery_code = None
+        if failure_kind == FailureKind.INFRASTRUCTURE:
+            recovery_code = "repair_toolchain"
+        elif failure_kind == FailureKind.UNSUPPORTED:
+            recovery_code = "use_supported_hdl"
+        elif failure_kind == FailureKind.CONFIGURATION:
+            recovery_code = "correct_rtl"
 
         step_result = StepResult(
             step_name="lint",
@@ -57,6 +72,8 @@ async def run_lint_step(
             },
             warnings=warnings,
             errors=errors,
+            failure_kind=failure_kind,
+            recovery_code=recovery_code,
         )
 
         if status == StepStatus.PASSED:
@@ -101,7 +118,22 @@ async def run_lint_step_from_string(
 
         warnings = result.get('warnings', [])
         errors = result.get('errors', [])
+        raw_failure_kind = result.get('failure_kind')
+        failure_kind = FailureKind(raw_failure_kind) if raw_failure_kind else None
+        if failure_kind is None and any(
+            '%Error-UNSUPPORTED' in error for error in errors
+        ):
+            failure_kind = FailureKind.UNSUPPORTED
+        elif errors and failure_kind is None:
+            failure_kind = FailureKind.CONFIGURATION
         status = StepStatus.PASSED if not errors else StepStatus.FAILED
+        recovery_code = None
+        if failure_kind == FailureKind.INFRASTRUCTURE:
+            recovery_code = "repair_toolchain"
+        elif failure_kind == FailureKind.UNSUPPORTED:
+            recovery_code = "use_supported_hdl"
+        elif failure_kind == FailureKind.CONFIGURATION:
+            recovery_code = "correct_rtl"
 
         return StepResult(
             step_name="lint",
@@ -115,6 +147,8 @@ async def run_lint_step_from_string(
             },
             warnings=warnings,
             errors=errors,
+            failure_kind=failure_kind,
+            recovery_code=recovery_code,
         )
 
     except Exception as e:

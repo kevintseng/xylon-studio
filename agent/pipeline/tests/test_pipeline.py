@@ -3,7 +3,7 @@
 
 import pytest
 
-from agent.pipeline.models import StepStatus
+from agent.pipeline.models import PipelineOutcome, RunMode, StepStatus
 from agent.pipeline.runner import PipelineConfig, run_pipeline
 
 # Simple 8-bit adder RTL for testing
@@ -17,27 +17,34 @@ module adder_8bit (
 endmodule
 """
 
-# Simple C++ testbench that verifies 1+1=2 (Verilator requires C++ harness)
+# Exhaustive self-checking C++ testbench (Verilator requires a C++ harness)
 SIMPLE_TB = """
 #include "Vadder_8bit.h"
 #include "verilated.h"
+#include "verilated_cov.h"
 #include <cstdio>
 
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
     Vadder_8bit* dut = new Vadder_8bit;
 
-    dut->a = 1;
-    dut->b = 1;
-    dut->eval();
-
-    if (dut->sum == 2) {
-        printf("PASS\\n");
-    } else {
-        printf("FAIL: sum=%d\\n", (int)dut->sum);
+    for (int a = 0; a < 256; ++a) {
+        for (int b = 0; b < 256; ++b) {
+            dut->a = a;
+            dut->b = b;
+            dut->eval();
+            if (dut->sum != a + b) {
+                printf("FAIL: a=%d b=%d sum=%d\\n", a, b, (int)dut->sum);
+                VerilatedCov::write("coverage.dat");
+                delete dut;
+                return 1;
+            }
+        }
     }
 
+    printf("PASS: exhaustively checked 65536 input pairs\\n");
     delete dut;
+    VerilatedCov::write("coverage.dat");
     return 0;
 }
 """
@@ -47,7 +54,7 @@ int main(int argc, char** argv) {
 @pytest.mark.integration
 async def test_pipeline_lint_only():
     """Test pipeline with lint only (no testbench)."""
-    config = PipelineConfig(lint_enabled=True)
+    config = PipelineConfig(lint_enabled=True, runtime_check_enabled=True)
 
     result = await run_pipeline(
         rtl_code=SIMPLE_ADDER_RTL,
@@ -56,10 +63,14 @@ async def test_pipeline_lint_only():
     )
 
     assert result.pipeline_id is not None
-    assert len(result.steps) == 1
-    assert result.steps[0].step_name == 'lint'
-    assert result.steps[0].status == StepStatus.PASSED
-    assert result.success is True
+    assert [step.step_name for step in result.steps] == [
+        'runtime', 'lint', 'artifacts'
+    ]
+    assert result.steps[0].output['verified'] is True
+    assert result.steps[1].status == StepStatus.PASSED
+    assert result.mode == RunMode.LINT_ONLY
+    assert result.outcome == PipelineOutcome.LINT_ONLY
+    assert result.success is False
     assert result.final_coverage is None
 
 
@@ -68,7 +79,7 @@ async def test_pipeline_lint_only():
 async def test_pipeline_lint_fail():
     """Test pipeline with syntactically invalid RTL."""
     invalid_rtl = "module broken ( input x, invalid syntax"
-    config = PipelineConfig(lint_enabled=True)
+    config = PipelineConfig(lint_enabled=True, runtime_check_enabled=True)
 
     # Note: This requires Docker containers to be running
     # Skip if containers not available
@@ -81,7 +92,10 @@ async def test_pipeline_lint_fail():
         config=config,
     )
 
-    assert result.steps[0].status == StepStatus.FAILED
+    steps = {step.step_name: step for step in result.steps}
+    assert steps['runtime'].status == StepStatus.PASSED
+    assert steps['lint'].status == StepStatus.FAILED
+    assert steps['artifacts'].status == StepStatus.PASSED
     assert result.success is False
 
 
@@ -97,6 +111,7 @@ async def test_pipeline_full_flow():
         lint_enabled=True,
         simulation_timeout=300,
         coverage_target=0.8,
+        runtime_check_enabled=True,
     )
 
     result = await run_pipeline(
@@ -108,40 +123,52 @@ async def test_pipeline_full_flow():
     # Check result structure
     assert result.pipeline_id is not None
     assert result.success is True
-    assert len(result.steps) == 3
+    assert result.outcome == PipelineOutcome.VERIFIED
+    assert [step.step_name for step in result.steps] == [
+        'runtime', 'lint', 'simulate', 'coverage', 'artifacts'
+    ]
 
-    # Check lint step
-    assert result.steps[0].step_name == 'lint'
-    assert result.steps[0].status == StepStatus.PASSED
+    steps = {step.step_name: step for step in result.steps}
 
-    # Check simulate step
-    assert result.steps[1].step_name == 'simulate'
-    assert result.steps[1].status == StepStatus.PASSED
-    assert result.steps[1].output['test_passed'] is True
+    assert steps['runtime'].status == StepStatus.PASSED
+    assert steps['lint'].status == StepStatus.PASSED
+    assert steps['simulate'].status == StepStatus.PASSED
+    assert steps['simulate'].output['test_passed'] is True
 
-    # Check coverage step
-    assert result.steps[2].step_name == 'coverage'
-    assert result.steps[2].status == StepStatus.PASSED
+    assert steps['coverage'].status == StepStatus.PASSED
+    assert steps['artifacts'].status == StepStatus.PASSED
 
     # Check coverage data
     assert result.final_coverage is not None
-    assert result.final_coverage.line_coverage >= 0.0
-    assert result.final_coverage.toggle_coverage >= 0.0
-    assert result.final_coverage.branch_coverage >= 0.0
-    assert result.final_coverage.score >= 0.0
+    assert result.final_coverage.line_coverage is None
+    assert result.final_coverage.toggle_coverage >= 0.8
+    assert result.final_coverage.branch_coverage is None
+    assert result.final_coverage.score >= 0.8
+    assert result.final_coverage.metric_sources == {
+        "toggle_coverage": "verilator_summary",
+        "score": "computed_verilator_point_counts",
+    }
 
 
 def _check_docker_available() -> bool:
-    """Check if Docker containers are running."""
+    """Check that both pinned EDA containers are running and healthy."""
     import subprocess
 
     try:
-        subprocess.run(
-            ['docker', 'ps', '--filter', 'name=xylon-verilator'],
+        result = subprocess.run(
+            [
+                'docker', 'inspect', '--format',
+                '{{.State.Running}}|{{.State.Health.Status}}',
+                'xylon-verilator', 'xylon-yosys',
+            ],
             capture_output=True,
             timeout=5,
             check=False,
         )
-        return True
+        return (
+            result.returncode == 0
+            and result.stdout.decode().splitlines()
+            == ['true|healthy', 'true|healthy']
+        )
     except Exception:
         return False
