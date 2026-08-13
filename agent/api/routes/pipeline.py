@@ -1,106 +1,116 @@
 """Pipeline API routes."""
 
+import asyncio
+import contextlib
 import json
 import logging
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from agent.pipeline.models import PipelineConfig, PipelineResult, StepResult, TestPlan
+from agent.api import LOCAL_WEB_ORIGINS
+from agent.pipeline.models import PipelineConfig, PipelineResult, StepResult
 from agent.pipeline.runner import run_pipeline
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["pipeline"])
+_LOCAL_PIPELINE_SLOT = asyncio.Lock()
+
+
+async def _run_pipeline_in_local_slot(**kwargs):
+    """Serialize heavy EDA work inside the supported single-worker local API."""
+    async with _LOCAL_PIPELINE_SLOT:
+        return await run_pipeline(**kwargs)
 
 
 class PipelineRequest(BaseModel):
     """Request model for pipeline execution."""
 
-    rtl_code: str = Field(..., description="Verilog RTL code")
-    testbench_code: str | None = Field(
-        None,
-        description="Optional testbench code for Phase A (single-pass simulation)",
-    )
-    coverage_target: float = Field(0.8, description="Target coverage (0.0-1.0)")
-    simulation_timeout: int = Field(300, description="Simulation timeout in seconds")
-    lint_enabled: bool = Field(True, description="Run Verilator lint step")
-    synthesis_enabled: bool = Field(False, description="Run Yosys synthesis report after verification")
-    llm_config: dict | None = Field(
-        None,
-        description="LLM provider configuration for Phase B (testbench generation). "
-                    "If provided, enables test plan generation and testbench generation with iteration. "
-                    "Expected keys: type (vllm/openai/anthropic), endpoint, model, timeout, api_key (if required)",
-    )
-
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
             "example": {
                 "rtl_code": "module adder_8bit(...); endmodule",
-                "testbench_code": "module tb_adder(...); endmodule",
+                "testbench_code": "#include <iostream>\nint main() { /* self-check */ }",
                 "coverage_target": 0.85,
                 "simulation_timeout": 300,
-                "llm_config": {
-                    "type": "vllm",
-                    "endpoint": "http://localhost:8000",
-                    "model": "deepseek-coder",
-                    "timeout": 30,
-                },
             }
-        }
+        },
+    )
+
+    rtl_code: str = Field(..., min_length=1, description="Verilog RTL code")
+    testbench_code: str | None = Field(
+        None,
+        description="Optional independent C++ self-checking testbench code",
+    )
+    coverage_target: float = Field(
+        0.8,
+        ge=0.0,
+        le=1.0,
+        description="Target coverage (0.0-1.0)",
+    )
+    simulation_timeout: int = Field(
+        300,
+        ge=1,
+        le=3600,
+        description="Simulation timeout in seconds",
+    )
+    lint_enabled: bool = Field(True, description="Run Verilator lint step")
+    synthesis_enabled: bool = Field(False, description="Run Yosys synthesis report after verification")
+
+    @field_validator("rtl_code")
+    @classmethod
+    def require_nonblank_rtl(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("rtl_code must contain Verilog source")
+        return value
 
 
 class PipelineResponse(BaseModel):
-    """Response model for pipeline execution."""
+    """Canonical pipeline result shared with WebSocket and persistence."""
 
-    pipeline_id: str
-    success: bool
-    total_duration_seconds: float
-    steps_passed: int
-    steps_total: int
-    coverage_score: float | None = None
-    test_plan: TestPlan | None = Field(
-        None,
-        description="Generated test plan (Phase B only). Present when LLM provider is configured.",
-    )
-    iterations_used: int = Field(
-        1,
-        description="Number of coverage-driven iterations completed (Phase B). "
-                    "Phase A always uses 1 iteration.",
-    )
-
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "pipeline_id": "550e8400-e29b-41d4-a716-446655440000",
+                "steps": [],
+                "final_coverage": None,
+                "iterations_used": 0,
+                "total_duration_seconds": 0.3,
                 "success": True,
-                "total_duration_seconds": 45.3,
-                "steps_passed": 3,
-                "steps_total": 3,
-                "coverage_score": 0.87,
-                "test_plan": None,
-                "iterations_used": 1,
+                "mode": "provided_testbench",
+                "outcome": "verified",
+                "artifacts": None,
+                "timestamp": "2026-08-13T00:00:00",
             }
-        }
+        },
+    )
 
+    pipeline_id: str
+    steps: list[dict]
+    final_coverage: dict | None = None
+    iterations_used: int
+    total_duration_seconds: float
+    success: bool
+    mode: str
+    outcome: str
+    artifacts: dict | None = None
+    timestamp: str
 
 @router.post("/pipeline/run", response_model=PipelineResponse)
 async def run_pipeline_endpoint(request: PipelineRequest) -> PipelineResponse:
     """
     Execute verification pipeline.
 
-    Supports two phases:
-    - Phase A (user-provided testbench): lint -> simulate -> coverage (single pass)
-    - Phase B (LLM-driven): lint -> test_plan -> testbench -> [simulate -> coverage]* (with iteration)
-
-    Phase A runs when testbench_code is provided and llm_config is not.
-    Phase B runs when llm_config is provided, with optional user testbench fallback.
+    A supplied C++ self-checking testbench selects ``provided_testbench`` mode.
+    Without one, the outcome is lint-only and never verified.
 
     Args:
-        request: Pipeline request with RTL code, optional testbench, and optional LLM config
+        request: Pipeline request with RTL code and optional C++ testbench
 
     Returns:
-        Pipeline execution result with coverage score and phase-specific metadata
+        Canonical pipeline result with evidence and mode-specific metadata
 
     Raises:
         HTTPException: If execution fails
@@ -109,69 +119,38 @@ async def run_pipeline_endpoint(request: PipelineRequest) -> PipelineResponse:
 
     try:
         # Create config from request
-        # Phase B enabled if llm_config provided, Phase A otherwise
         config = PipelineConfig(
             coverage_target=request.coverage_target,
             simulation_timeout=request.simulation_timeout,
             lint_enabled=request.lint_enabled,
             synthesis_enabled=request.synthesis_enabled,
-            llm_provider=request.llm_config,
-            generate_testbench=request.llm_config is not None,
-            generate_test_plan=request.llm_config is not None,
         )
 
         # Run pipeline
-        result: PipelineResult = await run_pipeline(
+        result: PipelineResult = await _run_pipeline_in_local_slot(
             rtl_code=request.rtl_code,
             testbench_code=request.testbench_code,
             config=config,
         )
-
-        # Count passed steps
-        steps_passed = sum(
-            1 for step in result.steps
-            if step.status.value == "passed"
-        )
-
-        # Extract coverage score
-        coverage_score = None
-        if result.final_coverage:
-            coverage_score = result.final_coverage.score
 
         logger.info(
             f"Pipeline completed: pipeline_id={result.pipeline_id}, "
             f"success={result.success}, duration={result.total_duration_seconds:.2f}s"
         )
 
-        return PipelineResponse(
-            pipeline_id=result.pipeline_id,
-            success=result.success,
-            total_duration_seconds=result.total_duration_seconds,
-            steps_passed=steps_passed,
-            steps_total=len(result.steps),
-            coverage_score=coverage_score,
-            test_plan=result.test_plan,
-            iterations_used=result.iterations_used,
-        )
+        return PipelineResponse(**result.to_dict())
 
     except Exception as e:
         logger.error(f"Pipeline execution failed: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Pipeline execution failed: {e}",
+            detail="Pipeline execution failed",
         ) from e
 
 
 def _step_to_dict(step: StepResult) -> dict:
     """Convert StepResult to JSON-serializable dict."""
-    return {
-        "step_name": step.step_name,
-        "status": step.status.value,
-        "duration_seconds": step.duration_seconds,
-        "output": step.output,
-        "errors": step.errors,
-        "warnings": step.warnings,
-    }
+    return step.to_dict()
 
 
 @router.websocket("/pipeline/ws")
@@ -183,79 +162,122 @@ async def pipeline_websocket(ws: WebSocket):
     Server streams step_complete events as each step finishes,
     then sends pipeline_complete with the final result.
     """
+    origin = ws.headers.get("origin")
+    if origin is not None and origin not in LOCAL_WEB_ORIGINS:
+        await ws.close(code=1008, reason="WebSocket origin is not allowed")
+        return
+
     await ws.accept()
     logger.info("Pipeline WebSocket connected")
+    cancellation_event = asyncio.Event()
+    watch_task: asyncio.Task | None = None
+    connection_open = True
 
     try:
         # Receive pipeline config from client
         raw = await ws.receive_text()
         data = json.loads(raw)
+        if not isinstance(data, dict):
+            await ws.send_json({
+                "type": "error",
+                "message": "Invalid pipeline request: expected a JSON object",
+            })
+            await ws.close()
+            return
 
-        rtl_code = data.get("rtl_code", "")
-        testbench_code = data.get("testbench_code")
-        coverage_target = data.get("coverage_target", 0.8)
-        simulation_timeout = data.get("simulation_timeout", 300)
-        lint_enabled = data.get("lint_enabled", True)
-        synthesis_enabled = data.get("synthesis_enabled", False)
-        llm_config = data.get("llm_provider")
+        allowed_fields = {
+            "rtl_code",
+            "testbench_code",
+            "coverage_target",
+            "simulation_timeout",
+            "lint_enabled",
+            "synthesis_enabled",
+        }
+        unsupported_fields = sorted(set(data) - allowed_fields)
+        if unsupported_fields:
+            await ws.send_json({
+                "type": "error",
+                "message": "Unsupported pipeline fields: "
+                + ", ".join(unsupported_fields),
+            })
+            await ws.close()
+            return
 
-        if not rtl_code.strip():
-            await ws.send_json({"type": "error", "message": "rtl_code is required"})
+        try:
+            request = PipelineRequest.model_validate(data)
+        except ValidationError as exc:
+            problems = []
+            for error in exc.errors(include_url=False, include_context=False):
+                location = ".".join(str(part) for part in error["loc"])
+                problems.append(f"{location}: {error['msg']}")
+            await ws.send_json({
+                "type": "error",
+                "message": "Invalid pipeline request: " + "; ".join(problems),
+            })
             await ws.close()
             return
 
         config = PipelineConfig(
-            coverage_target=coverage_target,
-            simulation_timeout=simulation_timeout,
-            lint_enabled=lint_enabled,
-            synthesis_enabled=synthesis_enabled,
-            llm_provider=llm_config,
-            generate_testbench=llm_config is not None,
-            generate_test_plan=llm_config is not None,
+            coverage_target=request.coverage_target,
+            simulation_timeout=request.simulation_timeout,
+            lint_enabled=request.lint_enabled,
+            synthesis_enabled=request.synthesis_enabled,
         )
+
+        async def watch_client_messages():
+            nonlocal connection_open
+            try:
+                while True:
+                    message = json.loads(await ws.receive_text())
+                    if message.get("type") == "cancel":
+                        cancellation_event.set()
+                        return
+            except (WebSocketDisconnect, RuntimeError):
+                connection_open = False
+                cancellation_event.set()
+            except json.JSONDecodeError:
+                await ws.send_json({"type": "error", "message": "Invalid JSON"})
+
+        async def send_event(payload: dict) -> bool:
+            nonlocal connection_open
+            if not connection_open:
+                return False
+            try:
+                await ws.send_json(payload)
+                return True
+            except (WebSocketDisconnect, RuntimeError):
+                connection_open = False
+                cancellation_event.set()
+                return False
+
+        watch_task = asyncio.create_task(watch_client_messages())
 
         # Callback to stream step events
         async def on_step_started(step_name: str):
-            await ws.send_json({
+            await send_event({
                 "type": "step_started",
                 "step_name": step_name,
             })
 
         async def on_step_complete(step: StepResult):
-            await ws.send_json({
+            await send_event({
                 "type": "step_complete",
                 "step": _step_to_dict(step),
             })
 
         # Run pipeline with streaming
-        result = await run_pipeline(
-            rtl_code=rtl_code,
-            testbench_code=testbench_code,
+        result = await _run_pipeline_in_local_slot(
+            rtl_code=request.rtl_code,
+            testbench_code=request.testbench_code,
             config=config,
             on_step_complete=on_step_complete,
             on_step_started=on_step_started,
+            cancellation_event=cancellation_event,
         )
 
-        # Send final result
-        coverage_score = None
-        if result.final_coverage:
-            coverage_score = {
-                "line_coverage": result.final_coverage.line_coverage,
-                "toggle_coverage": result.final_coverage.toggle_coverage,
-                "branch_coverage": result.final_coverage.branch_coverage,
-                "score": result.final_coverage.score,
-            }
-
-        await ws.send_json({
+        await send_event({
             "type": "pipeline_complete",
-            "result": {
-                "pipeline_id": result.pipeline_id,
-                "success": result.success,
-                "total_duration_seconds": result.total_duration_seconds,
-                "iterations_used": result.iterations_used,
-                "steps": [_step_to_dict(s) for s in result.steps],
-                "final_coverage": coverage_score,
-            },
+            "result": result.to_dict(),
         })
 
     except WebSocketDisconnect:
@@ -269,6 +291,10 @@ async def pipeline_websocket(ws: WebSocket):
         except Exception:
             pass
     finally:
+        if watch_task is not None:
+            watch_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watch_task
         try:
             await ws.close()
         except Exception:

@@ -1,7 +1,7 @@
 """
 XylonStudio Agent Entry Point.
 
-Starts the FastAPI server for Design and Verification Dragons.
+Starts the canonical local RTL verification API.
 
 Usage:
     python -m agent.main

@@ -4,6 +4,7 @@ import pytest
 
 from agent.pipeline.models import (
     CoverageReport,
+    FailureKind,
     PipelineConfig,
     PipelineResult,
     StepResult,
@@ -31,6 +32,28 @@ class TestStepResult:
         )
         assert len(result.errors) == 1
         assert result.status == StepStatus.FAILED
+
+    def test_failure_metadata_serializes_as_stable_codes(self):
+        step = StepResult(
+            step_name="lint",
+            status=StepStatus.FAILED,
+            duration_seconds=0.1,
+            errors=["container is not running"],
+            failure_kind=FailureKind.INFRASTRUCTURE,
+            recovery_code="repair_toolchain",
+        )
+        result = PipelineResult(
+            pipeline_id="pipe-infra",
+            steps=[step],
+            final_coverage=None,
+            iterations_used=0,
+            total_duration_seconds=0.1,
+            success=False,
+        )
+
+        serialized = result.to_dict()["steps"][0]
+        assert serialized["failure_kind"] == "infrastructure"
+        assert serialized["recovery_code"] == "repair_toolchain"
 
 
 class TestCoverageReport:
@@ -66,15 +89,37 @@ class TestCoverageReport:
         assert report.line_coverage == 0.85
         assert len(report.uncovered_lines) == 2
 
+    def test_unavailable_metrics_remain_distinct_from_zero(self):
+        report = CoverageReport(
+            line_coverage=None,
+            toggle_coverage=None,
+            branch_coverage=None,
+            score=0.85,
+            metric_sources={"score": "computed_verilator_point_counts"},
+        )
+
+        assert report.line_coverage is None
+        assert report.score == pytest.approx(0.85)
+        assert report.metric_sources == {"score": "computed_verilator_point_counts"}
+
 
 class TestPipelineConfig:
     def test_defaults(self):
         config = PipelineConfig()
         assert config.coverage_target == 0.8
-        assert config.max_iterations == 5
         assert config.lint_enabled is True
         assert config.simulation_timeout == 300
-        assert config.llm_provider is None
+
+    def test_removed_generation_controls_are_not_part_of_the_contract(self):
+        config = PipelineConfig()
+
+        for removed_field in (
+            "max_iterations",
+            "llm_provider",
+            "generate_test_plan",
+            "generate_testbench",
+        ):
+            assert not hasattr(config, removed_field)
 
 
 class TestPipelineResult:
@@ -92,6 +137,27 @@ class TestPipelineResult:
         assert result.get_step("lint") is lint
         assert result.get_step("simulate") is sim
         assert result.get_step("nonexistent") is None
+
+    def test_all_passed_evaluates_required_gates_only(self):
+        result = PipelineResult(
+            pipeline_id="pipe-gates",
+            steps=[
+                StepResult("simulate", StepStatus.PASSED, 0.1),
+                StepResult(
+                    "iteration_stall",
+                    StepStatus.SKIPPED,
+                    0.0,
+                    required=False,
+                ),
+            ],
+            final_coverage=None,
+            iterations_used=1,
+            total_duration_seconds=0.1,
+            success=False,
+        )
+
+        assert result.all_passed() is True
+        assert result.to_dict()["steps"][1]["required"] is False
 
     def test_to_dict(self):
         lint = StepResult("lint", StepStatus.PASSED, 1.0, warnings=["minor"])
@@ -121,3 +187,26 @@ class TestPipelineResult:
         )
         d = result.to_dict()
         assert d["final_coverage"] is None
+
+    def test_to_dict_preserves_unavailable_coverage_and_provenance(self):
+        result = PipelineResult(
+            pipeline_id="pipe-aggregate",
+            steps=[],
+            final_coverage=CoverageReport(
+                line_coverage=None,
+                toggle_coverage=None,
+                branch_coverage=None,
+                score=0.85,
+                metric_sources={"score": "computed_verilator_point_counts"},
+            ),
+            iterations_used=1,
+            total_duration_seconds=1.0,
+            success=False,
+        )
+
+        coverage = result.to_dict()["final_coverage"]
+        assert coverage["line_coverage"] is None
+        assert coverage["score"] == pytest.approx(0.85)
+        assert coverage["metric_sources"] == {
+            "score": "computed_verilator_point_counts"
+        }

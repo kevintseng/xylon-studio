@@ -130,7 +130,7 @@ async def test_coverage_step_success(mock_sandbox, rtl_file, tb_file):
         'stderr': '',
         'vcd_file': None,
         'coverage_data': {
-            'raw_report': 'Total coverage (80/100) 80.00%',
+            'raw_report': 'Coverage Summary:\n  toggle : 80.0% (80/100)',
             'summary': 'Coverage report',
             'success': True,
         },
@@ -141,10 +141,14 @@ async def test_coverage_step_success(mock_sandbox, rtl_file, tb_file):
 
     assert step_result.step_name == 'coverage'
     assert step_result.status == StepStatus.PASSED
-    assert abs(coverage_report.line_coverage - 0.80) < 0.01
-    # Score uses weighted average from CoverageReport.DEFAULT_WEIGHTS (0.4/0.3/0.3)
-    # 0.80 * (0.4 + 0.3 + 0.3) = 0.80
-    assert abs(coverage_report.score - 0.80) < 0.01
+    assert coverage_report.line_coverage is None
+    assert coverage_report.toggle_coverage == pytest.approx(0.80)
+    assert coverage_report.branch_coverage is None
+    assert coverage_report.score == pytest.approx(0.80)
+    assert coverage_report.metric_sources == {
+        "toggle_coverage": "verilator_summary",
+        "score": "computed_verilator_point_counts",
+    }
 
 
 @pytest.mark.asyncio
@@ -163,4 +167,4 @@ async def test_coverage_step_sim_failed(mock_sandbox, rtl_file, tb_file):
 
     assert step_result.step_name == 'coverage'
     assert step_result.status == StepStatus.FAILED
-    assert coverage_report.score == 0.0
+    assert coverage_report.score is None

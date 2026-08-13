@@ -4,50 +4,67 @@ import asyncio
 import logging
 import re
 
-from agent.pipeline.models import CoverageReport, StepResult, StepStatus
+from agent.pipeline.models import CoverageReport, FailureKind, StepResult, StepStatus
 from agent.sandbox.manager import SandboxManager
 
 logger = logging.getLogger(__name__)
 
 
-def _parse_coverage_metrics(raw_output: str) -> tuple[float, float, float]:
+def _parse_coverage_metrics(raw_output: str) -> CoverageReport:
     """
-    Parse coverage metrics from verilator_coverage output.
+    Parse only coverage metrics explicitly reported by Verilator.
 
-    Verilator outputs: "Total coverage (N/M) X.XX%" from --annotate stderr.
-    Also parses annotated source lines (%NNNNNN) to estimate line coverage.
+    ``verilator_coverage --annotate`` reports an aggregate total but does not
+    identify that total as line, toggle, or branch coverage. Those dimensions
+    therefore remain unavailable until type-specific evidence is collected.
 
-    Returns: (line_coverage, toggle_coverage, branch_coverage) as floats 0.0-1.0
+    Returns:
+        CoverageReport with nullable dimensions and metric provenance.
     """
-    total_cov = 0.0
+    line_coverage = None
+    toggle_coverage = None
+    branch_coverage = None
+    score = None
+    metric_sources = {}
 
-    # Parse "Total coverage (N/M) X.XX%" from verilator_coverage --annotate
-    total_match = re.search(r'Total coverage\s+\((\d+)/(\d+)\)\s+([\d.]+)%', raw_output)
-    if total_match:
-        covered = int(total_match.group(1))
-        total = int(total_match.group(2))
-        if total > 0:
-            total_cov = covered / total
+    summary_pattern = re.compile(
+        r"^\s*(line|toggle|branch|expr|fsm_state|fsm_arc)\s*:\s*"
+        r"[\d.]+%\s*\(\s*(\d+)\s*/\s*(\d+)\s*\)",
+        re.MULTILINE,
+    )
+    total_covered = 0
+    total_points = 0
+    for metric, covered_text, total_text in summary_pattern.findall(raw_output):
+        covered = int(covered_text)
+        total = int(total_text)
+        if total == 0:
+            continue
 
-    # Parse annotated lines to estimate line coverage
-    # Lines with %000000 are uncovered, %NNNNNN (N>0) are covered
-    covered_lines = 0
-    total_lines = 0
-    for line in raw_output.split('\n'):
-        ann_match = re.match(r'^%(\d{6})', line.strip())
-        if ann_match:
-            total_lines += 1
-            if int(ann_match.group(1)) > 0:
-                covered_lines += 1
+        value = covered / total
+        total_covered += covered
+        total_points += total
+        if metric == "line":
+            line_coverage = value
+            metric_sources["line_coverage"] = "verilator_summary"
+        elif metric == "toggle":
+            toggle_coverage = value
+            metric_sources["toggle_coverage"] = "verilator_summary"
+        elif metric == "branch":
+            branch_coverage = value
+            metric_sources["branch_coverage"] = "verilator_summary"
 
-    line_cov = (covered_lines / total_lines) if total_lines > 0 else total_cov
+    if total_points > 0:
+        score = total_covered / total_points
+        metric_sources["score"] = "computed_verilator_point_counts"
 
-    # Verilator doesn't separate toggle/branch in summary output.
-    # Use total coverage as approximation for toggle and branch.
-    toggle_cov = total_cov
-    branch_cov = total_cov
-
-    return line_cov, toggle_cov, branch_cov
+    return CoverageReport(
+        line_coverage=line_coverage,
+        toggle_coverage=toggle_coverage,
+        branch_coverage=branch_coverage,
+        score=score,
+        raw_output=raw_output,
+        metric_sources=metric_sources,
+    )
 
 
 def _compute_coverage_score(
@@ -69,6 +86,7 @@ async def run_coverage_step(
     tb_file: str,
     sandbox: SandboxManager | None = None,
     timeout: int = 300,
+    simulation_result: dict | None = None,
 ) -> tuple[StepResult, CoverageReport]:
     """
     Run Verilator simulation with coverage collection.
@@ -82,79 +100,113 @@ async def run_coverage_step(
     Returns:
         Tuple of (StepResult, CoverageReport)
     """
-    if sandbox is None:
+    if sandbox is None and simulation_result is None:
         sandbox = SandboxManager()
 
     logger.info(f"[COV] Starting coverage analysis: RTL={rtl_file}, TB={tb_file}")
 
     try:
-        with open(rtl_file, encoding='utf-8') as f:
-            rtl_code = f.read()
-        with open(tb_file, encoding='utf-8') as f:
-            tb_code = f.read()
+        if simulation_result is None:
+            with open(rtl_file, encoding='utf-8') as f:
+                rtl_code = f.read()
+            with open(tb_file, encoding='utf-8') as f:
+                tb_code = f.read()
 
-        # Run simulation with coverage enabled
-        result = await asyncio.to_thread(
-            sandbox.run_verilator_sim_string,
-            rtl_code,
-            tb_code,
-            timeout=timeout,
-            coverage=True,
-        )
+            # Standalone coverage remains available for callers without a
+            # coverage-enabled simulation result to reuse.
+            result = await asyncio.to_thread(
+                sandbox.run_verilator_sim_string,
+                rtl_code,
+                tb_code,
+                timeout=timeout,
+                coverage=True,
+            )
+            duration_seconds = result.get('duration_seconds', 0)
+        else:
+            result = simulation_result
+            duration_seconds = 0.0
 
         sim_success = result.get('success', False)
 
         if not sim_success:
             logger.error("[COV] Simulation failed, no coverage data")
+            raw_failure_kind = result.get('failure_kind')
+            failure_kind = (
+                FailureKind(raw_failure_kind)
+                if raw_failure_kind
+                else FailureKind.CONFIGURATION
+            )
             step_result = StepResult(
                 step_name="coverage",
                 status=StepStatus.FAILED,
-                duration_seconds=result.get('duration_seconds', 0),
+                duration_seconds=duration_seconds,
                 output={},
                 errors=["Simulation failed before coverage collection"],
+                failure_kind=failure_kind,
+                recovery_code=(
+                    "repair_toolchain"
+                    if failure_kind == FailureKind.INFRASTRUCTURE
+                    else "correct_testbench"
+                ),
             )
             empty_report = CoverageReport(
-                line_coverage=0.0,
-                toggle_coverage=0.0,
-                branch_coverage=0.0,
-                score=0.0,
+                line_coverage=None,
+                toggle_coverage=None,
+                branch_coverage=None,
+                score=None,
             )
             return step_result, empty_report
 
         # Parse coverage data
-        coverage_data = result.get('coverage_data', {})
+        coverage_data = result.get('coverage_data') or {}
         raw_output = coverage_data.get('raw_report', '')
-
-        line_cov, toggle_cov, branch_cov = _parse_coverage_metrics(raw_output)
-        score = _compute_coverage_score(line_cov, toggle_cov, branch_cov)
-
-        report = CoverageReport(
-            line_coverage=line_cov,
-            toggle_coverage=toggle_cov,
-            branch_coverage=branch_cov,
-            score=score,
-            raw_output=raw_output,
-        )
-
-        status = StepStatus.PASSED
+        report = _parse_coverage_metrics(raw_output)
+        coverage_available = coverage_data.get('success', False) and report.score is not None
+        status = StepStatus.PASSED if coverage_available else StepStatus.FAILED
+        failure_kind = None
+        recovery_code = None
+        if not coverage_available:
+            raw_failure_kind = coverage_data.get('failure_kind')
+            failure_kind = (
+                FailureKind(raw_failure_kind)
+                if raw_failure_kind
+                else FailureKind.INCONCLUSIVE
+            )
+            recovery_code = (
+                "repair_toolchain"
+                if failure_kind == FailureKind.INFRASTRUCTURE
+                else "collect_coverage_evidence"
+            )
+        errors = [] if coverage_available else [
+            coverage_data.get('error')
+            or coverage_data.get('summary')
+            or "Coverage metrics unavailable"
+        ]
 
         step_result = StepResult(
             step_name="coverage",
             status=status,
-            duration_seconds=result.get('duration_seconds', 0),
+            duration_seconds=duration_seconds,
             output={
-                'line_coverage': f"{line_cov*100:.1f}%",
-                'toggle_coverage': f"{toggle_cov*100:.1f}%",
-                'branch_coverage': f"{branch_cov*100:.1f}%",
-                'score': f"{score*100:.1f}%",
+                'line_coverage': report.line_coverage,
+                'toggle_coverage': report.toggle_coverage,
+                'branch_coverage': report.branch_coverage,
+                'score': report.score,
+                'metric_sources': dict(report.metric_sources),
                 'summary': coverage_data.get('summary', ''),
             },
+            errors=errors,
+            failure_kind=failure_kind,
+            recovery_code=recovery_code,
         )
 
-        logger.info(
-            f"[COV] ✅ Coverage: line={line_cov*100:.1f}% toggle={toggle_cov*100:.1f}% "
-            f"branch={branch_cov*100:.1f}% score={score*100:.1f}%"
-        )
+        if report.score is not None:
+            logger.info(
+                f"[COV] Coverage aggregate={report.score*100:.1f}% "
+                f"source={report.metric_sources.get('score')}"
+            )
+        else:
+            logger.warning("[COV] Coverage metrics unavailable")
 
         return step_result, report
 
@@ -166,11 +218,13 @@ async def run_coverage_step(
             duration_seconds=0,
             output={},
             errors=[str(e)],
+            failure_kind=FailureKind.INFRASTRUCTURE,
+            recovery_code="repair_toolchain",
         )
         empty_report = CoverageReport(
-            line_coverage=0.0,
-            toggle_coverage=0.0,
-            branch_coverage=0.0,
-            score=0.0,
+            line_coverage=None,
+            toggle_coverage=None,
+            branch_coverage=None,
+            score=None,
         )
         return step_result, empty_report

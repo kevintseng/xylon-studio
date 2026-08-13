@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd -- "${script_dir}/.." && pwd)"
+compose_file="${repo_root}/compose.eda.yaml"
+versions_file="${repo_root}/runtime/versions.env"
+
+compose() {
+  docker compose \
+    --env-file "${versions_file}" \
+    -f "${compose_file}" \
+    --project-directory "${repo_root}" \
+    "$@"
+}
+
+case "${1:-}" in
+  up)
+    compose up --detach --wait
+    ;;
+  verify)
+    cd "${repo_root}"
+    python3 -m agent.sandbox.runtime
+    ;;
+  status)
+    compose ps
+    ;;
+  logs)
+    compose logs --tail 200
+    ;;
+  down)
+    compose down
+    ;;
+  *)
+    echo "Usage: scripts/eda-runtime {up|verify|status|logs|down}" >&2
+    exit 2
+    ;;
+esac
