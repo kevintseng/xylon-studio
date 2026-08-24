@@ -13,7 +13,10 @@ import {
 import path from 'node:path'
 
 import { parseOrfsTimingReport, TIMING_REPORT_LIMIT_BYTES } from './timing-report.mjs'
-import { TIMING_FLOW_RECIPE } from './timing-recipe.mjs'
+import {
+  TIMING_CANDIDATE_FLOW_RECIPE,
+  TIMING_FLOW_RECIPE,
+} from './timing-recipe.mjs'
 
 export const TIMING_RUN_ID_PATTERN = /^[a-f0-9]{32}$/
 const INPUT_RTL_LIMIT = 2 * 1024 * 1024
@@ -96,31 +99,64 @@ export async function sha256File(filePath) {
   return digest.digest('hex')
 }
 
-function renderConfig(topModule, cpus) {
+function requireFlowRecipe(flowRecipe) {
+  if (flowRecipe !== TIMING_FLOW_RECIPE && flowRecipe !== TIMING_CANDIDATE_FLOW_RECIPE) {
+    throw new Error('TimingInputInvalid: flow recipe is outside the supported baseline and approved candidate set')
+  }
+  return flowRecipe
+}
+
+function requireRunContext(runContext, flowRecipe) {
+  if (runContext === undefined || runContext === null) {
+    if (flowRecipe !== TIMING_FLOW_RECIPE) {
+      throw new Error('TimingInputInvalid: candidate flow requires an approved run context')
+    }
+    return { run_purpose: 'baseline' }
+  }
+  if (flowRecipe !== TIMING_CANDIDATE_FLOW_RECIPE
+      || runContext.run_purpose !== 'candidate'
+      || !TIMING_RUN_ID_PATTERN.test(runContext.parent_run_id ?? '')
+      || !/^[a-f0-9]{64}$/.test(runContext.proposal_id ?? '')
+      || !/^[a-f0-9]{32,64}$/.test(runContext.confirmation_id ?? '')
+      || !/^[a-f0-9]{64}$/.test(runContext.candidate_recipe_sha256 ?? '')) {
+    throw new Error('TimingInputInvalid: candidate run context is incomplete or invalid')
+  }
+  return { ...runContext }
+}
+
+function renderConfig(topModule, cpus, flowRecipe) {
   if (!Number.isInteger(cpus) || cpus < 1 || cpus > 4) {
     throw new Error('TimingInputInvalid: staged CPU budget must be an integer from 1 to 4')
   }
   return [
     `export DESIGN_NAME = ${topModule}`,
     `export DESIGN_NICKNAME = ${topModule}`,
-    `export PLATFORM = ${TIMING_FLOW_RECIPE.platform}`,
+    `export PLATFORM = ${flowRecipe.platform}`,
     'export VERILOG_FILES = /work/inputs/design.v',
     'export SDC_FILE = /work/inputs/effective.sdc',
     `export NUM_CORES = ${cpus}`,
-    `export CORE_UTILIZATION = ${TIMING_FLOW_RECIPE.coreUtilizationPercent}`,
-    `export CORE_ASPECT_RATIO = ${TIMING_FLOW_RECIPE.coreAspectRatio.toFixed(1)}`,
-    `export CORE_MARGIN = ${TIMING_FLOW_RECIPE.coreMarginMicrons}`,
-    `export PLACE_DENSITY = ${TIMING_FLOW_RECIPE.placeDensity.toFixed(2)}`,
-    `export TNS_END_PERCENT = ${TIMING_FLOW_RECIPE.tnsEndPercent}`,
-    `export SKIP_CTS_REPAIR_TIMING = ${TIMING_FLOW_RECIPE.skipCtsRepairTiming ? 1 : 0}`,
-    `export LEC_CHECK = ${TIMING_FLOW_RECIPE.lecCheck ? 1 : 0}`,
-    `export FLOW_VARIANT = ${TIMING_FLOW_RECIPE.variant}`,
+    `export CORE_UTILIZATION = ${flowRecipe.coreUtilizationPercent}`,
+    `export CORE_ASPECT_RATIO = ${flowRecipe.coreAspectRatio.toFixed(1)}`,
+    `export CORE_MARGIN = ${flowRecipe.coreMarginMicrons}`,
+    `export PLACE_DENSITY = ${flowRecipe.placeDensity.toFixed(2)}`,
+    `export TNS_END_PERCENT = ${flowRecipe.tnsEndPercent}`,
+    `export SKIP_CTS_REPAIR_TIMING = ${flowRecipe.skipCtsRepairTiming ? 1 : 0}`,
+    `export LEC_CHECK = ${flowRecipe.lecCheck ? 1 : 0}`,
+    `export FLOW_VARIANT = ${flowRecipe.variant}`,
     '',
   ].join('\n')
 }
 
-export async function createTimingRunWorkspace({ repoRoot, validatedInput, runId = createTimingRunId() }) {
+export async function createTimingRunWorkspace({
+  repoRoot,
+  validatedInput,
+  runId = createTimingRunId(),
+  flowRecipe = TIMING_FLOW_RECIPE,
+  runContext,
+}) {
   assertRunId(runId)
+  const selectedFlowRecipe = requireFlowRecipe(flowRecipe)
+  const selectedRunContext = requireRunContext(runContext, selectedFlowRecipe)
   const root = await realpath(path.resolve(repoRoot))
   const runsRoot = path.join(root, '.xylon', 'timing', 'runs')
   await rejectSymlinkSegments(root, runsRoot)
@@ -137,7 +173,7 @@ export async function createTimingRunWorkspace({ repoRoot, validatedInput, runId
   await writePrivateFile(path.join(runDir, 'inputs', 'effective.sdc'), validatedInput.effective_sdc, INPUT_SDC_LIMIT)
   await writePrivateFile(
     path.join(runDir, 'design', 'config.mk'),
-    renderConfig(validatedInput.top_module, validatedInput.resource_limits?.cpus),
+    renderConfig(validatedInput.top_module, validatedInput.resource_limits?.cpus, selectedFlowRecipe),
     64 * 1024,
   )
   const identity = {
@@ -147,6 +183,9 @@ export async function createTimingRunWorkspace({ repoRoot, validatedInput, runId
     created_at: new Date().toISOString(),
     top_module: validatedInput.top_module,
     platform: validatedInput.platform,
+    source_revision: validatedInput.source_revision ?? null,
+    flow_recipe_version: selectedFlowRecipe.version,
+    ...selectedRunContext,
     clock: validatedInput.clock,
     identities: validatedInput.identities,
     resource_limits: validatedInput.resource_limits ?? null,
@@ -197,12 +236,21 @@ export async function readBaselineArtifacts({ runDir, topModule }) {
   return { metrics, artifacts: { report, checkpoint, effective_sdc: effectiveSdc } }
 }
 
-export async function persistBaselineResult({ runDir, identity, result, runtime, cleanup }) {
-  const baseline = {
+export async function persistTimingResult({ runDir, identity, result, runtime, cleanup }) {
+  const isCandidate = identity.run_purpose === 'candidate'
+  const timingResult = {
     schema_version: 1,
     run_id: identity.run_id,
-    state: 'baseline_ready',
+    state: isCandidate ? 'candidate_ready' : 'baseline_ready',
     completed_at: new Date().toISOString(),
+    source_revision: identity.source_revision ?? null,
+    flow_recipe_version: identity.flow_recipe_version,
+    run_purpose: identity.run_purpose,
+    ...(isCandidate && {
+      parent_run_id: identity.parent_run_id,
+      proposal_id: identity.proposal_id,
+      confirmation_id: identity.confirmation_id,
+    }),
     platform: identity.platform,
     top_module: identity.top_module,
     clock: identity.clock,
@@ -212,8 +260,9 @@ export async function persistBaselineResult({ runDir, identity, result, runtime,
     runtime,
     cleanup,
   }
-  await writeJsonAtomic(path.join(runDir, 'baseline', 'metrics.json'), result.metrics)
-  await writeJsonAtomic(path.join(runDir, 'baseline', 'manifest.json'), baseline)
-  await writeJsonAtomic(path.join(runDir, 'manifest.json'), { ...identity, ...baseline })
-  return baseline
+  const resultDirectory = isCandidate ? 'candidate' : 'baseline'
+  await writeJsonAtomic(path.join(runDir, resultDirectory, 'metrics.json'), result.metrics)
+  await writeJsonAtomic(path.join(runDir, resultDirectory, 'manifest.json'), timingResult)
+  await writeJsonAtomic(path.join(runDir, 'manifest.json'), { ...identity, ...timingResult })
+  return timingResult
 }

@@ -9,6 +9,7 @@ import {
   readBaselineArtifacts,
   writeJsonAtomic,
 } from '../timing-artifacts.mjs'
+import { TIMING_CANDIDATE_FLOW_RECIPE } from '../timing-recipe.mjs'
 
 const INPUT = {
   rtl: 'module demo(input clk, input d, output reg q); always @(posedge clk) q <= d; endmodule\n',
@@ -62,6 +63,41 @@ test('rejects staging without the same bounded CPU budget used by the runtime', 
       runId: '8'.repeat(32),
     }),
     /CPU budget must be an integer from 1 to 4/,
+  )
+})
+
+test('stages only the approved candidate recipe with exact parent confirmation binding', async (context) => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'xylon-timing-artifacts-'))
+  context.after(() => rm(repoRoot, { recursive: true, force: true }))
+  const workspace = await createTimingRunWorkspace({
+    repoRoot,
+    validatedInput: { ...INPUT, source_revision: 'f'.repeat(40) },
+    runId: '9'.repeat(32),
+    flowRecipe: TIMING_CANDIDATE_FLOW_RECIPE,
+    runContext: {
+      run_purpose: 'candidate',
+      parent_run_id: '8'.repeat(32),
+      proposal_id: '7'.repeat(64),
+      confirmation_id: '6'.repeat(32),
+      candidate_recipe_sha256: '5'.repeat(64),
+    },
+  })
+  const config = await readFile(path.join(workspace.runDir, 'design', 'config.mk'), 'utf8')
+  assert.match(config, /PLACE_DENSITY = 0\.65/)
+  assert.match(config, /CORE_UTILIZATION = 35/)
+  const identity = JSON.parse(await readFile(path.join(workspace.runDir, 'identity.json'), 'utf8'))
+  assert.equal(identity.state, 'input_staged')
+  assert.equal(identity.run_purpose, 'candidate')
+  assert.equal(identity.parent_run_id, '8'.repeat(32))
+  assert.equal(identity.source_revision, 'f'.repeat(40))
+  await assert.rejects(
+    createTimingRunWorkspace({
+      repoRoot,
+      validatedInput: INPUT,
+      runId: '4'.repeat(32),
+      flowRecipe: TIMING_CANDIDATE_FLOW_RECIPE,
+    }),
+    /approved run context/,
   )
 })
 

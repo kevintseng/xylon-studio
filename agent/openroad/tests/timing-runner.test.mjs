@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { analyzeTimingDesign, classifyTimingFailure, executeTimingBatch } from '../timing-runner.mjs'
+import { classifyTimingFailure, executeTimingBatch, runTimingDesign } from '../timing-runner.mjs'
 
 const VALIDATED = {
   rtl: 'module demo(input clk, input d, output reg q); always @(posedge clk) q <= d; endmodule\n',
@@ -50,9 +50,10 @@ async function writeFakeBaseline(runDir) {
 test('real boundary candidate becomes baseline_ready only after artifact and cleanup readback', async (context) => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'xylon-timing-runner-'))
   context.after(() => rm(repoRoot, { recursive: true, force: true }))
-  const result = await analyzeTimingDesign({}, {
+  const result = await runTimingDesign({}, {
     repoRoot,
     runId: '4'.repeat(32),
+    sourceRevision: 'f'.repeat(40),
     ...dependencies({
       executeBatch: async ({ runDir }) => {
         await writeFakeBaseline(runDir)
@@ -60,8 +61,9 @@ test('real boundary candidate becomes baseline_ready only after artifact and cle
       },
     }),
   })
-  assert.equal(result.baseline.state, 'baseline_ready')
-  assert.equal(result.baseline.metrics.wns, -0.1)
+  assert.equal(result.timing_result.state, 'baseline_ready')
+  assert.equal(result.timing_result.source_revision, 'f'.repeat(40))
+  assert.equal(result.timing_result.metrics.wns, -0.1)
   const manifest = JSON.parse(await readFile(path.join(result.run_dir, 'manifest.json'), 'utf8'))
   assert.equal(manifest.cleanup.verified, true)
 })
@@ -70,7 +72,7 @@ test('successful tool exit remains blocked when exact cleanup is unverified', as
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'xylon-timing-runner-'))
   context.after(() => rm(repoRoot, { recursive: true, force: true }))
   await assert.rejects(
-    analyzeTimingDesign({}, {
+    runTimingDesign({}, {
       repoRoot,
       runId: '5'.repeat(32),
       ...dependencies({
@@ -92,7 +94,7 @@ test('missing ORFS artifacts never become a timing baseline', async (context) =>
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'xylon-timing-runner-'))
   context.after(() => rm(repoRoot, { recursive: true, force: true }))
   await assert.rejects(
-    analyzeTimingDesign({}, {
+    runTimingDesign({}, {
       repoRoot,
       runId: '6'.repeat(32),
       ...dependencies({ executeBatch: async () => ({ code: 0, timed_out: false, log_limit_exceeded: false }) }),
@@ -105,7 +107,7 @@ test('resource admission rejects before any run directory is created', async (co
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'xylon-timing-runner-'))
   context.after(() => rm(repoRoot, { recursive: true, force: true }))
   await assert.rejects(
-    analyzeTimingDesign({}, {
+    runTimingDesign({}, {
       repoRoot,
       ...dependencies({ checkAdmission: async () => ({ ready: false, blockers: ['memory low'], resource: {} }) }),
     }),

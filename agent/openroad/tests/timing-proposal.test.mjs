@@ -12,6 +12,7 @@ function baseline(overrides = {}) {
   return {
     state: 'baseline_ready',
     run_id: 'a'.repeat(32),
+    source_revision: 'e'.repeat(40),
     platform: 'sky130hd',
     identities: {
       design_platform_sha256: 'b'.repeat(64),
@@ -41,6 +42,7 @@ test('builds one expiring physical repair proposal bound to exact baseline evide
   assert.equal(proposal.state, 'awaiting_confirmation')
   assert.equal(proposal.expires_at, '2026-08-25T00:10:00.000Z')
   assert.equal(proposal.binding.baseline_run_id, current.run_id)
+  assert.equal(proposal.binding.source_revision, current.source_revision)
   assert.equal(proposal.binding.checkpoint_sha256, current.artifacts.checkpoint.sha256)
   assert.deepEqual(
     {
@@ -64,6 +66,8 @@ test('proposal identity changes with baseline evidence and rejects tampering', (
     artifacts: { checkpoint: { sha256: 'e'.repeat(64) }, report: { sha256: 'd'.repeat(64) } },
   }), { now })
   assert.notEqual(first.proposal_id, second.proposal_id)
+  const otherRevision = buildTimingRepairProposal(baseline({ source_revision: 'f'.repeat(40) }), { now })
+  assert.notEqual(first.proposal_id, otherRevision.proposal_id)
   assert.throws(
     () => assertProposalMatchesBaseline({ ...first, action: { ...first.action, to: 0.9 } }, baseline(), { now }),
     /content does not match/,
@@ -97,4 +101,5 @@ test('fails closed for clean, stale-recipe, expired, or unsupported baselines', 
     /confirmation window has closed/,
   )
   assert.throws(() => buildTimingRepairProposal(baseline({ platform: 'asap7' }), { now }), /only sky130hd/)
+  assert.throws(() => buildTimingRepairProposal(baseline({ source_revision: 'not-a-revision' }), { now }), /source revision is invalid/)
 })

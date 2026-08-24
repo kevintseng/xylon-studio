@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process'
 
 import {
   createTimingRunWorkspace,
-  persistBaselineResult,
+  persistTimingResult,
   readBaselineArtifacts,
   writeJsonAtomic,
 } from './timing-artifacts.mjs'
@@ -197,7 +197,7 @@ async function persistBlocked(runDir, identity, failure, runtime, cleanup) {
   return blocked
 }
 
-export async function analyzeTimingDesign(rawInput, {
+export async function runTimingDesign(rawInput, {
   repoRoot,
   requestedCpus = process.env.XYLON_OPENROAD_CPUS ?? '1',
   timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -206,13 +206,19 @@ export async function analyzeTimingDesign(rawInput, {
   acquireLease = (options) => acquireServerLease(options),
   executeBatch = executeTimingBatch,
   runtimeFactory = createTimingRuntimeOwnership,
+  createWorkspace = createTimingRunWorkspace,
+  sourceRevision = process.env.XYLON_SOURCE_REVISION ?? null,
+  runContext,
   runId,
 } = {}) {
   if (!repoRoot) throw new TimingRunError('RepositoryRequired', 'Repository root is required', 'Run the timing command from a Xylon checkout.')
   const canonicalRepoRoot = await realpath(path.resolve(repoRoot))
   const cpus = parseOpenROADCpuBudget(requestedCpus)
   if (cpus === null) throw new TimingRunError('InvalidCpuBudget', 'OpenROAD CPU budget must be an integer from 1 to 4', 'Set XYLON_OPENROAD_CPUS to 1, 2, 3, or 4.')
-  const validated = validateInput(rawInput)
+  if (sourceRevision !== null && !/^[a-f0-9]{40}$/.test(sourceRevision)) {
+    throw new TimingRunError('InvalidSourceRevision', 'Source revision must be an exact 40-character Git SHA', 'Use the exact checked-out source revision or omit it for an unbound local run.')
+  }
+  const validated = { ...validateInput(rawInput), source_revision: sourceRevision }
   const admission = await checkAdmission({ repoRoot: canonicalRepoRoot, requestedCpus: String(cpus) })
   if (!admission.ready) {
     throw new TimingRunError(
@@ -222,12 +228,13 @@ export async function analyzeTimingDesign(rawInput, {
       { blockers: admission.blockers, resource: admission.resource },
     )
   }
-  const staged = await createTimingRunWorkspace({
+  const staged = await createWorkspace({
     repoRoot: canonicalRepoRoot,
     validatedInput: {
       ...validated,
       resource_limits: { cpus, memory_gib: 8, pids: 256, network: 'none' },
     },
+    ...(runContext && { runContext }),
     ...(runId && { runId }),
   })
   const repoId = createHash('sha256').update(canonicalRepoRoot).digest('hex')
@@ -270,7 +277,7 @@ export async function analyzeTimingDesign(rawInput, {
   if (!runtime || runtime.code !== 0 || runtime.timed_out || runtime.log_limit_exceeded) {
     const failure = classifyTimingFailure(runtime ?? {})
     await persistBlocked(staged.runDir, staged.identity, failure, runtime, cleanup)
-    throw new TimingRunError(failure.code, 'Pinned ORFS timing baseline failed', failure.recovery, { run_id: staged.runId })
+    throw new TimingRunError(failure.code, 'Pinned ORFS timing run failed', failure.recovery, { run_id: staged.runId })
   }
   let result
   try {
@@ -280,6 +287,6 @@ export async function analyzeTimingDesign(rawInput, {
     await persistBlocked(staged.runDir, staged.identity, failure, runtime, cleanup)
     throw new TimingRunError(failure.code, error instanceof Error ? error.message : String(error), failure.recovery, { run_id: staged.runId })
   }
-  const baseline = await persistBaselineResult({ runDir: staged.runDir, identity: staged.identity, result, runtime, cleanup })
-  return { run_id: staged.runId, run_dir: staged.runDir, baseline }
+  const timingResult = await persistTimingResult({ runDir: staged.runDir, identity: staged.identity, result, runtime, cleanup })
+  return { run_id: staged.runId, run_dir: staged.runDir, timing_result: timingResult }
 }

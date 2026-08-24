@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { createTimingRunWorkspace, persistBaselineResult } from '../timing-artifacts.mjs'
+import { createTimingRunWorkspace, persistTimingResult } from '../timing-artifacts.mjs'
 import { TIMING_REPORT_RECIPE_SHA256 } from '../timing-contract.mjs'
 import {
   acceptExternalTimingConfirmation,
@@ -34,7 +34,7 @@ async function baselineRun(context) {
     validatedInput: INPUT,
     runId: '1'.repeat(32),
   })
-  await persistBaselineResult({
+  await persistTimingResult({
     runDir: staged.runDir,
     identity: staged.identity,
     result: {
@@ -119,6 +119,6 @@ test('confirmation fails closed without external verifier or with wrong actor an
         actor_class: 'agent',
       }),
     }),
-    /only the local human timing UI/,
+    /confirmation principal and source are not supported/,
   )
 })
