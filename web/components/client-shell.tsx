@@ -1,6 +1,6 @@
 'use client'
 
-import { ReactNode, useEffect, useState } from 'react'
+import { ReactNode, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { I18nProvider, useI18n } from '@/lib/i18n'
 import { LanguageSwitcher } from '@/components/language-switcher'
@@ -8,11 +8,15 @@ import { LanguageSwitcher } from '@/components/language-switcher'
 function Header() {
   const { t } = useI18n()
   const [mobileOpen, setMobileOpen] = useState(false)
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     if (!mobileOpen) return
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMobileOpen(false)
+      if (event.key === 'Escape') {
+        setMobileOpen(false)
+        requestAnimationFrame(() => menuButtonRef.current?.focus())
+      }
     }
     document.addEventListener('keydown', closeOnEscape)
     return () => document.removeEventListener('keydown', closeOnEscape)
@@ -44,6 +48,7 @@ function Header() {
         <div className="flex items-center gap-2 md:hidden">
           <LanguageSwitcher />
           <button
+            ref={menuButtonRef}
             type="button"
             onClick={() => setMobileOpen((open) => !open)}
             aria-expanded={mobileOpen}

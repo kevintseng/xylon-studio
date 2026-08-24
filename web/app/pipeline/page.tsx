@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback, useMemo } from 'react'
 import { useI18n } from '@/lib/i18n'
 import {
+  getPipelineCloseErrorKey,
   requestPipelineCancellation,
   resolveLocalApiUrl,
 } from '@/lib/pipeline-client'
@@ -106,6 +107,7 @@ export default function PipelinePage() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const stepStartRef = useRef<number>(0)
+  const terminalMessageRef = useRef(false)
 
   const requestedStepNames = useMemo(
     () => PIPELINE_STEP_ORDER.filter((name) => {
@@ -139,9 +141,18 @@ export default function PipelinePage() {
     setExpandedStep(null)
   }, [running])
 
-  const finishRun = useCallback(() => {
-    if (wsRef.current) {
-      wsRef.current.close()
+  const finishRun = useCallback((socketToClose?: WebSocket) => {
+    const socket = socketToClose ?? wsRef.current
+    if (socket) {
+      socket.onopen = null
+      socket.onmessage = null
+      socket.onerror = null
+      socket.onclose = null
+      if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) {
+        socket.close()
+      }
+    }
+    if (!socketToClose || wsRef.current === socketToClose) {
       wsRef.current = null
     }
     if (timerRef.current) {
@@ -177,6 +188,7 @@ export default function PipelinePage() {
     setActiveStep(null)
     setExpandedStep(null)
     setSubmittedCoverageTarget(coverageTarget)
+    terminalMessageRef.current = false
 
     // Start elapsed timer
     const startTime = Date.now()
@@ -213,8 +225,9 @@ export default function PipelinePage() {
       try {
         data = JSON.parse(event.data)
       } catch {
+        terminalMessageRef.current = true
         setError(t('pipeline.error.connection'))
-        finishRun()
+        finishRun(ws)
         return
       }
 
@@ -243,21 +256,27 @@ export default function PipelinePage() {
           return updated
         })
       } else if (data.type === 'pipeline_complete') {
+        terminalMessageRef.current = true
         setResult(data.result as PipelineResult)
-        finishRun()
+        finishRun(ws)
       } else if (data.type === 'error') {
+        terminalMessageRef.current = true
         setError(String(data.message ?? 'Unknown error'))
-        finishRun()
+        finishRun(ws)
       }
     }
 
     ws.onerror = () => {
+      terminalMessageRef.current = true
       setError(t('pipeline.error.connection'))
-      finishRun()
+      finishRun(ws)
     }
 
     ws.onclose = () => {
-      finishRun()
+      if (wsRef.current !== ws) return
+      const errorKey = getPipelineCloseErrorKey(terminalMessageRef.current)
+      if (errorKey) setError(t(errorKey))
+      finishRun(ws)
     }
   }, [rtlCode, testbenchCode, coverageTarget, lintEnabled, synthesisEnabled, simulationTimeout, finishRun, requestedStepNames, t])
 

@@ -19,3 +19,9 @@ export function requestPipelineCancellation(
   socket.send(JSON.stringify({ type: 'cancel' }))
   return true
 }
+
+export function getPipelineCloseErrorKey(
+  terminalMessageReceived: boolean,
+): 'pipeline.error.interrupted' | null {
+  return terminalMessageReceived ? null : 'pipeline.error.interrupted'
+}

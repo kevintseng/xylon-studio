@@ -141,3 +141,41 @@ test('Traditional Chinese dictionary covers the complete outcome and recovery su
     )
   }
 })
+
+test('production UX exposes interruption, locale, focus, labels, and reduced-motion contracts', () => {
+  const layoutSource = readFileSync(
+    new URL('../app/layout.tsx', import.meta.url),
+    'utf8',
+  )
+  const pipelinePage = readFileSync(
+    new URL('../app/pipeline/page.tsx', import.meta.url),
+    'utf8',
+  )
+  const bugReport = readFileSync(
+    new URL('../components/bug-report.tsx', import.meta.url),
+    'utf8',
+  )
+  const clientShell = readFileSync(
+    new URL('../components/client-shell.tsx', import.meta.url),
+    'utf8',
+  )
+  const styles = readFileSync(
+    new URL('../app/globals.css', import.meta.url),
+    'utf8',
+  )
+  const i18nSource = readFileSync(new URL('./i18n.tsx', import.meta.url), 'utf8')
+
+  assert.match(layoutSource, /xylon-locale/)
+  assert.match(layoutSource, /suppressHydrationWarning/)
+  assert.match(pipelinePage, /getPipelineCloseErrorKey/)
+  assert.equal(
+    i18nSource.match(/'pipeline\.error\.interrupted'/g)?.length,
+    2,
+  )
+  assert.match(bugReport, /htmlFor="bug-description"/)
+  assert.match(bugReport, /id="bug-description"/)
+  assert.match(bugReport, /aria-pressed=/)
+  assert.match(bugReport, /triggerRef\.current\?\.focus/)
+  assert.match(clientShell, /menuButtonRef\.current\?\.focus/)
+  assert.match(styles, /prefers-reduced-motion:\s*reduce/)
+})

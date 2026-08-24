@@ -2,9 +2,18 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  getPipelineCloseErrorKey,
   requestPipelineCancellation,
   resolveLocalApiUrl,
 } from './pipeline-client.ts'
+
+test('socket close is truthful only after a canonical terminal message', () => {
+  assert.equal(getPipelineCloseErrorKey(true), null)
+  assert.equal(
+    getPipelineCloseErrorKey(false),
+    'pipeline.error.interrupted',
+  )
+})
 
 test('local API resolution defaults to the launcher port and preserves an explicit override', () => {
   assert.equal(resolveLocalApiUrl(undefined), 'http://127.0.0.1:5001')
