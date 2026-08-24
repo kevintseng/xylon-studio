@@ -165,6 +165,12 @@ export function classifyTimingFailure(runtimeResult) {
   if (/no clocks|clock .*not found|create_clock|sdc.*error/i.test(diagnostic)) {
     return { code: 'TimingClockConstraintInvalid', recovery: 'Provide one supported create_clock constraint whose port exists as an RTL input.' }
   }
+  if (/illegal instruction|SIGILL/i.test(diagnostic)) {
+    return {
+      code: 'TimingRuntimeCpuIncompatible',
+      recovery: 'Use a runner compatible with the pinned OpenROAD image, or update the pinned image only after the same sky130hd smoke recipe passes on the target CPU.',
+    }
+  }
   if (/GPL-0301|utilization\s+[\d.]+\s*%\s+exceeds\s+100%|floorplan|core area|placeable area|pdn.*(fail|error)|design is too small/i.test(diagnostic)) {
     return {
       code: 'TimingFloorplanCapacityExceeded',

@@ -142,3 +142,12 @@ test('classifies the exact ORFS global-placement over-capacity error as an actio
   assert.equal(failure.code, 'TimingFloorplanCapacityExceeded')
   assert.match(failure.recovery, /smaller timing block|reduce duplicated logic/)
 })
+
+test('classifies a pinned OpenROAD SIGILL before older floorplan text in the bounded log tail', () => {
+  const failure = classifyTimingFailure({
+    stderr_tail: 'Error: cts.tcl, 83 child killed: illegal instruction',
+    stdout_tail: 'Floorplan check_setup completed earlier',
+  })
+  assert.equal(failure.code, 'TimingRuntimeCpuIncompatible')
+  assert.match(failure.recovery, /compatible with the pinned OpenROAD image/)
+})
