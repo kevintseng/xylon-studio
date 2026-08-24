@@ -39,6 +39,9 @@ function Header() {
           <Link href="/" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all">
             {t('nav.home')}
           </Link>
+          <Link href="/openroad" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all">
+            {t('nav.openroad')}
+          </Link>
           <Link href="/pipeline" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all">
             {t('nav.pipeline')}
           </Link>
@@ -70,8 +73,9 @@ function Header() {
       </div>
       {mobileOpen && (
         <nav id="mobile-navigation" className="border-t border-slate-800 bg-slate-950/95 px-4 py-3 md:hidden" aria-label={t('nav.primary')}>
-          <div className="grid grid-cols-2 gap-1">
+          <div className="grid grid-cols-1 gap-1">
             <Link href="/" onClick={() => setMobileOpen(false)} className={mobileLinkClass}>{t('nav.home')}</Link>
+            <Link href="/openroad" onClick={() => setMobileOpen(false)} className={mobileLinkClass}>{t('nav.openroad')}</Link>
             <Link href="/pipeline" onClick={() => setMobileOpen(false)} className={mobileLinkClass}>{t('nav.pipeline')}</Link>
           </div>
         </nav>

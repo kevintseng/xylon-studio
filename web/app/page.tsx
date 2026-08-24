@@ -43,6 +43,12 @@ export default function Home() {
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <a
+                href="/openroad"
+                className="inline-flex min-h-11 items-center justify-center rounded-lg bg-cyan-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-cyan-600/20 transition hover:bg-cyan-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
+              >
+                {t('home.cta.openroad')} <span className="ml-2" aria-hidden="true">↗</span>
+              </a>
+              <a
                 href="/pipeline"
                 className="inline-flex min-h-11 items-center justify-center rounded-lg bg-blue-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
               >
