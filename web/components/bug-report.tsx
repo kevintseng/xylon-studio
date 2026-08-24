@@ -233,7 +233,7 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
           </p>
           <button
             onClick={onClose}
-            className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90"
+            className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
           >
             {t('common.close')}
           </button>
@@ -257,7 +257,7 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
           </h2>
           <button
             onClick={onClose}
-            className="text-muted-foreground hover:text-foreground p-1"
+            className="text-muted-foreground hover:text-foreground p-1 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
             aria-label={t('common.close')}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -307,7 +307,7 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
                   type="button"
                   onClick={() => setSeverity(s)}
                   aria-pressed={severity === s}
-                  className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${
+                  className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
                     severity === s
                       ? s === 'critical'
                         ? 'bg-red-100 border-red-300 text-red-800'
@@ -335,14 +335,14 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
                 type="button"
                 onClick={captureScreenshot}
                 disabled={capturingScreenshot}
-                className="px-3 py-1.5 border rounded-md text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50"
+                className="px-3 py-1.5 border rounded-md text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
               >
                 {capturingScreenshot ? t('bugReport.capturing') : t('bugReport.autoCapture')}
               </button>
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="px-3 py-1.5 border rounded-md text-xs font-medium hover:bg-muted transition-colors"
+                className="px-3 py-1.5 border rounded-md text-xs font-medium hover:bg-muted transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
               >
                 {t('bugReport.upload')}
               </button>
@@ -358,7 +358,7 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
                 <button
                   type="button"
                   onClick={() => setScreenshot(null)}
-                  className="px-3 py-1.5 text-xs text-red-600 hover:text-red-800"
+                  className="px-3 py-1.5 text-xs text-red-600 hover:text-red-800 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                 >
                   {t('bugReport.remove')}
                 </button>
@@ -385,7 +385,7 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
               <button
                 type="button"
                 onClick={() => setShowLogs(!showLogs)}
-                className="text-xs text-muted-foreground hover:text-foreground"
+                className="text-xs text-muted-foreground hover:text-foreground rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
               >
                 {showLogs ? t('bugReport.hide') : t('bugReport.preview')}
               </button>
@@ -411,14 +411,14 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
           <div className="flex gap-3 pt-2">
             <button
               type="submit"
-              className="flex-1 bg-primary text-primary-foreground px-4 py-2.5 rounded-md text-sm font-medium hover:opacity-90"
+              className="flex-1 bg-primary text-primary-foreground px-4 py-2.5 rounded-md text-sm font-medium hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
             >
               {t('bugReport.submit')}
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2.5 border rounded-md text-sm font-medium hover:bg-muted transition-colors"
+              className="px-4 py-2.5 border rounded-md text-sm font-medium hover:bg-muted transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
             >
               {t('common.cancel')}
             </button>

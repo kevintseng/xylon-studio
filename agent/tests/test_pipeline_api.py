@@ -321,6 +321,22 @@ def test_websocket_uses_the_same_bounded_request_validation_as_rest():
     runner.assert_not_awaited()
 
 
+def test_websocket_rejects_an_oversized_message_before_starting_eda():
+    runner = AsyncMock()
+
+    with patch("agent.api.routes.pipeline.run_pipeline", new=runner):
+        with TestClient(app) as client:
+            with client.websocket_connect("/api/pipeline/ws") as websocket:
+                websocket.send_text("x" * (2 * 1024 * 1024 + 64 * 1024 + 1))
+                message = websocket.receive_json()
+
+    assert message == {
+        "type": "error",
+        "message": "Pipeline request body is too large",
+    }
+    runner.assert_not_awaited()
+
+
 def test_websocket_does_not_expose_unhandled_exception_details():
     with patch(
         "agent.api.routes.pipeline.run_pipeline",

@@ -167,6 +167,16 @@ def test_runtime_project_identity_is_stable_and_checkout_specific(tmp_path: Path
     assert first != second
 
 
+def test_default_api_command_bounds_websocket_frames(tmp_path: Path):
+    app = local_app.LocalApplication(repo_root=tmp_path)
+
+    assert "--ws-max-size" in app.api_command
+    index = app.api_command.index("--ws-max-size")
+    assert app.api_command[index + 1] == str(
+        local_app.MAX_PIPELINE_WS_MESSAGE_BYTES
+    )
+
+
 def test_eda_runtime_health_replays_the_pinned_identity_check(tmp_path: Path):
     runtime = local_app.EdaRuntime(tmp_path)
 

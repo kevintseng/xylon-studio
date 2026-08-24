@@ -28,7 +28,7 @@ function Header() {
     <header className="sticky top-0 z-50 bg-background/85 backdrop-blur-xl border-b border-slate-800">
       <div className="container mx-auto px-4 h-14 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Link href="/" className="flex items-center gap-2">
+          <Link href="/" className="flex items-center gap-2 rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400">
             <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-white font-black text-xs">
               X
             </div>
@@ -36,13 +36,13 @@ function Header() {
           </Link>
         </div>
         <nav className="hidden items-center gap-1 md:flex" aria-label={t('nav.primary')}>
-          <Link href="/" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all">
+          <Link href="/" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400">
             {t('nav.home')}
           </Link>
-          <Link href="/openroad" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all">
+          <Link href="/openroad" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400">
             {t('nav.openroad')}
           </Link>
-          <Link href="/pipeline" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all">
+          <Link href="/pipeline" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400">
             {t('nav.pipeline')}
           </Link>
           <div className="w-px h-5 bg-slate-700 mx-1" />

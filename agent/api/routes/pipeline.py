@@ -9,7 +9,11 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from agent.api import LOCAL_WEB_ORIGINS
-from agent.pipeline.limits import MAX_SOURCE_BYTES, validate_source_text
+from agent.pipeline.limits import (
+    MAX_PIPELINE_WS_MESSAGE_BYTES,
+    MAX_SOURCE_BYTES,
+    validate_source_text,
+)
 from agent.pipeline.models import PipelineConfig, PipelineResult, StepResult
 from agent.pipeline.runner import run_pipeline
 
@@ -189,6 +193,13 @@ async def pipeline_websocket(ws: WebSocket):
     try:
         # Receive pipeline config from client
         raw = await ws.receive_text()
+        if len(raw.encode("utf-8")) > MAX_PIPELINE_WS_MESSAGE_BYTES:
+            await ws.send_json({
+                "type": "error",
+                "message": "Pipeline request body is too large",
+            })
+            await ws.close(code=1009, reason="Pipeline request body is too large")
+            return
         data = json.loads(raw)
         if not isinstance(data, dict):
             await ws.send_json({

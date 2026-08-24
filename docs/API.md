@@ -122,6 +122,9 @@ Non-success steps may provide `failure_kind` and an executable `recovery_code`. 
 ## WebSocket run
 
 Connect to `WS /api/pipeline/ws`, then send the same fields as the REST request.
+The supported server rejects a frame larger than the bounded request envelope
+before application parsing, then independently enforces the 1 MiB UTF-8 limit
+for each source field. Oversized frames close with WebSocket code `1009`.
 
 The server emits:
 
@@ -209,7 +212,8 @@ atomic directory containing frozen inputs, reports/logs, terminal result, file
 checksums, and `manifest.json`. Publication succeeds only after the final
 directory and manifest are read back and checksum-verified. The CLI verifies
 checksums again before replay and reports `REPRODUCED` only when the terminal
-outcome matches.
+outcome matches. On POSIX systems, artifact directories are created as `0700`
+and artifact files as `0600`; operators still own retention and disk encryption.
 
 ```bash
 agent/venv/bin/python -m agent.cli rerun \

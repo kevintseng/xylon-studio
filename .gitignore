@@ -356,6 +356,7 @@ WORKLOG.md
 
 # Browser automation temp data
 .playwright-mcp/
+.playwright-cli/
 output/playwright/
 output/adoption/
 
