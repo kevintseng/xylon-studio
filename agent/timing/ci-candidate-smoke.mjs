@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { randomUUID } from 'node:crypto'
 import { readdir } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -12,19 +11,15 @@ import {
   resolveTimingRunDirectory,
 } from './journey.mjs'
 import {
-  acceptExternalTimingConfirmation,
+  acceptProtectedCiTimingConfirmation,
   persistTimingRepairProposal,
+  requireProtectedCiEnvironment,
 } from './state-store.mjs'
 
-const SOURCE_REVISION = /^[a-f0-9]{40}$/
 const MAX_MANIFEST_BYTES = 1024 * 1024
 
 export function requireProtectedCiContext(environment = process.env) {
-  const sourceRevision = environment.XYLON_SOURCE_REVISION
-  if (environment.CI !== 'true' || !SOURCE_REVISION.test(sourceRevision ?? '')) {
-    throw new Error('ProtectedCiOnly: candidate mechanics smoke requires CI=true and an exact XYLON_SOURCE_REVISION')
-  }
-  return { sourceRevision }
+  return requireProtectedCiEnvironment(environment)
 }
 
 async function readManifest(runDir) {
@@ -58,19 +53,11 @@ export async function findProtectedCiBaseline(repoRoot, sourceRevision) {
   return matches[0]
 }
 
-export async function exerciseProtectedCiCandidate({ repoRoot, environment = process.env } = {}) {
-  const { sourceRevision } = requireProtectedCiContext(environment)
+export async function exerciseProtectedCiCandidate({ repoRoot } = {}) {
+  const { sourceRevision } = requireProtectedCiContext()
   const baseline = await findProtectedCiBaseline(repoRoot, sourceRevision)
   const proposal = await persistTimingRepairProposal(baseline.runDir)
-  const confirmation = await acceptExternalTimingConfirmation(baseline.runDir, { protected_ci: true }, {
-    verifyExternalReceipt: async (_receipt, expected) => ({
-      verified: true,
-      confirmation_id: randomUUID().replaceAll('-', ''),
-      proposal_id: expected.proposal_id,
-      actor_class: 'protected_ci_test',
-      source: 'protected_ci_test',
-    }),
-  })
+  const confirmation = await acceptProtectedCiTimingConfirmation(baseline.runDir)
   const result = await executeApprovedTimingRepair({
     repoRoot,
     baselineRunId: baseline.runId,

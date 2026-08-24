@@ -121,4 +121,17 @@ test('confirmation fails closed without external verifier or with wrong actor an
     }),
     /confirmation principal and source are not supported/,
   )
+  await assert.rejects(
+    acceptExternalTimingConfirmation(runDir, {}, {
+      now: new Date('2026-08-25T00:01:00.000Z'),
+      verifyExternalReceipt: async () => ({
+        verified: true,
+        confirmation_id: 'e'.repeat(32),
+        proposal_id: proposal.proposal_id,
+        actor_class: 'protected_ci_test',
+        source: 'protected_ci_test',
+      }),
+    }),
+    /confirmation principal and source are not supported/,
+  )
 })

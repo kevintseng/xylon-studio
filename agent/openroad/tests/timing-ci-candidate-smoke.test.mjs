@@ -10,6 +10,14 @@ import {
 } from '../../timing/ci-candidate-smoke.mjs'
 
 const SOURCE_REVISION = 'f'.repeat(40)
+const PROTECTED_ENVIRONMENT = {
+  CI: 'true',
+  GITHUB_ACTIONS: 'true',
+  GITHUB_WORKFLOW: 'verification-gate',
+  GITHUB_JOB: 'openroad-foundation',
+  GITHUB_EVENT_NAME: 'pull_request',
+  XYLON_SOURCE_REVISION: SOURCE_REVISION,
+}
 
 async function writeBaseline(repoRoot, runId, sourceRevision = SOURCE_REVISION) {
   const runDir = path.join(repoRoot, '.xylon', 'timing', 'runs', runId)
@@ -24,11 +32,12 @@ async function writeBaseline(repoRoot, runId, sourceRevision = SOURCE_REVISION) 
 
 test('protected candidate smoke requires an exact source-bound CI context', () => {
   assert.deepEqual(
-    requireProtectedCiContext({ CI: 'true', XYLON_SOURCE_REVISION: SOURCE_REVISION }),
+    requireProtectedCiContext(PROTECTED_ENVIRONMENT),
     { sourceRevision: SOURCE_REVISION },
   )
-  assert.throws(() => requireProtectedCiContext({ CI: 'false', XYLON_SOURCE_REVISION: SOURCE_REVISION }), /ProtectedCiOnly/)
-  assert.throws(() => requireProtectedCiContext({ CI: 'true', XYLON_SOURCE_REVISION: 'main' }), /ProtectedCiOnly/)
+  assert.throws(() => requireProtectedCiContext({ ...PROTECTED_ENVIRONMENT, CI: 'false' }), /ProtectedCiOnly/)
+  assert.throws(() => requireProtectedCiContext({ ...PROTECTED_ENVIRONMENT, GITHUB_JOB: 'frontend' }), /ProtectedCiOnly/)
+  assert.throws(() => requireProtectedCiContext({ ...PROTECTED_ENVIRONMENT, XYLON_SOURCE_REVISION: 'main' }), /ProtectedCiOnly/)
 })
 
 test('protected candidate smoke selects exactly one untouched baseline from this source revision', async (context) => {
