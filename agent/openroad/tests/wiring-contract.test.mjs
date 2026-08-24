@@ -34,3 +34,10 @@ test('smoke client forwards only the bounded CPU budget beyond the MCP safe env 
   assert.match(source, /env: \{ XYLON_OPENROAD_CPUS: process\.env\.XYLON_OPENROAD_CPUS \?\? '4' \}/)
   assert.doesNotMatch(source, /\.\.\.process\.env/)
 })
+
+test('server snapshot reports the parsed runtime CPU budget instead of a hard-coded value', async () => {
+  const source = await readFile(path.resolve(import.meta.dirname, '..', 'server.mjs'), 'utf8')
+  assert.match(source, /const configuredOpenROADCpus = parseOpenROADCpuBudget\(process\.env\.XYLON_OPENROAD_CPUS\)/)
+  assert.match(source, /cpus: configuredOpenROADCpus/)
+  assert.doesNotMatch(source, /resource_limits:\s*\{\s*cpus:\s*4/)
+})

@@ -25,7 +25,7 @@ import {
 } from './execution.mjs'
 import { acquireServerLease } from './lease.mjs'
 import { SESSION_ID_PATTERN } from './protocol.mjs'
-import { checkOpenROADResourceAdmission } from './resource-admission.mjs'
+import { checkOpenROADResourceAdmission, parseOpenROADCpuBudget } from './resource-admission.mjs'
 import { createDockerRuntimeOwnership, terminateSessionWithProof } from './runtime.mjs'
 import {
   appendRecord,
@@ -48,6 +48,10 @@ const repoRoot = path.resolve(process.env.XYLON_REPO_ROOT ?? path.join(import.me
 const stateDir = path.resolve(process.env.XYLON_OPENROAD_STATE_DIR ?? path.join(repoRoot, '.xylon', 'openroad'))
 const workDir = path.join(stateDir, 'work')
 const runtimeImage = process.env.XYLON_OPENROAD_IMAGE ?? 'unconfigured'
+const configuredOpenROADCpus = parseOpenROADCpuBudget(process.env.XYLON_OPENROAD_CPUS)
+if (configuredOpenROADCpus === null) {
+  throw new Error('XYLON_OPENROAD_CPUS must be an integer from 1 to 4')
+}
 const serverId = randomUUID().replaceAll('-', '')
 const repoId = createHash('sha256').update(repoRoot).digest('hex')
 const runtimeOwnership = createDockerRuntimeOwnership({ stateDir, serverId, repoId })
@@ -80,7 +84,7 @@ const serverMeta = () => {
     runtime_image: runtimeImage,
     runtime_platform: 'linux/amd64 compatibility mode',
     resource_limits: {
-      cpus: 4,
+      cpus: configuredOpenROADCpus,
       memory_gib: 8,
       network: 'none',
       max_sessions: 1,

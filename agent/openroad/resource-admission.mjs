@@ -7,6 +7,11 @@ const MAX_DIAGNOSTIC_LENGTH = 500
 const DEFAULT_CPUS = '4'
 const BOUNDED_CPU_BUDGET = /^[1-4]$/
 
+export function parseOpenROADCpuBudget(requestedCpus = DEFAULT_CPUS) {
+  const cpuBudget = String(requestedCpus)
+  return BOUNDED_CPU_BUDGET.test(cpuBudget) ? Number(cpuBudget) : null
+}
+
 function parseResourcePayload(text) {
   try {
     const payload = JSON.parse(String(text ?? '').trim())
@@ -28,14 +33,15 @@ export async function checkOpenROADResourceAdmission({
   requestedCpus = process.env.XYLON_OPENROAD_CPUS ?? DEFAULT_CPUS,
   execute = execFile,
 }) {
-  const cpuBudget = String(requestedCpus)
-  if (!BOUNDED_CPU_BUDGET.test(cpuBudget)) {
+  const parsedCpuBudget = parseOpenROADCpuBudget(requestedCpus)
+  if (parsedCpuBudget === null) {
     return {
       ready: false,
       blockers: ['OpenROAD CPU budget must be an integer from 1 to 4'],
       resource: null,
     }
   }
+  const cpuBudget = String(parsedCpuBudget)
   const python = path.join(repoRoot, 'agent', 'venv', 'bin', 'python')
   const args = ['-m', 'agent.openroad.resource', '--repo', repoRoot, '--cpus', cpuBudget]
   try {

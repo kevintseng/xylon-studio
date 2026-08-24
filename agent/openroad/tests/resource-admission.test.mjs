@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { checkOpenROADResourceAdmission } from '../resource-admission.mjs'
+import { checkOpenROADResourceAdmission, parseOpenROADCpuBudget } from '../resource-admission.mjs'
+
+test('CPU budget parser returns the one bounded value used by admission and snapshot metadata', () => {
+  assert.equal(parseOpenROADCpuBudget(undefined), 4)
+  assert.equal(parseOpenROADCpuBudget('1'), 1)
+  assert.equal(parseOpenROADCpuBudget(4), 4)
+  assert.equal(parseOpenROADCpuBudget('0'), null)
+  assert.equal(parseOpenROADCpuBudget('5'), null)
+  assert.equal(parseOpenROADCpuBudget('1.5'), null)
+})
 
 test('resource admission accepts only a valid ready payload', async () => {
   const result = await checkOpenROADResourceAdmission({

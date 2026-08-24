@@ -16,7 +16,18 @@ test('snapshot normalization preserves only truthful, bounded openroad session d
   const snapshot = normalizeOpenroadSnapshot({
     schema_version: 2,
     updated_at: '2026-08-24T07:30:00Z',
-    server: { status: 'ready', openroad_mcp_version: '0.6.1', pending_preparations: 1 },
+    server: {
+      status: 'ready',
+      openroad_mcp_version: '0.6.1',
+      pending_preparations: 1,
+      resource_limits: {
+        cpus: 1,
+        memory_gib: 8,
+        network: 'none',
+        max_sessions: 1,
+        session_idle_timeout_seconds: 300,
+      },
+    },
     sessions: [
       {
         session_id: 'or-17',
@@ -26,6 +37,11 @@ test('snapshot normalization preserves only truthful, bounded openroad session d
         command_count: 3,
         memory_mb: 512,
         cpu_time_seconds: 18.2,
+        interruption_reason: 'Command completion marker was not observed.',
+        cleanup_error: 'Container termination could not be verified.',
+        cleanup_session_id: 'or-17',
+        child_pid: 4242,
+        container_id: 'abc123',
         history: [
           {
             number: 2,
@@ -46,7 +62,16 @@ test('snapshot normalization preserves only truthful, bounded openroad session d
   assert.equal(snapshot.schemaVersion, 2)
   assert.equal(snapshot.server?.openroadMcpVersion, '0.6.1')
   assert.equal(snapshot.server?.pendingPreparations, 1)
+  assert.equal(snapshot.server?.resourceLimits.cpus, 1)
+  assert.equal(snapshot.server?.resourceLimits.memoryGib, 8)
+  assert.equal(snapshot.server?.resourceLimits.network, 'none')
   assert.equal(snapshot.sessions[0]?.sessionId, 'or-17')
+  assert.equal(snapshot.sessions[0]?.status, 'active')
+  assert.equal(snapshot.sessions[0]?.interruptionReason, 'Command completion marker was not observed.')
+  assert.equal(snapshot.sessions[0]?.cleanupError, 'Container termination could not be verified.')
+  assert.equal(snapshot.sessions[0]?.cleanupSessionId, 'or-17')
+  assert.equal(snapshot.sessions[0]?.childPid, 4242)
+  assert.equal(snapshot.sessions[0]?.containerId, 'abc123')
   assert.equal(snapshot.sessions[0]?.history[0]?.mode, 'change')
   assert.equal(snapshot.sessions[0]?.history[0]?.command.endsWith('…'), true)
   assert.equal(snapshot.sessions[0]?.history[0]?.outputPreview?.endsWith('…'), true)
@@ -60,6 +85,15 @@ test('snapshot normalization preserves only truthful, bounded openroad session d
 })
 
 test('session state stays honest across empty, live, stopped, and error snapshots', () => {
+  assert.equal(
+    getOpenroadSessionState(
+      normalizeOpenroadSnapshot({
+        schema_version: 1,
+        sessions: [{ session_id: 'or-interrupted', status: 'interrupted', history: [] }],
+      }),
+    ),
+    'interrupted',
+  )
   assert.equal(
     getOpenroadSessionState(normalizeOpenroadSnapshot({ schema_version: 1, sessions: [] })),
     'empty',
@@ -113,6 +147,30 @@ test('status presentation uses explicit icons and text rather than color-only cu
     tone: 'red',
     isLive: false,
   })
+  assert.deepEqual(getOpenroadStatusPresentation('interrupted'), {
+    label: 'Interrupted',
+    icon: '!',
+    tone: 'amber',
+    isLive: false,
+  })
+})
+
+test('cleanup failure blocks session evidence even when the last command succeeded', () => {
+  const snapshot = normalizeOpenroadSnapshot({
+    schema_version: 1,
+    updated_at: '2026-08-24T07:30:00Z',
+    server: { status: 'ready' },
+    sessions: [{
+      session_id: 'cleanup-failed',
+      status: 'interrupted',
+      cleanup_error: 'Container remains registered.',
+      history: [{ number: 1, mode: 'query', command: 'help', success: true }],
+    }],
+  })
+
+  const stages = buildOpenroadStages(snapshot, OBSERVED_AT)
+  assert.equal(stages.find((stage) => stage.key === 'session')?.status, 'blocked')
+  assert.equal(stages.find((stage) => stage.key === 'evidence')?.status, 'blocked')
 })
 
 test('stage graph reflects connection, pending change, and evidence without claiming approval', () => {

@@ -150,6 +150,48 @@ function SessionCard({
         </section>
       </div>
 
+      {session.interruptionReason || session.cleanupError ? (
+        <section
+          role="alert"
+          className={`mt-4 rounded-2xl border p-4 ${
+            session.cleanupError
+              ? 'border-red-500/30 bg-red-500/10 text-red-100'
+              : 'border-amber-500/30 bg-amber-500/10 text-amber-100'
+          }`}
+        >
+          <h4 className="text-sm font-semibold">{t('openroad.cleanup.title')}</h4>
+          {session.interruptionReason ? (
+            <p className="mt-2 text-sm leading-6">{session.interruptionReason}</p>
+          ) : null}
+          {session.cleanupError ? (
+            <details className="mt-3 rounded-xl border border-red-400/20 bg-slate-950/40 p-3">
+              <summary className="cursor-pointer text-sm font-medium">{t('openroad.cleanup.details')}</summary>
+              <p className="mt-3 whitespace-pre-wrap break-words font-mono text-xs leading-6">{session.cleanupError}</p>
+              {session.childPid || session.containerId ? (
+                <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+                  {session.childPid ? (
+                    <div>
+                      <dt className="text-slate-400">{t('openroad.cleanup.pid')}</dt>
+                      <dd className="mt-1 font-mono">{session.childPid}</dd>
+                    </div>
+                  ) : null}
+                  {session.containerId ? (
+                    <div>
+                      <dt className="text-slate-400">{t('openroad.cleanup.container')}</dt>
+                      <dd className="mt-1 break-all font-mono">{session.containerId}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+              ) : null}
+            </details>
+          ) : null}
+          <p className="mt-3 text-sm leading-6">{t('openroad.cleanup.recovery')}</p>
+          <pre className="mt-2 overflow-x-auto rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2 text-xs text-slate-100">
+            <code>{'./scripts/xylon-openroad doctor'}</code>
+          </pre>
+        </section>
+      ) : null}
+
       <div className="mt-4 grid gap-3 text-xs text-slate-400 sm:grid-cols-2">
         <p className="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-3">
           {t('openroad.session.created')}: <span className="text-slate-200">{formatDate(session.createdAt, locale)}</span>
@@ -349,6 +391,12 @@ export default function OpenroadPage() {
             <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
               <p className="text-xs uppercase tracking-[0.18em] text-slate-500">{t('openroad.snapshot.server')}</p>
               <p className="mt-2 break-all text-sm font-semibold text-slate-100">{serverLabel}</p>
+              {snapshot.server?.resourceLimits.cpus !== null && snapshot.server?.resourceLimits.cpus !== undefined ? (
+                <p className="mt-2 text-xs leading-5 text-slate-400">
+                  {t('openroad.snapshot.sessionLimit')}: {snapshot.server.resourceLimits.cpus} CPU
+                  {snapshot.server.resourceLimits.memoryGib === null ? '' : ` · ${snapshot.server.resourceLimits.memoryGib} GiB`}
+                </p>
+              ) : null}
             </div>
             <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4" aria-live="polite">
               <p className="text-xs uppercase tracking-[0.18em] text-slate-500">{t('openroad.snapshot.sessions')}</p>
