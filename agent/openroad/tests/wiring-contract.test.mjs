@@ -25,3 +25,12 @@ test('OpenROAD wrapper binds cidfile and exact ownership labels without fuzzy co
   assert.doesNotMatch(wrapper, /docker stop.*container_name/)
   assert.doesNotMatch(wrapper, /xylon-openroad-\$\{PPID\}/)
 })
+
+test('smoke client forwards only the bounded CPU budget beyond the MCP safe env allowlist', async () => {
+  const source = await readFile(
+    path.resolve(import.meta.dirname, '..', 'smoke-client.mjs'),
+    'utf8',
+  )
+  assert.match(source, /env: \{ XYLON_OPENROAD_CPUS: process\.env\.XYLON_OPENROAD_CPUS \?\? '4' \}/)
+  assert.doesNotMatch(source, /\.\.\.process\.env/)
+})

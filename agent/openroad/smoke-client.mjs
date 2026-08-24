@@ -6,7 +6,11 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 const repoRoot = path.resolve(import.meta.dirname, '..', '..')
 const launcher = path.join(repoRoot, 'scripts', 'xylon-openroad')
-const transport = new StdioClientTransport({ command: launcher, args: ['mcp'] })
+const transport = new StdioClientTransport({
+  command: launcher,
+  args: ['mcp'],
+  env: { XYLON_OPENROAD_CPUS: process.env.XYLON_OPENROAD_CPUS ?? '4' },
+})
 const client = new Client({ name: 'xylon-openroad-smoke', version: '0.4.0' })
 
 function firstText(result) {
