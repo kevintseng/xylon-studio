@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rmdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -33,7 +34,20 @@ async function withStateLock(runDir, callback) {
   }
 }
 
-function publicConfirmation(verified, proposal, now) {
+export function requireProtectedCiEnvironment(environment = process.env) {
+  const sourceRevision = environment.XYLON_SOURCE_REVISION
+  if (environment.CI !== 'true'
+      || environment.GITHUB_ACTIONS !== 'true'
+      || environment.GITHUB_WORKFLOW !== 'verification-gate'
+      || environment.GITHUB_JOB !== 'openroad-foundation'
+      || environment.GITHUB_EVENT_NAME !== 'pull_request'
+      || !/^[a-f0-9]{40}$/.test(sourceRevision ?? '')) {
+    throw new Error('ProtectedCiOnly: timing test confirmation requires the protected OpenROAD pull-request job and an exact source revision')
+  }
+  return { sourceRevision }
+}
+
+function publicConfirmation(verified, proposal, now, { allowProtectedCiTest = false } = {}) {
   if (!verified || verified.verified !== true) {
     throw new Error('TimingConfirmationInvalid: external confirmation was not verified')
   }
@@ -45,7 +59,8 @@ function publicConfirmation(verified, proposal, now) {
   }
   const localHumanSource = verified.actor_class === 'local_human_user'
     && ['timing_ui', 'timing_cli_tty'].includes(verified.source)
-  const protectedCiSource = verified.actor_class === 'protected_ci_test'
+  const protectedCiSource = allowProtectedCiTest
+    && verified.actor_class === 'protected_ci_test'
     && verified.source === 'protected_ci_test'
   if (!localHumanSource && !protectedCiSource) {
     throw new Error('TimingConfirmationInvalid: confirmation principal and source are not supported')
@@ -60,6 +75,49 @@ function publicConfirmation(verified, proposal, now) {
     state: 'available',
     used_at: null,
   }
+}
+
+async function transitionTimingConfirmation(runDir, {
+  now,
+  resolveVerified,
+  allowProtectedCiTest = false,
+}) {
+  return withStateLock(runDir, async () => {
+    const manifestPath = path.join(runDir, 'manifest.json')
+    const proposalPath = path.join(runDir, 'proposal', 'proposal.json')
+    const manifest = await readJson(manifestPath)
+    const proposal = await readJson(proposalPath)
+    if (manifest.journey_state !== 'awaiting_confirmation'
+        || manifest.proposal?.proposal_id !== proposal.proposal_id
+        || manifest.proposal?.state !== 'awaiting_confirmation') {
+      throw new Error('TimingConfirmationInvalid: manifest and proposal are not awaiting the same confirmation')
+    }
+    assertProposalMatchesBaseline(proposal, manifest, { now })
+    const verified = await resolveVerified({
+      proposal_id: proposal.proposal_id,
+      binding: proposal.binding,
+      expires_at: proposal.expires_at,
+    })
+    const timestamp = now instanceof Date ? now : new Date(now)
+    if (!Number.isFinite(timestamp.getTime())) throw new Error('TimingConfirmationInvalid: confirmation clock is invalid')
+    const confirmation = publicConfirmation(verified, proposal, timestamp, { allowProtectedCiTest })
+    await writeJsonAtomic(path.join(runDir, 'proposal', 'confirmation.json'), confirmation)
+    await writeJsonAtomic(manifestPath, {
+      ...manifest,
+      journey_state: 'externally_confirmed',
+      proposal: { ...manifest.proposal, state: 'externally_confirmed' },
+      confirmation: {
+        confirmation_id: confirmation.confirmation_id,
+        proposal_id: confirmation.proposal_id,
+        actor_class: confirmation.actor_class,
+        source: confirmation.source,
+        confirmed_at: confirmation.confirmed_at,
+        state: confirmation.state,
+        path: 'proposal/confirmation.json',
+      },
+    })
+    return confirmation
+  })
 }
 
 export async function persistTimingRepairProposal(runDir, options = {}) {
@@ -92,41 +150,29 @@ export async function acceptExternalTimingConfirmation(runDir, externalReceipt, 
   if (typeof verifyExternalReceipt !== 'function') {
     throw new Error('TimingConfirmationUnavailable: an external confirmation verifier is required')
   }
-  return withStateLock(runDir, async () => {
-    const manifestPath = path.join(runDir, 'manifest.json')
-    const proposalPath = path.join(runDir, 'proposal', 'proposal.json')
-    const manifest = await readJson(manifestPath)
-    const proposal = await readJson(proposalPath)
-    if (manifest.journey_state !== 'awaiting_confirmation'
-        || manifest.proposal?.proposal_id !== proposal.proposal_id
-        || manifest.proposal?.state !== 'awaiting_confirmation') {
-      throw new Error('TimingConfirmationInvalid: manifest and proposal are not awaiting the same confirmation')
-    }
-    assertProposalMatchesBaseline(proposal, manifest, { now })
-    const verified = await verifyExternalReceipt(externalReceipt, {
-      proposal_id: proposal.proposal_id,
-      binding: proposal.binding,
-      expires_at: proposal.expires_at,
-    })
-    const timestamp = now instanceof Date ? now : new Date(now)
-    if (!Number.isFinite(timestamp.getTime())) throw new Error('TimingConfirmationInvalid: confirmation clock is invalid')
-    const confirmation = publicConfirmation(verified, proposal, timestamp)
-    await writeJsonAtomic(path.join(runDir, 'proposal', 'confirmation.json'), confirmation)
-    await writeJsonAtomic(manifestPath, {
-      ...manifest,
-      journey_state: 'externally_confirmed',
-      proposal: { ...manifest.proposal, state: 'externally_confirmed' },
-      confirmation: {
-        confirmation_id: confirmation.confirmation_id,
-        proposal_id: confirmation.proposal_id,
-        actor_class: confirmation.actor_class,
-        source: confirmation.source,
-        confirmed_at: confirmation.confirmed_at,
-        state: confirmation.state,
-        path: 'proposal/confirmation.json',
-      },
-    })
-    return confirmation
+  return transitionTimingConfirmation(runDir, {
+    now,
+    resolveVerified: (expected) => verifyExternalReceipt(externalReceipt, expected),
+  })
+}
+
+export async function acceptProtectedCiTimingConfirmation(runDir, { now = new Date() } = {}) {
+  const { sourceRevision } = requireProtectedCiEnvironment()
+  return transitionTimingConfirmation(runDir, {
+    now,
+    allowProtectedCiTest: true,
+    resolveVerified: async (expected) => {
+      if (expected.binding?.source_revision !== sourceRevision) {
+        throw new Error('TimingConfirmationInvalid: protected CI source revision does not match the proposal')
+      }
+      return {
+        verified: true,
+        confirmation_id: randomUUID().replaceAll('-', ''),
+        proposal_id: expected.proposal_id,
+        actor_class: 'protected_ci_test',
+        source: 'protected_ci_test',
+      }
+    },
   })
 }
 
