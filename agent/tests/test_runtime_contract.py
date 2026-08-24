@@ -79,6 +79,19 @@ def test_openroad_launcher_propagates_every_doctor_and_resource_blocker():
     assert "doctor >/dev/null || exit $?" in source
 
 
+def test_openroad_ci_prepares_repo_python_before_calling_public_launcher():
+    workflow = (REPO_ROOT / ".github" / "workflows" / "verification-gate.yml").read_text(
+        encoding="utf-8"
+    )
+    job = workflow.split("  openroad-foundation:", 1)[1].split("\n  frontend:", 1)[0]
+
+    setup_python = job.index("actions/setup-python@")
+    create_environment = job.index("python -m venv agent/venv")
+    install_runtime = job.index("scripts/xylon-openroad install")
+
+    assert setup_python < create_environment < install_runtime
+
+
 def test_runtime_up_reuses_an_existing_image_instead_of_forcing_a_rebuild(tmp_path: Path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
