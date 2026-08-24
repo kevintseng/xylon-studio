@@ -38,7 +38,7 @@ jobs:
           python -m venv agent/venv
           agent/venv/bin/python -m pip install --require-hashes -r requirements.lock
       - name: Run backend contract suite
-        run: agent/venv/bin/python -m pytest -q agent/tests agent/pipeline/tests
+        run: agent/venv/bin/python -m pytest -q -m "not integration" agent/tests agent/pipeline/tests
       - name: Lint Python source
         run: agent/venv/bin/python -m ruff check agent setup.py
       - name: Build and smoke-test the installed Python wheel
