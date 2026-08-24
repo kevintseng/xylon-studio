@@ -19,7 +19,7 @@ test('home agent flow has one honest path from user intent to reproducible evide
 test('home scope separates proven behavior from roadmap claims', () => {
   assert.deepEqual(PRODUCT_SCOPE.proven.map((item) => item.label), [
     'Real local RTL verification with reproducible evidence',
-    'Restricted real OpenROAD MCP activity foundation',
+    'Restricted real OpenROAD MCP execution record',
   ])
   assert.equal(
     PRODUCT_SCOPE.notYet.some((item) => item.label === 'End-to-end RTL, SDC, and PDK timing-improvement journey'),

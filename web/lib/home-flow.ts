@@ -37,7 +37,7 @@ export const HOME_AGENT_STAGES: HomeAgentStage[] = [
 export const PRODUCT_SCOPE = {
   proven: [
     { key: 'rtlVerification', label: 'Real local RTL verification with reproducible evidence' },
-    { key: 'openroadFoundation', label: 'Restricted real OpenROAD MCP activity foundation' },
+    { key: 'openroadFoundation', label: 'Restricted real OpenROAD MCP execution record' },
   ],
   notYet: [
     { key: 'timingJourney', label: 'End-to-end RTL, SDC, and PDK timing-improvement journey' },

@@ -1,7 +1,7 @@
 # XylonStudio
 
 Local, evidence-backed RTL verification with a restricted real OpenROAD
-foundation.
+execution record.
 
 [繁體中文](README.zh-TW.md)
 
@@ -12,11 +12,11 @@ Xylon currently provides two real, separate workflows:
 1. **RTL verification** — run pinned Verilator lint, an optional independent C++
    self-check, coverage collection, optional Yosys structural statistics, and a
    checksummed exact-rerun bundle.
-2. **OpenROAD MCP foundation** — let an MCP-capable assistant create one
-   resource-capped real OpenROAD session, run bounded commands, and show fresh
-   activity evidence in the Web UI.
+2. **OpenROAD MCP execution record** — let an MCP-capable assistant create one
+   resource-capped real OpenROAD session, run bounded commands, and show the
+   latest execution record in the Web UI.
 
-The OpenROAD adapter is a control-plane foundation, not an RTL-to-GDS product
+The OpenROAD adapter is a control-plane boundary, not an RTL-to-GDS product
 journey. Xylon does not yet import a complete RTL/SDC/PDK design, diagnose its
 worst timing path, or apply and compare a timing improvement.
 
@@ -72,7 +72,7 @@ requested measured coverage, and final artifact readback passed. The UI calls
 this “Provided checks passed” because Xylon does not yet prove that a
 user-supplied testbench completely represents the design specification.
 
-## Connect the OpenROAD foundation
+## Connect the OpenROAD execution record
 
 OpenROAD is a separate on-demand MCP runtime. `scripts/xylon` does not own it.
 
@@ -105,7 +105,7 @@ resource needs attention and asks the user to retry after local load subsides.
 | Verilator/Yosys RTL verification | AI-generated RTL or testbenches |
 | Checksummed run artifacts and exact rerun | Complete RTL/SDC/PDK design import |
 | Restricted real OpenROAD MCP sessions | Automated worst-path improvement loop |
-| Fresh OpenROAD activity readback | DRC/LVS signoff or tape-out readiness |
+| Fresh OpenROAD execution readback | DRC/LVS signoff or tape-out readiness |
 
 Missing, stale, failed, interrupted, or inconclusive evidence never becomes a
 completed stage.
@@ -113,9 +113,9 @@ completed stage.
 ## Interfaces
 
 - `/pipeline` — run the current RTL-verification journey.
-- `/openroad` — inspect the separate OpenROAD MCP activity foundation.
+- `/openroad` — inspect the separate OpenROAD MCP execution record.
 - `POST /api/pipeline/run` and `WS /api/pipeline/ws` — canonical pipeline.
-- `GET /api/openroad/snapshot` — read-only bounded OpenROAD activity snapshot.
+- `GET /api/openroad/snapshot` — read-only bounded OpenROAD execution snapshot.
 - `agent/venv/bin/python -m agent.cli run ...` and `agent/venv/bin/python -m agent.cli rerun ...` — CLI and
   exact replay.
 
