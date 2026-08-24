@@ -11,12 +11,13 @@ Usage:
 
 import argparse
 import asyncio
-from pathlib import Path
 import shlex
 import sys
 import time
+from pathlib import Path
 
 from agent.pipeline.artifacts import ArtifactIntegrityError, load_rerun_manifest
+from agent.pipeline.limits import MAX_SOURCE_BYTES, validate_source_text
 from agent.pipeline.models import PipelineConfig
 from agent.pipeline.runner import run_pipeline
 
@@ -37,6 +38,19 @@ RECOVERY_GUIDANCE = {
     "repair_artifact_storage": "Repair artifact storage permissions or capacity.",
     "rerun_when_ready": "Rerun when you are ready.",
 }
+
+
+def _read_source_file(path_text: str, field_name: str) -> str:
+    path = Path(path_text)
+    size = path.stat().st_size
+    if size > MAX_SOURCE_BYTES:
+        raise ValueError(
+            f"{field_name} is {size} bytes and exceeds the "
+            f"{MAX_SOURCE_BYTES}-byte limit"
+        )
+    value = path.read_text(encoding="utf-8")
+    validate_source_text(field_name, value)
+    return value
 
 
 def main():
@@ -77,20 +91,27 @@ def main():
 async def run_command(args):
     # Read RTL file
     try:
-        with open(args.rtl_file, encoding='utf-8') as f:
-            rtl_code = f.read()
+        rtl_code = _read_source_file(args.rtl_file, "rtl_code")
     except FileNotFoundError:
         print(f"Error: RTL file not found: {args.rtl_file}")
+        sys.exit(1)
+    except (OSError, UnicodeError, ValueError) as error:
+        print(f"Error: {error}")
         sys.exit(1)
 
     # Read testbench if provided
     testbench_code = None
     if args.testbench:
         try:
-            with open(args.testbench, encoding='utf-8') as f:
-                testbench_code = f.read()
+            testbench_code = _read_source_file(
+                args.testbench,
+                "testbench_code",
+            )
         except FileNotFoundError:
             print(f"Error: Testbench file not found: {args.testbench}")
+            sys.exit(1)
+        except (OSError, UnicodeError, ValueError) as error:
+            print(f"Error: {error}")
             sys.exit(1)
 
     # Build config
@@ -117,7 +138,6 @@ async def run_command(args):
                 f"score={_format_coverage_value(step.output.get('score'))}"
             )
         elif step.step_name == "synthesis" and step.output:
-            cells = step.output.get("cells", {})
             total = step.output.get("gate_count")
             print(f"    {total} cells, {step.output.get('wires', '?')} wires")
 

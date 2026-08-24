@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from agent.api import LOCAL_WEB_ORIGINS
+from agent.pipeline.limits import MAX_SOURCE_BYTES, validate_source_text
 from agent.pipeline.models import PipelineConfig, PipelineResult, StepResult
 from agent.pipeline.runner import run_pipeline
 
@@ -39,9 +40,15 @@ class PipelineRequest(BaseModel):
         },
     )
 
-    rtl_code: str = Field(..., min_length=1, description="Verilog RTL code")
+    rtl_code: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_SOURCE_BYTES,
+        description="Verilog RTL code",
+    )
     testbench_code: str | None = Field(
         None,
+        max_length=MAX_SOURCE_BYTES,
         description="Optional independent C++ self-checking testbench code",
     )
     coverage_target: float = Field(
@@ -64,6 +71,12 @@ class PipelineRequest(BaseModel):
     def require_nonblank_rtl(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("rtl_code must contain Verilog source")
+        return value
+
+    @field_validator("rtl_code", "testbench_code")
+    @classmethod
+    def enforce_source_byte_budget(cls, value: str | None, info):
+        validate_source_text(info.field_name, value)
         return value
 
 
@@ -141,7 +154,7 @@ async def run_pipeline_endpoint(request: PipelineRequest) -> PipelineResponse:
         return PipelineResponse(**result.to_dict())
 
     except Exception as e:
-        logger.error(f"Pipeline execution failed: {e}")
+        logger.exception("Pipeline execution failed")
         raise HTTPException(
             status_code=500,
             detail="Pipeline execution failed",
@@ -284,10 +297,13 @@ async def pipeline_websocket(ws: WebSocket):
         logger.info("Pipeline WebSocket disconnected")
     except json.JSONDecodeError:
         await ws.send_json({"type": "error", "message": "Invalid JSON"})
-    except Exception as e:
-        logger.error(f"Pipeline WebSocket error: {e}")
+    except Exception:
+        logger.exception("Pipeline WebSocket error")
         try:
-            await ws.send_json({"type": "error", "message": str(e)})
+            await ws.send_json({
+                "type": "error",
+                "message": "Pipeline execution failed",
+            })
         except Exception:
             pass
     finally:

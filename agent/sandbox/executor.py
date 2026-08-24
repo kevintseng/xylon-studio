@@ -12,7 +12,7 @@ import logging
 import os
 import subprocess
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -61,11 +61,11 @@ class ExecutionResult:
     exit_code: int
     duration_seconds: float
     failure_kind: str | None = None
-    timestamp: str = None
+    timestamp: str | None = None
 
     def __post_init__(self):
         if self.timestamp is None:
-            self.timestamp = datetime.utcnow().isoformat()
+            self.timestamp = datetime.now(UTC).isoformat()
 
 
 # ==================== Sandbox Executor ====================
@@ -161,7 +161,7 @@ class SandboxExecutor:
         # Log command (sanitized)
         logger.info(f"Executing in {self.container_name}: {' '.join(command[:3])}")
 
-        start_time = datetime.utcnow()
+        start_time = datetime.now(UTC)
 
         try:
             # Execute with timeout
@@ -172,7 +172,7 @@ class SandboxExecutor:
                 check=False,  # Don't raise on non-zero exit
             )
 
-            end_time = datetime.utcnow()
+            end_time = datetime.now(UTC)
             duration = (end_time - start_time).total_seconds()
 
             # Decode output

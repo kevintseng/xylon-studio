@@ -1,19 +1,19 @@
 """Local application lifecycle contract tests."""
 
-from pathlib import Path
 import json
 import os
 import re
-import signal
 import shutil
+import signal
 import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
+from unittest.mock import patch
 from urllib.request import urlopen
 
 import agent.local_app as local_app
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -31,7 +31,10 @@ def test_doctor_accepts_the_current_prebuilt_workspace_without_starting_services
     assert "READY: local prerequisites are available" in result.stdout
     assert "RESOURCE READY:" in result.stdout or "RESOURCE BLOCKED:" in result.stdout
     assert "STOPPED: API http://127.0.0.1:5001" in result.stdout
-    assert "STOPPED: Web http://127.0.0.1:3000" in result.stdout
+    assert re.search(
+        r"(?:STOPPED|LISTENING): Web http://127\.0\.0\.1:3000",
+        result.stdout,
+    )
 
 
 def test_resource_preflight_allows_capacity_for_one_capped_local_run():
@@ -93,6 +96,35 @@ def test_runtime_version_preflight_fails_closed_on_unrecognized_output():
         "could not determine the Python version",
         "could not determine the Node.js version",
     ]
+
+
+def test_runtime_project_identity_is_stable_and_checkout_specific(tmp_path: Path):
+    first = local_app.runtime_project_name(tmp_path / "checkout-a")
+    repeated = local_app.runtime_project_name(tmp_path / "checkout-a")
+    second = local_app.runtime_project_name(tmp_path / "checkout-b")
+
+    assert first == repeated
+    assert first.startswith("xylon-")
+    assert first != second
+
+
+def test_eda_runtime_health_replays_the_pinned_identity_check(tmp_path: Path):
+    runtime = local_app.EdaRuntime(tmp_path)
+
+    with patch(
+        "agent.local_app.subprocess.run",
+        return_value=subprocess.CompletedProcess([], 0),
+    ) as run:
+        assert runtime.is_running() is True
+
+    run.assert_called_once_with(
+        [str(tmp_path / "scripts" / "eda-runtime"), "verify"],
+        cwd=tmp_path,
+        check=False,
+        timeout=30,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def _long_running_child(marker: str) -> subprocess.Popen[str]:
@@ -185,8 +217,10 @@ def _write_state(state_dir: Path, *, api_pid: int, api_marker: str, web_pid: int
     state_path.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "runtime_owned": False,
+                "api_port": 5001,
+                "web_port": 3000,
                 "api": {
                     "name": "api",
                     "pid": api_pid,
@@ -373,6 +407,34 @@ def test_failed_web_start_rolls_back_the_api_runtime_and_partial_state(tmp_path:
     assert runtime.running is False
 
 
+def test_start_injects_the_selected_web_port_into_the_api_origin_policy(tmp_path: Path):
+    api_port = _unused_port()
+    web_port = _unused_port()
+    api_command = _http_service_command(api_port, "xylon-test-api", api=True)
+    api_command[3] = (
+        f"import os; assert os.environ['XYLON_WEB_PORT'] == {str(web_port)!r};"
+        + api_command[3]
+    )
+    runtime = _TestRuntime()
+    app = local_app.LocalApplication(
+        repo_root=REPO_ROOT,
+        state_dir=tmp_path / "local",
+        api_port=api_port,
+        web_port=web_port,
+        api_command=api_command,
+        web_command=_http_service_command(web_port, "xylon-test-web", api=False),
+        api_command_marker="xylon-test-api",
+        web_command_marker="xylon-test-web",
+        runtime=runtime,
+        resource_probe=_safe_resource_probe,
+    )
+
+    try:
+        assert app.start(health_timeout=2) == 0
+    finally:
+        app.stop(grace_seconds=0.1)
+
+
 def test_start_blocks_before_runtime_or_services_when_host_resources_are_unsafe(tmp_path: Path):
     api_port = _unused_port()
     web_port = _unused_port()
@@ -497,6 +559,20 @@ def test_scripts_xylon_is_the_supported_doctor_entry_point():
 
     assert result.returncode == 0, result.stderr
     assert "READY: local prerequisites are available" in result.stdout
+
+
+def test_scripts_xylon_doctor_reports_a_custom_web_port():
+    port = _unused_port()
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "xylon"), "doctor", "--web-port", str(port)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"STOPPED: Web http://127.0.0.1:{port}" in result.stdout
 
 
 def test_prepare_standalone_copies_public_and_static_assets_into_the_runtime(tmp_path: Path):

@@ -1,13 +1,14 @@
 """Sequential canonical RTL verification pipeline."""
 
 import asyncio
-from collections.abc import Awaitable, Callable
 import logging
 import shutil
 import tempfile
 import uuid
+from collections.abc import Awaitable, Callable
 
 from agent.pipeline.artifacts import persist_pipeline_artifacts
+from agent.pipeline.limits import validate_pipeline_inputs
 from agent.pipeline.models import (
     FailureKind,
     PipelineConfig,
@@ -38,6 +39,7 @@ async def run_pipeline(
     cancellation_event: asyncio.Event | None = None,
 ) -> PipelineResult:
     """Run the supported local flow and publish one canonical result."""
+    validate_pipeline_inputs(rtl_code, testbench_code)
     config = config or PipelineConfig()
     mode = (
         RunMode.PROVIDED_TESTBENCH

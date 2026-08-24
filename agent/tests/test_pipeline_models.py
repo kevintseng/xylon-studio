@@ -1,5 +1,7 @@
 """Tests for pipeline data models."""
 
+from datetime import UTC, datetime
+
 import pytest
 
 from agent.pipeline.models import (
@@ -54,6 +56,19 @@ class TestStepResult:
         serialized = result.to_dict()["steps"][0]
         assert serialized["failure_kind"] == "infrastructure"
         assert serialized["recovery_code"] == "repair_toolchain"
+
+    def test_default_timestamps_are_explicit_utc(self):
+        step = StepResult("lint", StepStatus.PASSED, 0.1)
+        result = PipelineResult(
+            pipeline_id="pipe-timezone",
+            steps=[step],
+            final_coverage=None,
+        )
+
+        for timestamp in (step.timestamp, result.timestamp):
+            parsed = datetime.fromisoformat(timestamp)
+            assert parsed.tzinfo is not None
+            assert parsed.utcoffset() == UTC.utcoffset(parsed)
 
 
 class TestCoverageReport:

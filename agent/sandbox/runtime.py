@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
 import json
+import sys
+from dataclasses import dataclass
 from pathlib import Path
-
 
 _VERSIONS_FILE = Path(__file__).resolve().parents[2] / "runtime" / "versions.env"
 _REQUIRED_KEYS = {
@@ -16,6 +17,24 @@ _REQUIRED_KEYS = {
     "YOSYS_VERSION",
     "YOSYS_COMMIT",
 }
+
+
+def runtime_project_name(repo_root: str | Path | None = None) -> str:
+    """Return a stable Compose project identity unique to this checkout."""
+    root = (
+        Path(repo_root).expanduser().resolve()
+        if repo_root is not None
+        else Path(__file__).resolve().parents[2]
+    )
+    digest = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
+    return f"xylon-{digest}"
+
+
+def runtime_container_name(service: str, repo_root: str | Path | None = None) -> str:
+    """Return the Compose v2 container name for one checkout-owned service."""
+    if service not in {"verilator", "yosys"}:
+        raise ValueError(f"Unsupported EDA service: {service}")
+    return f"{runtime_project_name(repo_root)}-{service}-1"
 
 
 @dataclass(frozen=True)
@@ -74,6 +93,9 @@ def load_runtime_spec(path: str | Path = _VERSIONS_FILE) -> RuntimeSpec:
 
 def main() -> None:
     """Print observed runtime identity and fail when it differs from the pins."""
+    if sys.argv[1:] == ["--project-name"]:
+        print(runtime_project_name())
+        return
     from agent.sandbox.manager import SandboxManager
 
     identity = SandboxManager().get_tool_identity()

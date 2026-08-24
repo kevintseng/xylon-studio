@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import hmac
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import tempfile
 import uuid
+from dataclasses import dataclass
+from pathlib import Path
 
+from agent.pipeline.limits import validate_pipeline_inputs
 from agent.pipeline.models import (
     ArtifactBundle,
     ArtifactFile,
@@ -20,7 +21,6 @@ from agent.pipeline.models import (
     PipelineOutcome,
     PipelineResult,
 )
-
 
 SCHEMA_VERSION = 1
 _SAFE_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
@@ -108,6 +108,7 @@ def persist_pipeline_artifacts(
     config: PipelineConfig,
 ) -> ArtifactBundle:
     """Atomically publish the frozen inputs and canonical terminal evidence."""
+    validate_pipeline_inputs(rtl_code, testbench_code)
     _validate_pipeline_id(result.pipeline_id)
 
     root = Path(config.artifact_root).expanduser().resolve()

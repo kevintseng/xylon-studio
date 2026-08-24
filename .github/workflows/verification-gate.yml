@@ -1,0 +1,136 @@
+name: verification-gate
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verification-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python:
+          - "3.11"
+          - "3.14"
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install hash-locked dependencies
+        run: |
+          python -m venv agent/venv
+          agent/venv/bin/python -m pip install --require-hashes -r requirements.lock
+      - name: Run backend contract suite
+        run: agent/venv/bin/python -m pytest -q agent/tests agent/pipeline/tests
+      - name: Lint Python source
+        run: agent/venv/bin/python -m ruff check agent setup.py
+      - name: Build and smoke-test the installed Python wheel
+        run: |
+          agent/venv/bin/python -m pip wheel . --no-deps --no-build-isolation --wheel-dir dist-test
+          agent/venv/bin/python -m pip install --no-deps --force-reinstall dist-test/*.whl
+          cd /tmp
+          "$GITHUB_WORKSPACE/agent/venv/bin/python" -c "import agent; import agent.cli; import agent.api.main"
+      - name: Audit resolved Python dependency graph
+        run: agent/venv/bin/python -m pip_audit --strict
+      - name: Check launcher syntax
+        run: bash -n scripts/xylon scripts/eda-runtime
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install locked dependencies
+        working-directory: web
+        run: npm ci
+      - name: Run frontend contract tests
+        working-directory: web
+        run: npm run test:contracts
+      - name: Lint
+        working-directory: web
+        run: npm run lint
+      - name: Type-check
+        working-directory: web
+        run: npm run type-check
+      - name: Audit dependencies
+        working-directory: web
+        run: npm audit
+      - name: Build production application
+        working-directory: web
+        run: npm run build
+
+  runtime-integration:
+    name: Runtime integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+      - name: Install hash-locked runtime test dependencies
+        run: |
+          python -m venv agent/venv
+          agent/venv/bin/python -m pip install --require-hashes -r requirements.lock
+      - name: Start pinned EDA runtime
+        run: scripts/eda-runtime up
+      - name: Verify runtime identity
+        run: scripts/eda-runtime verify
+      - name: Run real passing and failure integration tests
+        run: agent/venv/bin/python -m pytest -q -m integration agent/pipeline/tests/test_pipeline.py
+      - name: Retain runtime SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        with:
+          image: xylon-eda:verilator-5.050-yosys-0.65
+          artifact-name: xylon-eda-runtime.spdx.json
+          output-file: xylon-eda-runtime.spdx.json
+          format: spdx-json
+      - name: Stop pinned EDA runtime
+        if: always()
+        run: scripts/eda-runtime down
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan committed content
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

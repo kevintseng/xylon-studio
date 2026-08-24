@@ -17,9 +17,10 @@ import logging
 import os
 import subprocess
 import sys
+import time
 
 from agent.sandbox.executor import ExecutionError, SandboxExecutor
-from agent.sandbox.runtime import load_runtime_spec
+from agent.sandbox.runtime import load_runtime_spec, runtime_container_name
 
 # Configure logging
 # Environment-aware: use file logging in container, stdout-only in local dev
@@ -53,8 +54,14 @@ class SandboxManager:
     def __init__(self):
         """Initialize sandbox manager."""
         # Container names from environment
-        self.verilator_container = os.getenv('VERILATOR_CONTAINER', 'xylon-verilator')
-        self.yosys_container = os.getenv('YOSYS_CONTAINER', 'xylon-yosys')
+        self.verilator_container = os.getenv(
+            'VERILATOR_CONTAINER',
+            runtime_container_name('verilator'),
+        )
+        self.yosys_container = os.getenv(
+            'YOSYS_CONTAINER',
+            runtime_container_name('yosys'),
+        )
 
         # Host path that maps to /results inside containers (writable bind mount)
         self.host_results_dir = os.getenv(
@@ -312,6 +319,16 @@ class SandboxManager:
                 print(result['coverage_data'])
         """
         logger.info(f"Running simulation: RTL={rtl_file}, TB={tb_file}, coverage={coverage}")
+        deadline = time.monotonic() + timeout
+
+        def remaining_timeout() -> float:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ExecutionError(
+                    f"Simulation timeout ({timeout}s exceeded)",
+                    failure_kind="infrastructure",
+                )
+            return remaining
 
         # Extract module name from RTL file
         module_name = os.path.splitext(os.path.basename(rtl_file))[0]
@@ -333,7 +350,7 @@ class SandboxManager:
 
             verilate_result = self.verilator.execute(
                 verilate_cmd,
-                timeout=timeout,
+                timeout=remaining_timeout(),
                 workdir=workdir,
                 env={"CCACHE_DISABLE": "1"},
             )
@@ -358,7 +375,7 @@ class SandboxManager:
             exe_path = f"./obj_dir/V{module_name}"
             run_result = self.verilator.execute(
                 [exe_path],
-                timeout=timeout // 2,
+                timeout=remaining_timeout(),
                 workdir=workdir,
             )
 
@@ -371,7 +388,11 @@ class SandboxManager:
             # Step 3: Collect coverage data if enabled
             coverage_data = None
             if coverage and run_result.success:
-                coverage_data = self._collect_coverage_data(module_name, timeout, workdir=workdir)
+                coverage_data = self._collect_coverage_data(
+                    module_name,
+                    remaining_timeout,
+                    workdir=workdir,
+                )
 
             coverage_duration = (
                 coverage_data.get("duration_seconds", 0)
@@ -473,7 +494,7 @@ class SandboxManager:
         finally:
             self._cleanup_container_dir(self.verilator_container, container_dir)
 
-    def _collect_coverage_data(self, module_name: str, timeout: int, workdir: str = None) -> dict:
+    def _collect_coverage_data(self, module_name: str, remaining_timeout, workdir: str = None) -> dict:
         """
         Collect and parse Verilator coverage data after simulation.
 
@@ -493,7 +514,7 @@ class SandboxManager:
             cov_result = self.verilator.execute(
                 ["verilator_coverage", "--annotate", "coverage_annotated",
                  "coverage.dat"],
-                timeout=timeout // 4,
+                timeout=remaining_timeout(),
                 workdir=workdir,
             )
 
@@ -503,7 +524,7 @@ class SandboxManager:
             annotated_dir = "coverage_annotated" if not workdir else f"{workdir}/coverage_annotated"
             ann_result = self.verilator.execute(
                 ["sh", "-c", f"cat {annotated_dir}/*.v 2>/dev/null || echo ''"],
-                timeout=timeout // 4,
+                timeout=remaining_timeout(),
                 workdir=workdir,
             )
 

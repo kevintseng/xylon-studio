@@ -5,9 +5,11 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/.." && pwd)"
 compose_file="${repo_root}/compose.eda.yaml"
 versions_file="${repo_root}/runtime/versions.env"
+project_name="$(cd -- "${repo_root}" && python3 -m agent.sandbox.runtime --project-name)"
 
 compose() {
   docker compose \
+    --project-name "${project_name}" \
     --env-file "${versions_file}" \
     -f "${compose_file}" \
     --project-directory "${repo_root}" \

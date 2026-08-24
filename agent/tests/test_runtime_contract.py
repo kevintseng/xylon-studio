@@ -1,9 +1,9 @@
 """Pinned local EDA runtime contract tests."""
 
-from pathlib import Path
 import os
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -14,7 +14,6 @@ from agent.pipeline.runner import run_pipeline
 from agent.sandbox.executor import ExecutionResult
 from agent.sandbox.manager import SandboxManager
 from agent.sandbox.runtime import load_runtime_spec
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 

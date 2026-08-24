@@ -57,7 +57,7 @@ ARG YOSYS_VERSION
 ARG YOSYS_COMMIT
 
 LABEL org.opencontainers.image.title="XylonStudio pinned EDA runtime" \
-      org.opencontainers.image.source="https://github.com/pcircle-com/xylon" \
+      org.opencontainers.image.source="https://github.com/kevintseng/xylon-studio" \
       io.xylon.verilator.version="${VERILATOR_VERSION}" \
       io.xylon.verilator.commit="${VERILATOR_COMMIT}" \
       io.xylon.yosys.version="${YOSYS_VERSION}" \
