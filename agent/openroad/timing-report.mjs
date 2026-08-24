@@ -16,6 +16,30 @@ function field(text, name) {
   return match?.[1]?.trim() ?? null
 }
 
+function maxPathSection(report) {
+  const header = report.match(/^.*\breport_checks[ \t]+-path_delay[ \t]+max(?:[ \t]+[^\r\n]*)?$/mi)
+  if (!header) {
+    throw new Error('TimingReportInvalid: setup max-path section was not found')
+  }
+  const afterHeader = report.slice(header.index + header[0].length)
+  const nextSection = afterHeader.match(/^[ \t]*={10,}[ \t]*$/m)
+  return nextSection ? afterHeader.slice(0, nextSection.index) : afterHeader
+}
+
+function terminalSlack(path) {
+  const formats = [
+    new RegExp(`^\\s*${NUMBER}\\s+slack(?:\\s+\\([^)]*\\))?\\s*$`, 'mi'),
+    new RegExp(`^\\s*slack(?:\\s+\\([^)]*\\))?\\s+${NUMBER}\\s*$`, 'mi'),
+  ]
+  for (const pattern of formats) {
+    const match = path.match(pattern)
+    if (!match) continue
+    const value = Number(match[1])
+    if (Number.isFinite(value)) return { index: match.index, text: match[0], value }
+  }
+  throw new Error('TimingReportInvalid: worst setup path slack was not found')
+}
+
 export function parseOrfsTimingReport(rawReport) {
   if (typeof rawReport !== 'string' || rawReport.length === 0) {
     throw new Error('TimingReportInvalid: report is empty')
@@ -33,12 +57,12 @@ export function parseOrfsTimingReport(rawReport) {
     new RegExp(`^\\s*\\[METRIC\\]\\s+timing__setup__tns\\s+${NUMBER}`, 'mi'),
     new RegExp(`^\\s*tns\\s+(?:max\\s+)?${NUMBER}`, 'mi'),
   ], 'TNS')
-  const pathStart = report.search(/^\s*Startpoint:\s*/mi)
+  const setupSection = maxPathSection(report)
+  const pathStart = setupSection.search(/^\s*Startpoint:\s*/mi)
   if (pathStart < 0) throw new Error('TimingReportInvalid: worst setup path startpoint was not found')
-  const tail = report.slice(pathStart)
-  const slackMatch = tail.match(new RegExp(`^\\s*slack(?:\\s+\\([^)]*\\))?\\s+${NUMBER}\\s*$`, 'mi'))
-  if (!slackMatch) throw new Error('TimingReportInvalid: worst setup path slack was not found')
-  const pathEnd = slackMatch.index + slackMatch[0].length
+  const tail = setupSection.slice(pathStart)
+  const slackResult = terminalSlack(tail)
+  const pathEnd = slackResult.index + slackResult.text.length
   const boundedPath = tail.slice(0, Math.min(pathEnd, 32 * 1024))
   const startpoint = field(boundedPath, 'Startpoint')
   const endpoint = field(boundedPath, 'Endpoint')
@@ -46,8 +70,7 @@ export function parseOrfsTimingReport(rawReport) {
   if (!startpoint || !endpoint || !pathType || !/max/i.test(pathType)) {
     throw new Error('TimingReportInvalid: worst setup path identity is incomplete')
   }
-  const slack = Number(slackMatch[1])
-  if (!Number.isFinite(slack)) throw new Error('TimingReportInvalid: worst setup path slack is not finite')
+  const slack = slackResult.value
   if (Math.abs(wns - slack) > 0.01) {
     throw new Error(`TimingReportInvalid: WNS ${wns} does not match worst setup path slack ${slack}`)
   }
