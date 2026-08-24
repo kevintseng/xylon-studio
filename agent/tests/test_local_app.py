@@ -26,12 +26,38 @@ def test_doctor_accepts_the_current_prebuilt_workspace_without_starting_services
     while web_port == api_port:
         web_port = _unused_port()
 
-    assert local_app.doctor(api_port=api_port, web_port=web_port) == 0
+    with patch(
+        "agent.local_app.collect_resource_snapshot",
+        return_value=_safe_resource_probe(),
+    ):
+        assert local_app.doctor(api_port=api_port, web_port=web_port) == 0
     output = capsys.readouterr().out
     assert "READY: local prerequisites are available" in output
     assert "RESOURCE READY:" in output or "RESOURCE BLOCKED:" in output
-    assert f"STOPPED: API http://127.0.0.1:{api_port}" in output
-    assert f"STOPPED: Web http://127.0.0.1:{web_port}" in output
+    assert f"PORT AVAILABLE: API http://127.0.0.1:{api_port}" in output
+    assert f"PORT AVAILABLE: Web http://127.0.0.1:{web_port}" in output
+
+
+def test_doctor_fails_with_actionable_resource_and_port_blockers(capsys):
+    unsafe = local_app.ResourceSnapshot(
+        logical_cpus=12,
+        load_one_minute=12.0,
+        memory_free_percent=19,
+        disk_free_bytes=9 * 1024**3,
+        memory_available_bytes=6 * 1024**3,
+    )
+    with patch("agent.local_app.collect_resource_snapshot", return_value=unsafe), patch(
+        "agent.local_app._port_is_open",
+        side_effect=[False, True],
+    ):
+        assert local_app.doctor(api_port=5001, web_port=3000) == 1
+
+    output = capsys.readouterr().out
+    assert "RESOURCE BLOCKED:" in output
+    assert "PORT AVAILABLE: API http://127.0.0.1:5001" in output
+    assert "PORT IN USE: Web http://127.0.0.1:3000" in output
+    assert "rerun scripts/xylon start" in output
+    assert "LISTENING: Web" not in output
 
 
 def test_resource_preflight_allows_capacity_for_one_capped_local_run():
@@ -959,7 +985,7 @@ def test_logs_prints_a_bounded_tail_and_the_full_log_location(tmp_path: Path, ca
     assert str(app.state_dir / "api.log") in output
 
 
-def test_scripts_xylon_is_the_supported_doctor_entry_point():
+def test_scripts_xylon_doctor_reports_real_readiness_at_the_supported_entry_point():
     result = subprocess.run(
         [str(REPO_ROOT / "scripts" / "xylon"), "doctor"],
         cwd=REPO_ROOT,
@@ -968,9 +994,12 @@ def test_scripts_xylon_is_the_supported_doctor_entry_point():
         check=False,
     )
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode in (0, 1), result.stderr
     assert "Python 3.9" not in result.stderr
     assert "READY: local prerequisites are available" in result.stdout
+    if result.returncode == 1:
+        assert "RESOURCE BLOCKED:" in result.stdout or "PORT IN USE:" in result.stdout
+        assert "RECOVERY:" in result.stdout
 
 
 def test_scripts_xylon_doctor_reports_a_custom_web_port():
@@ -983,8 +1012,8 @@ def test_scripts_xylon_doctor_reports_a_custom_web_port():
         check=False,
     )
 
-    assert result.returncode == 0, result.stderr
-    assert f"STOPPED: Web http://127.0.0.1:{port}" in result.stdout
+    assert result.returncode in (0, 1), result.stderr
+    assert f"PORT AVAILABLE: Web http://127.0.0.1:{port}" in result.stdout
 
 
 def test_prepare_standalone_copies_public_and_static_assets_into_the_runtime(tmp_path: Path):

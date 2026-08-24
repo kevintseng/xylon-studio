@@ -1045,6 +1045,10 @@ def doctor(*, api_port: int = 5001, web_port: int = 3000) -> int:
     if resource_blockers:
         for blocker in resource_blockers:
             print(f"RESOURCE BLOCKED: {blocker}")
+        print(
+            "RECOVERY: wait for load to fall or free local capacity, "
+            "then rerun scripts/xylon start"
+        )
     else:
         memory = (
             f"{resources.memory_free_percent}%/"
@@ -1061,11 +1065,16 @@ def doctor(*, api_port: int = 5001, web_port: int = 3000) -> int:
         )
     api_url = f"http://127.0.0.1:{api_port}"
     web_url = f"http://127.0.0.1:{web_port}"
-    api_state = "LISTENING" if _port_is_open(api_port) else "STOPPED"
-    web_state = "LISTENING" if _port_is_open(web_port) else "STOPPED"
-    print(f"{api_state}: API {api_url}")
-    print(f"{web_state}: Web {web_url}")
-    return 0
+    api_in_use = _port_is_open(api_port)
+    web_in_use = _port_is_open(web_port)
+    print(f"{'PORT IN USE' if api_in_use else 'PORT AVAILABLE'}: API {api_url}")
+    print(f"{'PORT IN USE' if web_in_use else 'PORT AVAILABLE'}: Web {web_url}")
+    if api_in_use or web_in_use:
+        print(
+            f"RECOVERY: select unused local ports or free 127.0.0.1:{api_port} "
+            f"and 127.0.0.1:{web_port}, then rerun scripts/xylon start"
+        )
+    return 1 if resource_blockers or api_in_use or web_in_use else 0
 
 
 def main() -> int:
