@@ -141,6 +141,7 @@ async def run_pipeline_endpoint(request: PipelineRequest) -> PipelineResponse:
             simulation_timeout=request.simulation_timeout,
             lint_enabled=request.lint_enabled,
             synthesis_enabled=request.synthesis_enabled,
+            resource_check_enabled=True,
         )
 
         # Run pipeline
@@ -246,6 +247,7 @@ async def pipeline_websocket(ws: WebSocket):
             simulation_timeout=request.simulation_timeout,
             lint_enabled=request.lint_enabled,
             synthesis_enabled=request.synthesis_enabled,
+            resource_check_enabled=True,
         )
 
         async def watch_client_messages():

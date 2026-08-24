@@ -99,6 +99,7 @@ def _portable_config(config: PipelineConfig) -> dict:
         "lint_enabled": config.lint_enabled,
         "simulation_timeout": config.simulation_timeout,
         "synthesis_enabled": config.synthesis_enabled,
+        "resource_check_enabled": config.resource_check_enabled,
         "runtime_check_enabled": config.runtime_check_enabled,
     }
 
@@ -344,6 +345,7 @@ def load_rerun_manifest(manifest_path: str | Path) -> RerunRequest:
         lint_enabled=config_data.get("lint_enabled", True),
         simulation_timeout=config_data.get("simulation_timeout", 300),
         synthesis_enabled=config_data.get("synthesis_enabled", False),
+        resource_check_enabled=True,
         runtime_check_enabled=config_data.get("runtime_check_enabled", True),
         artifact_root=str(run_dir.parent),
     )

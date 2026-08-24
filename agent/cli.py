@@ -4,9 +4,9 @@ XylonStudio CLI.
 Run verification pipeline from the command line.
 
 Usage:
-    python -m agent.cli run examples/adder/adder_8bit.v
-    python -m agent.cli run design.v --testbench tb.cpp
-    python -m agent.cli run design.v --synthesis
+    agent/venv/bin/python -m agent.cli run examples/adder/adder_8bit.v
+    agent/venv/bin/python -m agent.cli run design.v --testbench tb.cpp
+    agent/venv/bin/python -m agent.cli run design.v --synthesis
 """
 
 import argparse
@@ -132,6 +132,7 @@ async def run_command(args):
         coverage_target=args.coverage_target,
         simulation_timeout=args.timeout,
         synthesis_enabled=args.synthesis,
+        resource_check_enabled=True,
     )
 
     # Progress callback

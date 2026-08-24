@@ -25,6 +25,10 @@ def evaluate_openroad_preflight(
     blockers: list[str] = []
     if requested_cpus < 1:
         blockers.append("requested CPUs must be at least 1")
+    elif snapshot.load_one_minute is None:
+        blockers.append(
+            "CPU load could not be measured safely; OpenROAD admission is fail-closed"
+        )
     elif snapshot.load_one_minute + requested_cpus > snapshot.logical_cpus:
         blockers.append(
             "current CPU load plus the OpenROAD allocation would exceed "

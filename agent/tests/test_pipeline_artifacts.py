@@ -48,7 +48,11 @@ def _verified_result(pipeline_id: str = "run-123") -> PipelineResult:
 
 def test_persisted_manifest_is_complete_integrity_checked_and_rerunnable(tmp_path):
     result = _verified_result()
-    config = PipelineConfig(coverage_target=0.9, artifact_root=str(tmp_path))
+    config = PipelineConfig(
+        coverage_target=0.9,
+        resource_check_enabled=True,
+        artifact_root=str(tmp_path),
+    )
 
     bundle = persist_pipeline_artifacts(
         result=result,
@@ -73,6 +77,7 @@ def test_persisted_manifest_is_complete_integrity_checked_and_rerunnable(tmp_pat
     assert manifest["result"] == result.to_dict()
     assert manifest["result"]["outcome"] == "verified"
     assert manifest["config"]["coverage_target"] == 0.9
+    assert manifest["config"]["resource_check_enabled"] is True
     assert manifest["rerun"]["replay_kind"] == "frozen_inputs"
     assert manifest["rerun"]["argv"] == [
         "agent/venv/bin/python", "-m", "agent.cli", "rerun", "manifest.json",
@@ -97,6 +102,7 @@ def test_persisted_manifest_is_complete_integrity_checked_and_rerunnable(tmp_pat
     assert replay.rtl_code == "module adder; endmodule\n"
     assert replay.testbench_code == 'int main() { puts("PASS"); }\n'
     assert replay.config.coverage_target == 0.9
+    assert replay.config.resource_check_enabled is True
     assert replay.expected_outcome == PipelineOutcome.VERIFIED
 
 

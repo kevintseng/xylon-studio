@@ -38,8 +38,9 @@ test('first failing self-check promotes the actionable simulator counterexample'
 
 test('interactive flow renders only requested canonical gates from one state source', () => {
   const flow = buildPipelineFlow(
-    ['runtime', 'lint', 'simulate', 'coverage', 'artifacts'],
+    ['resource', 'runtime', 'lint', 'simulate', 'coverage', 'artifacts'],
     [
+      { step_name: 'resource', status: 'passed', required: true, output: { resource: { logical_cpus: 8 } } },
       { step_name: 'runtime', status: 'passed', required: true, output: { verified: true } },
       { step_name: 'lint', status: 'passed', required: true },
       { step_name: 'unknown_noncanonical_gate', status: 'passed', required: true },
@@ -49,6 +50,7 @@ test('interactive flow renders only requested canonical gates from one state sou
   )
 
   assert.deepEqual(flow.map((node) => node.step_name), [
+    'resource',
     'runtime',
     'lint',
     'simulate',
@@ -56,9 +58,10 @@ test('interactive flow renders only requested canonical gates from one state sou
     'artifacts',
   ])
   assert.equal(flow[0].has_evidence, true)
-  assert.equal(flow[1].has_evidence, false)
-  assert.equal(flow[2].status, 'running')
-  assert.equal(flow[3].status, 'pending')
+  assert.equal(flow[1].has_evidence, true)
+  assert.equal(flow[2].has_evidence, false)
+  assert.equal(flow[3].status, 'running')
+  assert.equal(flow[4].status, 'pending')
 })
 
 test('every canonical outcome has distinct, truthful presentation copy', () => {
@@ -97,6 +100,10 @@ test('recovery presentation gives an executable next action', () => {
   const failingCheckRecovery = getRecoveryPresentation('inspect_failing_check')
   assert.ok(failingCheckRecovery)
   assert.equal(failingCheckRecovery.title, 'Inspect the failing self-check')
+  const resourceRecovery = getRecoveryPresentation('wait_for_resources')
+  assert.ok(resourceRecovery)
+  assert.equal(resourceRecovery.title, 'Wait for local resources')
+  assert.match(resourceRecovery.detail, /CPU, memory, and disk/)
   assert.equal(getRecoveryPresentation(null), null)
 })
 

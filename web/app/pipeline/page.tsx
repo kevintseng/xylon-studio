@@ -32,6 +32,7 @@ import {
 const API_URL = resolveLocalApiUrl(process.env.NEXT_PUBLIC_API_URL)
 
 const PIPELINE_STEP_ORDER = [
+  'resource',
   'runtime',
   'lint',
   'simulate',
@@ -284,6 +285,9 @@ export default function PipelinePage() {
         const step = data.step as StepState
         setActiveStep(null)
         setStepElapsed(0)
+        if (step.status === 'failed' || step.status === 'error') {
+          setExpandedStep(step.step_name)
+        }
         if (stepTimerRef.current) { clearInterval(stepTimerRef.current); stepTimerRef.current = null }
 
         setSteps((prev) => {
@@ -325,6 +329,20 @@ export default function PipelinePage() {
     if (seconds < 1) return '<1s'
     if (seconds < 60) return `${seconds.toFixed(1)}s`
     return `${Math.floor(seconds / 60)}m ${(seconds % 60).toFixed(0)}s`
+  }
+
+  const formatGiB = (bytes: unknown) => {
+    if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) {
+      return t('common.unavailable')
+    }
+    return `${(bytes / 1024 ** 3).toFixed(1)} GiB`
+  }
+
+  const formatLoad = (value: unknown) => {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+      return t('common.unavailable')
+    }
+    return value.toFixed(2)
   }
 
   const formatCoverageValue = (value: unknown) => {
@@ -793,6 +811,35 @@ export default function PipelinePage() {
                                       ? t('pipeline.detail.runtimeVerified')
                                       : t('pipeline.detail.runtimeRejected')}
                                   </p>
+                                </div>
+                              ) : null}
+
+                              {step.step_name === 'resource' && output.resource && typeof output.resource === 'object' ? (
+                                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                                  <div className="p-2 bg-slate-800 rounded">
+                                    <p className="text-xs text-slate-400">{t('pipeline.detail.resource.cpuLoad')}</p>
+                                    <p className="text-lg font-semibold">
+                                      {formatLoad((output.resource as Record<string, unknown>).load_one_minute)}
+                                    </p>
+                                  </div>
+                                  <div className="p-2 bg-slate-800 rounded">
+                                    <p className="text-xs text-slate-400">{t('pipeline.detail.resource.cpus')}</p>
+                                    <p className="text-lg font-semibold">
+                                      {String((output.resource as Record<string, unknown>).logical_cpus ?? t('common.unavailable'))}
+                                    </p>
+                                  </div>
+                                  <div className="p-2 bg-slate-800 rounded">
+                                    <p className="text-xs text-slate-400">{t('pipeline.detail.resource.memory')}</p>
+                                    <p className="text-lg font-semibold">
+                                      {formatGiB((output.resource as Record<string, unknown>).memory_available_bytes)}
+                                    </p>
+                                  </div>
+                                  <div className="p-2 bg-slate-800 rounded">
+                                    <p className="text-xs text-slate-400">{t('pipeline.detail.resource.disk')}</p>
+                                    <p className="text-lg font-semibold">
+                                      {formatGiB((output.resource as Record<string, unknown>).disk_free_bytes)}
+                                    </p>
+                                  </div>
                                 </div>
                               ) : null}
 

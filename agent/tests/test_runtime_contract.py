@@ -97,6 +97,57 @@ def test_runtime_up_reuses_an_existing_image_instead_of_forcing_a_rebuild(tmp_pa
     assert result.returncode == 0, result.stderr
 
 
+def test_openroad_smoke_stops_after_the_first_failed_doctor_probe(tmp_path: Path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    call_log = tmp_path / "calls.log"
+    fake_node = fake_bin / "node"
+    fake_node.write_text(
+        "#!/bin/sh\n"
+        f"printf 'node %s\\n' \"$*\" >> {call_log}\n"
+        "if [ \"$1\" = \"--version\" ]; then echo v26.0.0; exit 0; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        "#!/bin/sh\n"
+        f"printf 'docker %s\\n' \"$*\" >> {call_log}\n"
+        "if [ \"$1\" = \"info\" ]; then exit 23; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_npm = fake_bin / "npm"
+    fake_npm.write_text(
+        "#!/bin/sh\n"
+        f"printf 'npm %s\\n' \"$*\" >> {call_log}\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    for executable in (fake_node, fake_docker, fake_npm):
+        executable.chmod(0o755)
+
+    environment = os.environ.copy()
+    environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "xylon-openroad"), "smoke"],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    calls = call_log.read_text(encoding="utf-8")
+    assert result.returncode != 0
+    assert "BLOCKED: Docker is unavailable" in result.stderr
+    assert "Connection closed" not in result.stderr
+    assert "docker info" in calls
+    assert "docker image inspect" not in calls
+    assert "npm " not in calls
+    assert "smoke-client.mjs" not in calls
+
+
 def test_importing_sandbox_package_does_not_preload_runtime_module():
     probe = subprocess.run(
         [

@@ -259,6 +259,12 @@ const RECOVERY: Record<string, RecoveryPresentation> = {
     titleKey: 'pipeline.recovery.rerun_when_ready.title',
     detailKey: 'pipeline.recovery.rerun_when_ready.detail',
   },
+  wait_for_resources: {
+    title: 'Wait for local resources',
+    detail: 'Close or finish other heavy work, then rerun after CPU, memory, and disk checks are clear.',
+    titleKey: 'pipeline.recovery.wait_for_resources.title',
+    detailKey: 'pipeline.recovery.wait_for_resources.detail',
+  },
   add_independent_testbench: {
     title: 'Add independent verification tests',
     detail: 'Provide a self-checking C++ testbench so Xylon can execute real behavioral checks.',

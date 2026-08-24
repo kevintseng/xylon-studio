@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+from agent.local_app import ResourceSnapshot
 from agent.pipeline.models import FailureKind, PipelineConfig, StepStatus
 from agent.pipeline.runner import run_pipeline
 
@@ -138,6 +139,36 @@ async def test_pipeline_without_testbench_or_lint_fails_closed(
     assert configuration.recovery_code == "enable_lint_or_provide_testbench"
     mock_sandbox_manager.lint_verilog_string.assert_not_called()
     mock_sandbox_manager.run_verilator_sim_string.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_blocks_before_writing_or_starting_tools_when_resources_are_unsafe(
+    tmp_path,
+    mock_sandbox_manager,
+):
+    unsafe = ResourceSnapshot(
+        logical_cpus=12,
+        load_one_minute=11.0,
+        memory_free_percent=20,
+        disk_free_bytes=20 * 1024**3,
+        memory_available_bytes=4 * 1024**3,
+    )
+    with patch("agent.local_app.collect_resource_snapshot", return_value=unsafe):
+        result = await run_pipeline(
+            SIMPLE_RTL,
+            config=PipelineConfig(
+                resource_check_enabled=True,
+                artifact_root=str(tmp_path),
+            ),
+        )
+
+    assert result.outcome.value == "infrastructure_error"
+    assert [step.step_name for step in result.steps] == ["resource", "artifacts"]
+    resource = result.get_step("resource")
+    assert resource.status == StepStatus.ERROR
+    assert resource.recovery_code == "wait_for_resources"
+    assert any("memory available 4.0 GiB" in error for error in resource.errors)
+    mock_sandbox_manager.lint_verilog_string.assert_not_called()
 
 
 @pytest.mark.asyncio

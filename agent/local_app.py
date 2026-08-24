@@ -367,7 +367,7 @@ def collect_resource_snapshot(repo_root: Path) -> ResourceSnapshot:
     try:
         load_one_minute = os.getloadavg()[0]
     except (AttributeError, OSError):
-        load_one_minute = 0.0
+        load_one_minute = None
 
     memory_total_bytes, memory_available_bytes = _read_linux_memory()
     memory_free_percent: int | None = None

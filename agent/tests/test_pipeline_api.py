@@ -53,7 +53,7 @@ def test_websocket_final_result_uses_canonical_pipeline_contract():
     with patch(
         "agent.api.routes.pipeline.run_pipeline",
         new=AsyncMock(return_value=result),
-    ):
+    ) as runner:
         with TestClient(app) as client:
             with client.websocket_connect("/api/pipeline/ws") as websocket:
                 websocket.send_json({
@@ -68,6 +68,7 @@ def test_websocket_final_result_uses_canonical_pipeline_contract():
     assert message["result"]["final_coverage"]["metric_sources"] == {
         "score": "computed_verilator_point_counts"
     }
+    assert runner.await_args.kwargs["config"].resource_check_enabled is True
 
 
 def test_websocket_cancel_message_returns_canonical_cancelled_result():
@@ -162,7 +163,7 @@ def test_rest_run_returns_the_same_canonical_result_contract():
     with patch(
         "agent.api.routes.pipeline.run_pipeline",
         new=AsyncMock(return_value=result),
-    ):
+    ) as runner:
         with TestClient(app) as client:
             response = client.post(
                 "/api/pipeline/run",
@@ -171,6 +172,7 @@ def test_rest_run_returns_the_same_canonical_result_contract():
 
     assert response.status_code == 200
     assert response.json() == result.to_dict()
+    assert runner.await_args.kwargs["config"].resource_check_enabled is True
 
 
 def test_removed_dragon_endpoints_are_not_public_api_surfaces():
