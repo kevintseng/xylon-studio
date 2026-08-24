@@ -50,7 +50,7 @@ jobs:
           cd /tmp
           "$GITHUB_WORKSPACE/agent/venv/bin/python" -c "import agent; import agent.cli; import agent.api.main"
       - name: Audit resolved Python dependency graph
-        run: agent/venv/bin/python -m pip_audit --strict
+        run: agent/venv/bin/python -m pip_audit --strict -r requirements.lock
       - name: Check launcher syntax
         run: bash -n scripts/xylon scripts/eda-runtime
 
