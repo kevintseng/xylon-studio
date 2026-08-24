@@ -6,6 +6,7 @@ import { checkOpenROADResourceAdmission } from '../resource-admission.mjs'
 test('resource admission accepts only a valid ready payload', async () => {
   const result = await checkOpenROADResourceAdmission({
     repoRoot: '/repo',
+    requestedCpus: 4,
     execute: async (command, args, options) => {
       assert.equal(command, '/repo/agent/venv/bin/python')
       assert.deepEqual(args, ['-m', 'agent.openroad.resource', '--repo', '/repo', '--cpus', '4'])
