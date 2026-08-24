@@ -8,6 +8,7 @@
     "build": "next build --webpack",
     "postbuild": "node scripts/prepare-standalone.mjs",
     "start": "node .next/standalone/server.js",
+    "test:contracts": "node --experimental-strip-types --test lib/*.test.ts",
     "lint": "eslint .",
     "type-check": "tsc --noEmit"
   },
