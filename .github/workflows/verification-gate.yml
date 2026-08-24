@@ -41,8 +41,8 @@ jobs:
         run: agent/venv/bin/python -m pip_audit --strict -r requirements.lock
       - name: Check launcher syntax
         run: >-
-          bash -n scripts/xylon scripts/eda-runtime scripts/xylon-openroad
-          runtime/openroad/bin/openroad
+          bash -n scripts/xylon scripts/eda-runtime scripts/xylon-openroad scripts/xylon-timing
+          runtime/openroad/bin/openroad runtime/openroad/bin/orfs-timing
 
   openroad-foundation:
     name: OpenROAD foundation
@@ -77,11 +77,31 @@ jobs:
         run: npm audit
       - name: Exercise real OpenROAD MCP query, blocked change, exact prepared execution, and cleanup
         run: scripts/xylon-openroad smoke
+      - name: Exercise real RTL and SDC through the pinned sky130hd timing baseline
+        run: scripts/xylon-timing smoke
+      - name: Retain real timing baseline evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: sky130hd-timing-baseline
+          path: |
+            .xylon/timing/runs/*/identity.json
+            .xylon/timing/runs/*/manifest.json
+            .xylon/timing/runs/*/baseline/*.json
+            .xylon/timing/runs/*/reports/**/5_global_route.rpt
+            .xylon/timing/runs/*/runtime/*.log
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
       - name: Reject leaked OpenROAD containers
         if: always()
         run: |
           if docker ps -a --filter label=io.xylon.owner=openroad-mcp --format '{{.ID}}' | grep -q .; then
             docker ps -a --filter label=io.xylon.owner=openroad-mcp
+            exit 1
+          fi
+          if docker ps -a --filter label=io.xylon.owner=xylon-timing --format '{{.ID}}' | grep -q .; then
+            docker ps -a --filter label=io.xylon.owner=xylon-timing
             exit 1
           fi
 

@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd -- "${script_dir}/.." && pwd)"
+timing_client="${repo_root}/agent/openroad/timing-client.mjs"
+
+doctor() {
+  XYLON_OPENROAD_CPUS="${XYLON_OPENROAD_CPUS:-1}" "${repo_root}/scripts/xylon-openroad" doctor
+}
+
+analyze() {
+  doctor >/dev/null
+  exec node "${timing_client}" analyze "$@"
+}
+
+smoke() {
+  doctor >/dev/null
+  exec node "${timing_client}" analyze \
+    --rtl "${repo_root}/examples/timing/sky130hd/timing_demo.v" \
+    --sdc "${repo_root}/examples/timing/sky130hd/constraints.sdc" \
+    --top timing_demo \
+    --platform sky130hd
+}
+
+case "${1:-}" in
+  doctor)
+    doctor
+    ;;
+  analyze)
+    shift
+    analyze "$@"
+    ;;
+  smoke)
+    smoke
+    ;;
+  *)
+    echo "Usage: scripts/xylon-timing {doctor|analyze --rtl FILE --sdc FILE --top MODULE [--platform sky130hd]|smoke}" >&2
+    exit 2
+    ;;
+esac
