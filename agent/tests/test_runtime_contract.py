@@ -69,6 +69,16 @@ def test_public_launchers_use_repo_python_instead_of_path_python():
         assert "python3 -m agent." not in source
 
 
+def test_openroad_launcher_propagates_every_doctor_and_resource_blocker():
+    source = (REPO_ROOT / "scripts" / "xylon-openroad").read_text(
+        encoding="utf-8"
+    )
+
+    assert "resource_preflight || return 1" in source
+    assert "doctor >/dev/null || return 1" in source
+    assert "doctor >/dev/null || exit $?" in source
+
+
 def test_runtime_up_reuses_an_existing_image_instead_of_forcing_a_rebuild(tmp_path: Path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
