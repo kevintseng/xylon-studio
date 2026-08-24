@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { CircuitBackground } from '@/components/circuit-bg'
 import { useI18n } from '@/lib/i18n'
 import { fetchOpenroadSnapshot, resolveOpenroadSnapshotUrl } from '@/lib/openroad-client'
+import { getRovingTabTargetIndex } from '@/lib/roving-tab-index'
 import {
   buildOpenroadStages,
   getOpenroadSnapshotFreshness,
@@ -232,11 +233,7 @@ export default function OpenroadPage() {
   }
 
   const handleStageKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
-    const nextIndex = event.key === 'ArrowRight' ? index + 1
-      : event.key === 'ArrowLeft' ? index - 1
-        : event.key === 'Home' ? 0
-          : event.key === 'End' ? stages.length - 1
-            : null
+    const nextIndex = getRovingTabTargetIndex(index, event.key, stages.length)
     if (nextIndex === null) return
     event.preventDefault()
     selectStageAt(nextIndex)

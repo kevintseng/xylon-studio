@@ -230,6 +230,7 @@ def test_rest_rejects_removed_generated_testbench_configuration():
 @pytest.mark.parametrize(
     "payload, field_name",
     [
+        ({"rtl_code": "module m; endmodule", "coverage_target": 0.0}, "coverage_target"),
         ({"rtl_code": "module m; endmodule", "coverage_target": 1.01}, "coverage_target"),
         ({"rtl_code": "module m; endmodule", "simulation_timeout": 0}, "simulation_timeout"),
         ({"rtl_code": "   "}, "rtl_code"),

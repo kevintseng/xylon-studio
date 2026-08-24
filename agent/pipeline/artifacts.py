@@ -20,6 +20,7 @@ from agent.pipeline.models import (
     PipelineConfig,
     PipelineOutcome,
     PipelineResult,
+    StepStatus,
 )
 
 SCHEMA_VERSION = 1
@@ -172,6 +173,31 @@ def persist_pipeline_artifacts(
                     staging,
                     "coverage_report",
                     "reports/coverage.txt",
+                    "text/plain",
+                )
+            )
+
+        synthesis_step = next(
+            (
+                step
+                for step in result.steps
+                if step.step_name == "synthesis"
+                and step.status == StepStatus.PASSED
+                and isinstance(step.output.get("report"), str)
+                and step.output["report"]
+            ),
+            None,
+        )
+        if synthesis_step is not None:
+            _atomic_write_text(
+                staging / "reports/synthesis.txt",
+                synthesis_step.output["report"],
+            )
+            files.append(
+                _descriptor(
+                    staging,
+                    "synthesis_report",
+                    "reports/synthesis.txt",
                     "text/plain",
                 )
             )

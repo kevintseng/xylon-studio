@@ -10,7 +10,7 @@ OpenROAD。
 Xylon 目前提供兩項真實且彼此獨立的功能：
 
 1. **RTL 驗證**：執行固定版本的 Verilator lint、選用的獨立 C++ 自我檢查、
-   覆蓋率收集、選用的 Yosys 結構統計，以及可精確重跑且含校驗碼的證據包。
+   覆蓋率收集、選用的 Yosys 結構統計，以及可精確重跑且經 SHA-256 完整性檢查的證據包。
 2. **OpenROAD MCP 控制介面**：讓支援 MCP 的 AI 助理建立一個資源受限的真實
    OpenROAD 工作階段、執行受限指令，並在網頁顯示最新執行紀錄。
 
@@ -62,8 +62,10 @@ scripts/xylon logs --tail 100
 scripts/xylon stop
 ```
 
-只有 lint 的結果不會被稱為功能驗證。必須通過獨立自我檢查、所有必要檢查、
-要求的實測覆蓋率與最終產物讀回，結果才會是 `verified`。
+只有 lint 的結果不會被稱為功能驗證。內部狀態 `verified` 只表示您提供的
+自我檢查、必要關卡、指定的實測覆蓋率與最終證據檔案讀回均已通過。介面會顯示
+「所提供的檢查已通過」，因為 Xylon 尚不能證明使用者提供的測試程式已完整涵蓋
+設計規格。
 
 ## 連接 OpenROAD
 
@@ -92,7 +94,7 @@ scripts/xylon-openroad config
 | 現在可用 | 尚未可用 |
 | --- | --- |
 | Verilator／Yosys RTL 驗證 | AI 產生 RTL 或測試程式 |
-| 含校驗碼的執行產物與精確重跑 | 匯入完整 RTL／SDC／PDK 設計 |
+| 經 SHA-256 完整性檢查的結果檔案與精確重跑 | 匯入完整 RTL／SDC／PDK 設計 |
 | 受限的真實 OpenROAD MCP 工作階段 | 自動改善最差時序路徑 |
 | 最新 OpenROAD 執行紀錄讀回 | DRC／LVS 通過判定或投片就緒判定 |
 
@@ -115,7 +117,7 @@ scripts/xylon-openroad config
 
 ```bash
 agent/venv/bin/python -m pytest -q agent
-agent/venv/bin/python -m ruff check agent setup.py
+agent/venv/bin/python -m ruff check agent
 
 cd web
 npm run test:contracts

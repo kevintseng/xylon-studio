@@ -6,9 +6,16 @@ repo_root="$(cd -- "${script_dir}/.." && pwd)"
 package_dir="${repo_root}/agent/openroad"
 state_dir="${repo_root}/.xylon/openroad"
 image="openroad/orfs@sha256:305f9bb42a714a37d287f9755e6f9eae1f82007a54f488a87cd663caf9900422"
+python_bin="${repo_root}/agent/venv/bin/python"
+
+if [[ ! -x "${python_bin}" ]]; then
+  echo "Xylon Python environment is missing: ${python_bin}" >&2
+  echo "RECOVERY: create agent/venv and install requirements.lock as shown in README.md" >&2
+  exit 1
+fi
 
 resource_preflight() {
-  (cd "${repo_root}" && python3 -m agent.openroad.resource --repo "${repo_root}" --cpus 4)
+  (cd "${repo_root}" && "${python_bin}" -m agent.openroad.resource --repo "${repo_root}" --cpus 4)
 }
 
 node_pty_spawn_helper() {

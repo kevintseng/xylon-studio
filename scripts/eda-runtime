@@ -5,7 +5,15 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/.." && pwd)"
 compose_file="${repo_root}/compose.eda.yaml"
 versions_file="${repo_root}/runtime/versions.env"
-project_name="$(cd -- "${repo_root}" && python3 -m agent.sandbox.runtime --project-name)"
+python_bin="${repo_root}/agent/venv/bin/python"
+
+if [[ ! -x "${python_bin}" ]]; then
+  echo "Xylon Python environment is missing: ${python_bin}" >&2
+  echo "RECOVERY: create agent/venv and install requirements.lock as shown in README.md" >&2
+  exit 1
+fi
+
+project_name="$(cd -- "${repo_root}" && "${python_bin}" -m agent.sandbox.runtime --project-name)"
 
 compose() {
   docker compose \
@@ -22,7 +30,7 @@ case "${1:-}" in
     ;;
   verify)
     cd "${repo_root}"
-    python3 -m agent.sandbox.runtime
+    "${python_bin}" -m agent.sandbox.runtime
     ;;
   status)
     compose ps

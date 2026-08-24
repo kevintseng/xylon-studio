@@ -15,6 +15,7 @@ Usage:
 
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -39,6 +40,14 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+_CONTAINER_WORKSPACE_PATTERN = re.compile(
+    r"/(?:tmp/xylon(?:-synth)?|results/xylon)-[0-9a-f]{8}"
+)
+_CLEANUP_RECOVERY = (
+    "Automatic continuation is blocked. Run ./scripts/eda-runtime down, "
+    "then ./scripts/eda-runtime up, then ./scripts/eda-runtime verify before retrying."
+)
+
 
 class SandboxManager:
     """
@@ -61,12 +70,6 @@ class SandboxManager:
         self.yosys_container = os.getenv(
             'YOSYS_CONTAINER',
             runtime_container_name('yosys'),
-        )
-
-        # Host path that maps to /results inside containers (writable bind mount)
-        self.host_results_dir = os.getenv(
-            'SANDBOX_RESULTS_DIR',
-            os.path.expanduser('~/Documents/Obsidian-Vault/Projects/AI-Chip-Design-Research/xylon/results'),
         )
 
         # Timeouts from environment
@@ -153,12 +156,79 @@ class SandboxManager:
             capture_output=True, timeout=10, check=True,
         )
 
-    def _cleanup_container_dir(self, container: str, container_dir: str):
-        """Remove a directory inside the container."""
-        subprocess.run(
-            ["docker", "exec", container, "rm", "-rf", container_dir],
-            capture_output=True, timeout=10, check=False,
+    def _cleanup_container_dir(self, container: str, container_dir: str) -> None:
+        """Remove only a launcher-owned job directory and verify the command."""
+        owned_containers = {
+            self.verilator_container,
+            self.yosys_container,
+        }
+        if (
+            container not in owned_containers
+            or _CONTAINER_WORKSPACE_PATTERN.fullmatch(container_dir) is None
+        ):
+            raise ExecutionError(
+                f"Refusing cleanup of unowned container workspace {container}:{container_dir}. "
+                f"{_CLEANUP_RECOVERY}",
+                failure_kind="infrastructure",
+            )
+
+        try:
+            result = subprocess.run(
+                ["docker", "exec", container, "rm", "-rf", container_dir],
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise ExecutionError(
+                f"Container workspace cleanup could not run: {error}. "
+                f"{_CLEANUP_RECOVERY}",
+                failure_kind="infrastructure",
+            ) from error
+
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        if result.returncode != 0:
+            raise ExecutionError(
+                "Container workspace cleanup failed "
+                f"for {container_dir} (exit {result.returncode}): "
+                f"{stderr or 'no diagnostic output'}. {_CLEANUP_RECOVERY}",
+                stderr=stderr,
+                exit_code=result.returncode,
+                failure_kind="infrastructure",
+            )
+
+    @staticmethod
+    def _merge_cleanup_failure(result: dict, cleanup_error: Exception) -> dict:
+        """Preserve the primary result while making cleanup failure authoritative."""
+        detail = getattr(cleanup_error, "message", str(cleanup_error))
+        diagnostic = f"Container workspace cleanup failed: {detail}"
+        if _CLEANUP_RECOVERY not in diagnostic:
+            diagnostic = f"{diagnostic}. {_CLEANUP_RECOVERY}"
+        merged = dict(result)
+        primary_stderr = str(merged.get("stderr", "")).strip()
+        merged["success"] = False
+        merged["failure_kind"] = "infrastructure"
+        merged["recovery_code"] = "repair_toolchain"
+        merged["cleanup_error"] = diagnostic
+        merged["stderr"] = "\n".join(
+            part for part in (primary_stderr, diagnostic) if part
         )
+        if isinstance(merged.get("errors"), list):
+            merged["errors"] = [*merged["errors"], diagnostic]
+        return merged
+
+    def _finish_container_job(
+        self,
+        container: str,
+        container_dir: str,
+        result: dict,
+    ) -> dict:
+        try:
+            self._cleanup_container_dir(container, container_dir)
+        except Exception as cleanup_error:
+            logger.error("Container workspace cleanup failed: %s", cleanup_error)
+            return self._merge_cleanup_failure(result, cleanup_error)
+        return result
 
     def lint_verilog_string(self, verilog_code: str) -> dict:
         """
@@ -182,11 +252,10 @@ class SandboxManager:
         try:
             self._write_to_container(self.verilator_container, container_path, verilog_code)
             result = self.lint_verilog(container_path)
-            return result
 
         except Exception as e:
             logger.error(f"Lint string failed: {e}")
-            return {
+            result = {
                 "success": False,
                 "warnings": [],
                 "errors": [str(e)],
@@ -195,8 +264,11 @@ class SandboxManager:
                 "duration_seconds": 0,
                 "failure_kind": "infrastructure",
             }
-        finally:
-            self._cleanup_container_dir(self.verilator_container, container_dir)
+        return self._finish_container_job(
+            self.verilator_container,
+            container_dir,
+            result,
+        )
 
     def synthesize_verilog(self, verilog_file: str, output_file: str = None) -> dict:
         """
@@ -277,19 +349,21 @@ class SandboxManager:
         try:
             self._write_to_container(self.yosys_container, container_path, verilog_code)
             result = self.synthesize_verilog(container_path)
-            return result
 
         except Exception as e:
             logger.error(f"Synthesis string failed: {e}")
-            return {
+            result = {
                 "success": False,
                 "stdout": "",
                 "stderr": str(e),
                 "duration_seconds": 0,
                 "failure_kind": "infrastructure",
             }
-        finally:
-            self._cleanup_container_dir(self.yosys_container, container_dir)
+        return self._finish_container_job(
+            self.yosys_container,
+            container_dir,
+            result,
+        )
 
     def run_verilator_sim(
         self, rtl_file: str, tb_file: str,
@@ -473,11 +547,10 @@ class SandboxManager:
                 coverage=coverage,
                 workdir=container_dir,
             )
-            return result
 
         except Exception as e:
             logger.error(f"Simulation string failed: {e}")
-            return {
+            result = {
                 "success": False,
                 "stdout": "",
                 "stderr": str(e),
@@ -486,8 +559,11 @@ class SandboxManager:
                 "duration_seconds": 0,
                 "failure_kind": "infrastructure",
             }
-        finally:
-            self._cleanup_container_dir(self.verilator_container, container_dir)
+        return self._finish_container_job(
+            self.verilator_container,
+            container_dir,
+            result,
+        )
 
     def _collect_coverage_data(self, module_name: str, remaining_timeout, workdir: str = None) -> dict:
         """
@@ -542,18 +618,6 @@ class SandboxManager:
                 "failure_kind": e.failure_kind,
                 "duration_seconds": 0,
             }
-
-    def health_check(self) -> dict:
-        """
-        Check health of sandbox containers.
-
-        Returns:
-            dict with status of each container
-        """
-        return {
-            'verilator': self.verilator.verify_container_running(),
-            'yosys': self.yosys.verify_container_running(),
-        }
 
     @staticmethod
     def _inspect_container_image(container_name: str) -> tuple[str, str, str | None]:

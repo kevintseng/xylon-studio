@@ -216,7 +216,7 @@ class PipelineConfig:
     Pipeline execution configuration.
 
     Attributes:
-        coverage_target: Desired coverage score (0.0-1.0), default 0.8
+        coverage_target: Desired coverage score (greater than 0.0, up to 1.0), default 0.8
         lint_enabled: Whether to run lint step
         simulation_timeout: Timeout for simulation in seconds
         synthesis_enabled: Whether to run the optional Yosys report
@@ -241,8 +241,11 @@ class PipelineConfig:
 
     def __post_init__(self):
         """Validate configuration values."""
-        if not (0.0 <= self.coverage_target <= 1.0):
-            raise ValueError(f"coverage_target must be in [0.0, 1.0], got {self.coverage_target}")
+        if not (0.0 < self.coverage_target <= 1.0):
+            raise ValueError(
+                "coverage_target must be in (0.0, 1.0], "
+                f"got {self.coverage_target}"
+            )
         if self.simulation_timeout < 1:
             raise ValueError(f"simulation_timeout must be >= 1, got {self.simulation_timeout}")
 

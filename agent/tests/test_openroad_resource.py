@@ -11,12 +11,16 @@ def snapshot(
     load: float = 2.0,
     memory: int | None = 60,
     disk_gib: float = 20.0,
+    available_gib: float | None = 12.0,
 ) -> ResourceSnapshot:
     return ResourceSnapshot(
         logical_cpus=cpus,
         load_one_minute=load,
         memory_free_percent=memory,
         disk_free_bytes=int(disk_gib * 1024**3),
+        memory_available_bytes=(
+            None if available_gib is None else int(available_gib * 1024**3)
+        ),
     )
 
 
@@ -35,10 +39,23 @@ def test_openroad_preflight_blocks_cpu_memory_and_disk_pressure():
     assert "disk free" in blockers[2]
 
 
-def test_openroad_preflight_allows_unknown_memory_but_keeps_other_guards():
-    assert evaluate_openroad_preflight(snapshot(memory=None), requested_cpus=4) == []
-    assert evaluate_openroad_preflight(snapshot(memory=None), requested_cpus=0) == [
-        "requested CPUs must be at least 1"
+def test_openroad_preflight_fails_closed_on_unknown_memory():
+    blockers = evaluate_openroad_preflight(
+        snapshot(memory=None, available_gib=None),
+        requested_cpus=4,
+    )
+    assert len(blockers) == 2
+    assert "available memory could not be measured safely" in blockers[0]
+    assert "memory availability percentage could not be measured safely" in blockers[1]
+
+
+def test_openroad_preflight_blocks_low_absolute_memory_even_when_percent_is_high():
+    blockers = evaluate_openroad_preflight(
+        snapshot(memory=70, available_gib=4.0),
+        requested_cpus=4,
+    )
+    assert blockers == [
+        "memory available 4.0 GiB is below the 8.0 GiB OpenROAD safety floor"
     ]
 
 

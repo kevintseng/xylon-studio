@@ -12,6 +12,7 @@ from agent.local_app import ResourceSnapshot, collect_resource_snapshot
 
 DEFAULT_CPUS = 4
 MINIMUM_MEMORY_FREE_PERCENT = 35
+MINIMUM_MEMORY_AVAILABLE_GIB = 8.0
 MINIMUM_DISK_FREE_GIB = 10.0
 
 
@@ -29,10 +30,22 @@ def evaluate_openroad_preflight(
             "current CPU load plus the OpenROAD allocation would exceed "
             f"{snapshot.logical_cpus} logical CPUs"
         )
-    if (
-        snapshot.memory_free_percent is not None
-        and snapshot.memory_free_percent < MINIMUM_MEMORY_FREE_PERCENT
-    ):
+    if snapshot.memory_available_bytes is None:
+        blockers.append(
+            "available memory could not be measured safely; "
+            "OpenROAD admission is fail-closed"
+        )
+    elif snapshot.memory_available_bytes < MINIMUM_MEMORY_AVAILABLE_GIB * 1024**3:
+        blockers.append(
+            f"memory available {snapshot.memory_available_bytes / 1024**3:.1f} GiB "
+            f"is below the {MINIMUM_MEMORY_AVAILABLE_GIB:.1f} GiB OpenROAD safety floor"
+        )
+    if snapshot.memory_free_percent is None:
+        blockers.append(
+            "memory availability percentage could not be measured safely; "
+            "OpenROAD admission is fail-closed"
+        )
+    elif snapshot.memory_free_percent < MINIMUM_MEMORY_FREE_PERCENT:
         blockers.append(
             f"memory free {snapshot.memory_free_percent}% is below the "
             f"{MINIMUM_MEMORY_FREE_PERCENT}% OpenROAD safety floor"

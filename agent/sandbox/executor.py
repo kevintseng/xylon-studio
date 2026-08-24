@@ -9,7 +9,6 @@ Executes commands in isolated Docker containers with:
 """
 
 import logging
-import os
 import subprocess
 import threading
 import time
@@ -90,6 +89,11 @@ class SandboxExecutor:
     _READ_CHUNK_SIZE = 64 * 1024
     _TRUNCATION_MARKER = b"\n[OUTPUT TRUNCATED]\n"
     _CLEANUP_TIMEOUT = 10
+    _RECOVERY_INSTRUCTIONS = (
+        "Automatic continuation is blocked. Run ./scripts/eda-runtime down, "
+        "then ./scripts/eda-runtime up, then ./scripts/eda-runtime verify "
+        "before retrying."
+    )
 
     _INFRASTRUCTURE_PATTERNS = (
         "error response from daemon",
@@ -146,14 +150,41 @@ class SandboxExecutor:
         return rendered.decode("utf-8", errors="replace")
 
     @staticmethod
-    def _stop_host_process(process: subprocess.Popen) -> None:
-        """Bound termination of the local docker CLI after its wait timed out."""
-        process.terminate()
+    def _stop_host_process(process: subprocess.Popen) -> tuple[bool, str]:
+        """Bound and verify termination of the local docker CLI without raising."""
+        if process.returncode is not None:
+            return True, f"host docker CLI already exited ({process.returncode})"
+
+        diagnostics: list[str] = []
         try:
-            process.wait(timeout=2)
+            process.terminate()
+            diagnostics.append("TERM sent")
+        except OSError as error:
+            diagnostics.append(f"TERM failed: {error}")
+
+        try:
+            returncode = process.wait(timeout=2)
+            return True, f"host docker CLI exited after TERM ({returncode})"
         except subprocess.TimeoutExpired:
+            diagnostics.append("TERM wait timed out")
+        except OSError as error:
+            diagnostics.append(f"TERM wait failed: {error}")
+
+        try:
             process.kill()
-            process.wait(timeout=2)
+            diagnostics.append("KILL sent")
+        except OSError as error:
+            diagnostics.append(f"KILL failed: {error}")
+
+        try:
+            returncode = process.wait(timeout=2)
+            return True, f"host docker CLI exited after KILL ({returncode})"
+        except subprocess.TimeoutExpired:
+            diagnostics.append("KILL wait timed out")
+        except OSError as error:
+            diagnostics.append(f"KILL wait failed: {error}")
+
+        return False, "; ".join(diagnostics)
 
     def _terminate_container_execution(self, state_file: str) -> tuple[bool, str]:
         """Terminate and verify the exact process group recorded for one docker exec."""
@@ -211,7 +242,7 @@ echo "process group $pid terminated"
                 timeout=self._CLEANUP_TIMEOUT,
                 check=False,
             )
-        except Exception as error:
+        except (OSError, subprocess.SubprocessError) as error:
             return False, str(error)
 
         detail = (result.stdout or result.stderr).decode(
@@ -228,18 +259,21 @@ echo "process group $pid terminated"
                 timeout=5,
                 check=False,
             )
-        except Exception:
+        except (OSError, subprocess.SubprocessError):
             logger.warning("Could not remove sandbox execution state file")
 
-    def _stop_container_and_verify(self) -> tuple[bool, str]:
-        """Fail-safe fallback when exact process-group cleanup cannot be proven."""
+    def _is_checkout_owned_container(self) -> bool:
+        """Allow force-stop only for the two deterministic containers of this checkout."""
+        from agent.sandbox.runtime import runtime_container_name
+
+        return self.container_name in {
+            runtime_container_name("verilator"),
+            runtime_container_name("yosys"),
+        }
+
+    def _inspect_container_running(self) -> tuple[bool | None, str]:
+        """Return the observed running state, or None when it cannot be verified."""
         try:
-            stop = subprocess.run(
-                ["docker", "stop", "--time", "2", self.container_name],
-                capture_output=True,
-                timeout=5,
-                check=False,
-            )
             inspect = subprocess.run(
                 [
                     "docker",
@@ -252,17 +286,91 @@ echo "process group $pid terminated"
                 timeout=5,
                 check=False,
             )
-        except Exception as error:
-            return False, str(error)
+        except (OSError, subprocess.SubprocessError) as error:
+            return None, f"container inspect failed: {error}"
 
         observed = inspect.stdout.decode("utf-8", errors="replace").strip()
-        if inspect.returncode == 0 and observed == "false":
-            return True, f"container {self.container_name} stop verified"
+        if inspect.returncode == 0 and observed in {"true", "false"}:
+            return observed == "true", f"observed running={observed}"
 
-        stop_error = stop.stderr.decode("utf-8", errors="replace").strip()
         inspect_error = inspect.stderr.decode("utf-8", errors="replace").strip()
-        detail = inspect_error or stop_error or f"observed running={observed or 'unknown'}"
-        return False, detail
+        detail = inspect_error or f"observed running={observed or 'unknown'}"
+        return None, f"container inspect unverified: {detail}"
+
+    def _stop_container_and_verify(self) -> tuple[bool, str]:
+        """Fail-safe fallback when exact process-group cleanup cannot be proven."""
+        if not self._is_checkout_owned_container():
+            running, inspect_detail = self._inspect_container_running()
+            if running is False:
+                return (
+                    True,
+                    f"non-checkout-owned container {self.container_name} was already "
+                    f"stopped; read-only {inspect_detail}; no stop or kill was sent",
+                )
+            return (
+                False,
+                f"refused stop or kill for non-checkout-owned container "
+                f"{self.container_name}; read-only {inspect_detail}; "
+                f"{self._RECOVERY_INSTRUCTIONS}",
+            )
+
+        diagnostics: list[str] = []
+        try:
+            stop = subprocess.run(
+                ["docker", "stop", "--time", "2", self.container_name],
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+            stop_error = stop.stderr.decode("utf-8", errors="replace").strip()
+            if stop.returncode == 0:
+                diagnostics.append("graceful stop returned 0")
+            else:
+                diagnostics.append(
+                    f"graceful stop returned {stop.returncode}: "
+                    f"{stop_error or 'no diagnostic'}"
+                )
+        except (OSError, subprocess.SubprocessError) as error:
+            diagnostics.append(f"graceful stop failed: {error}")
+
+        running, inspect_detail = self._inspect_container_running()
+        diagnostics.append(inspect_detail)
+        if running is False:
+            return True, (
+                f"container {self.container_name} stop verified; "
+                + "; ".join(diagnostics)
+            )
+        if running is None:
+            return False, "; ".join(diagnostics + [self._RECOVERY_INSTRUCTIONS])
+
+        try:
+            force_stop = subprocess.run(
+                ["docker", "kill", self.container_name],
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+            force_error = force_stop.stderr.decode(
+                "utf-8", errors="replace"
+            ).strip()
+            if force_stop.returncode == 0:
+                diagnostics.append("bounded force-stop returned 0")
+            else:
+                diagnostics.append(
+                    f"bounded force-stop returned {force_stop.returncode}: "
+                    f"{force_error or 'no diagnostic'}"
+                )
+        except (OSError, subprocess.SubprocessError) as error:
+            diagnostics.append(f"bounded force-stop failed: {error}")
+
+        running, inspect_detail = self._inspect_container_running()
+        diagnostics.append(f"post-force-stop {inspect_detail}")
+        if running is False:
+            return True, (
+                f"container {self.container_name} force-stop verified; "
+                + "; ".join(diagnostics)
+            )
+        return False, "; ".join(diagnostics + [self._RECOVERY_INSTRUCTIONS])
 
     def _cleanup_interrupted_execution(self, state_file: str) -> tuple[bool, str]:
         """Clean an interrupted exec, falling back to a verified container stop."""
@@ -281,8 +389,47 @@ echo "process group $pid terminated"
         return (
             False,
             f"process cleanup unverified ({cleanup_detail}); "
-            f"container stop unverified ({stop_detail})",
+            f"container stop unverified ({stop_detail}); "
+            f"{self._RECOVERY_INSTRUCTIONS}",
         )
+
+    def _cleanup_after_interruption(
+        self,
+        process: subprocess.Popen | None,
+        state_file: str,
+    ) -> tuple[bool, str]:
+        """Run host and container cleanup independently and aggregate verification."""
+        if process is None:
+            return (
+                True,
+                "cleanup not required: host docker CLI launch failed before "
+                "a container workload was established",
+            )
+
+        try:
+            host_verified, host_detail = self._stop_host_process(process)
+        except Exception as error:  # Safety boundary: container cleanup must still run.
+            host_verified = False
+            host_detail = f"host cleanup raised: {error}"
+
+        try:
+            container_verified, container_detail = (
+                self._cleanup_interrupted_execution(state_file)
+            )
+        except Exception as error:  # Safety boundary: aggregate unknown cleanup failures.
+            container_verified = False
+            container_detail = f"container cleanup raised: {error}"
+
+        verified = host_verified and container_verified
+        detail = (
+            f"host cleanup {'verified' if host_verified else 'unverified'} "
+            f"({host_detail}); container cleanup "
+            f"{'verified' if container_verified else 'unverified'} "
+            f"({container_detail})"
+        )
+        if not verified and self._RECOVERY_INSTRUCTIONS not in detail:
+            detail = f"{detail}; {self._RECOVERY_INSTRUCTIONS}"
+        return verified, detail
 
     def execute(
         self,
@@ -439,20 +586,28 @@ exit "$status"
             )
 
         except subprocess.TimeoutExpired as error:
-            if process is not None:
-                self._stop_host_process(process)
+            if process is None:
+                cleanup_verified = True
+                cleanup_detail = (
+                    "cleanup not required: host docker CLI launch failed before "
+                    "a container workload was established"
+                )
+            else:
+                cleanup_verified, cleanup_detail = self._cleanup_after_interruption(
+                    process, state_file
+                )
             for reader in readers:
                 reader.join(timeout=2)
             stdout = self._decode_bounded(stdout_bytes, stdout_truncated[0])
             stderr = self._decode_bounded(stderr_bytes, stderr_truncated[0])
-            cleanup_verified, cleanup_detail = self._cleanup_interrupted_execution(
-                state_file
-            )
-            cleanup_status = (
-                f"cleanup verified: {cleanup_detail}"
-                if cleanup_verified
-                else f"cleanup NOT verified: {cleanup_detail}"
-            )
+            if process is None:
+                cleanup_status = cleanup_detail
+            else:
+                cleanup_status = (
+                    f"cleanup verified: {cleanup_detail}"
+                    if cleanup_verified
+                    else f"cleanup NOT verified: {cleanup_detail}"
+                )
             error_msg = f"Execution timeout ({timeout}s exceeded); {cleanup_status}"
             logger.error(error_msg)
 
@@ -464,90 +619,34 @@ exit "$status"
                 failure_kind="infrastructure",
             ) from error
 
-        except Exception as e:
-            cleanup_status = ""
-            if process is not None and process.returncode is None:
-                try:
-                    self._stop_host_process(process)
-                    cleanup_verified, cleanup_detail = (
-                        self._cleanup_interrupted_execution(state_file)
-                    )
-                    cleanup_status = (
-                        f"; cleanup verified: {cleanup_detail}"
-                        if cleanup_verified
-                        else f"; cleanup NOT verified: {cleanup_detail}"
-                    )
-                except Exception as cleanup_error:
-                    cleanup_status = f"; cleanup NOT verified: {cleanup_error}"
-            logger.error(f"Execution failed: {e}")
+        except Exception as error:  # Safety boundary: no execution failure skips cleanup.
+            if process is None:
+                cleanup_verified = True
+                cleanup_detail = (
+                    "cleanup not required: host docker CLI launch failed before "
+                    "a container workload was established"
+                )
+            else:
+                cleanup_verified, cleanup_detail = self._cleanup_after_interruption(
+                    process, state_file
+                )
+            for reader in readers:
+                reader.join(timeout=2)
+            stdout = self._decode_bounded(stdout_bytes, stdout_truncated[0])
+            stderr = self._decode_bounded(stderr_bytes, stderr_truncated[0])
+            if process is None:
+                cleanup_status = cleanup_detail
+            else:
+                cleanup_status = (
+                    f"cleanup verified: {cleanup_detail}"
+                    if cleanup_verified
+                    else f"cleanup NOT verified: {cleanup_detail}"
+                )
+            logger.error(f"Execution failed: {error}; {cleanup_status}")
             raise ExecutionError(
-                message=f"Execution failed: {str(e)}{cleanup_status}",
-                stdout="",
-                stderr=str(e),
+                message=f"Execution failed: {error}; {cleanup_status}",
+                stdout=stdout,
+                stderr=stderr or str(error),
                 exit_code=-1,
-            ) from e
-
-    def verify_container_running(self) -> bool:
-        """
-        Verify that sandbox container is running.
-
-        Returns:
-            True if container is running and healthy
-        """
-        try:
-            result = subprocess.run(
-                ["docker", "inspect", "-f", "{{.State.Running}}", self.container_name],
-                capture_output=True,
-                timeout=5,
-                check=False,
-            )
-
-            return result.stdout.decode().strip() == "true"
-
-        except Exception as e:
-            logger.error(f"Failed to verify container: {e}")
-            return False
-
-
-# ==================== Helper Functions ====================
-
-
-def validate_verilog_file(file_path: str) -> bool:
-    """
-    Validate Verilog file before execution.
-
-    Args:
-        file_path: Path to .v file
-
-    Returns:
-        True if file is valid
-
-    Raises:
-        ValueError: If file is invalid or too large
-    """
-    # Check file exists
-    if not os.path.isfile(file_path):
-        raise ValueError(f"File not found: {file_path}")
-
-    # Check file extension
-    if not file_path.endswith('.v') and not file_path.endswith('.sv'):
-        raise ValueError(f"Invalid file extension: {file_path}")
-
-    # Check file size (max 1MB)
-    max_size = int(os.getenv('MAX_DESIGN_SIZE', 1000000))  # 1MB default
-    file_size = os.path.getsize(file_path)
-
-    if file_size > max_size:
-        raise ValueError(f"File too large: {file_size} bytes (max {max_size})")
-
-    # Check for obviously malicious content (basic heuristics)
-    with open(file_path, encoding='utf-8', errors='replace') as f:
-        content = f.read(10000)  # Read first 10KB for inspection
-
-        # Check for system tasks that could leak info
-        dangerous_tasks = ['$system', '$fopen', '$fwrite', '$readmem']
-        for task in dangerous_tasks:
-            if task in content:
-                raise ValueError(f"Dangerous system task detected: {task}")
-
-    return True
+                failure_kind="infrastructure",
+            ) from error

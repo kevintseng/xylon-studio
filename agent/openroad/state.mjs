@@ -11,7 +11,9 @@ const SECRET_PATTERN = /\b(authorization|bearer|password|passwd|secret|token|api
 
 export function sanitizeText(value, limit = MAX_PREVIEW_CHARS) {
   const text = String(value ?? '').replace(SECRET_PATTERN, '$1=[REDACTED]')
-  return text.length <= limit ? text : `${text.slice(0, limit)}…`
+  if (text.length <= limit) return text
+  if (limit <= 0) return ''
+  return limit === 1 ? '…' : `${text.slice(0, limit - 1)}…`
 }
 
 export function assertContained(root, target) {
@@ -83,6 +85,10 @@ export async function restoreSnapshotRecords(stateDir, store) {
       interruption_reason: wasLive
         ? 'Previous MCP server stopped before recording a clean session termination.'
         : (session.interruption_reason ? sanitizeText(session.interruption_reason, 500) : null),
+      cleanup_error: session.cleanup_error ? sanitizeText(session.cleanup_error, 500) : null,
+      cleanup_session_id: session.cleanup_session_id ? sanitizeText(session.cleanup_session_id, 48) : null,
+      child_pid: Number.isInteger(session.child_pid) && session.child_pid > 0 ? session.child_pid : null,
+      container_id: session.container_id ? sanitizeText(session.container_id, 128) : null,
     })
   }
   return store.size
@@ -119,6 +125,18 @@ export function appendRecord(store, sessionId, record) {
   }
   current.status = record.status ?? current.status
   current.interruption_reason = record.interruption_reason ?? current.interruption_reason ?? null
+  current.cleanup_error = record.cleanup_error
+    ? sanitizeText(record.cleanup_error, 500)
+    : (current.cleanup_error ?? null)
+  current.cleanup_session_id = record.cleanup_session_id
+    ? sanitizeText(record.cleanup_session_id, 48)
+    : (current.cleanup_session_id ?? null)
+  current.child_pid = Number.isInteger(record.child_pid) && record.child_pid > 0
+    ? record.child_pid
+    : (current.child_pid ?? null)
+  current.container_id = record.container_id
+    ? sanitizeText(record.container_id, 128)
+    : (current.container_id ?? null)
   current.last_activity = record.timestamp ?? new Date().toISOString()
   if (record.command) {
     current.history.push({
@@ -154,9 +172,13 @@ export async function buildSnapshot({ manager, store, server, lastError = null }
     const stored = store.get(sessionId) ?? { history: [] }
     const info = activeById.get(sessionId)
     const metric = metricById.get(sessionId)
+    const storedStatus = stored.status ?? 'terminated'
+    const status = ['error', 'interrupted'].includes(storedStatus)
+      ? storedStatus
+      : (info?.isAlive ? 'active' : storedStatus)
     return {
       session_id: sessionId,
-      status: info?.isAlive ? 'active' : (stored.status ?? 'terminated'),
+      status,
       created_at: info?.createdAt ?? stored.created_at ?? null,
       last_activity: metric?.lastActivity ?? stored.last_activity ?? null,
       command_count: metric?.commands?.totalExecuted ?? stored.history.length,
@@ -165,6 +187,10 @@ export async function buildSnapshot({ manager, store, server, lastError = null }
       openroad_version: stored.openroad_version ?? null,
       history: stored.history.slice(-MAX_HISTORY),
       interruption_reason: stored.interruption_reason ?? null,
+      cleanup_error: stored.cleanup_error ? sanitizeText(stored.cleanup_error, 500) : null,
+      cleanup_session_id: stored.cleanup_session_id ? sanitizeText(stored.cleanup_session_id, 48) : null,
+      child_pid: Number.isInteger(stored.child_pid) && stored.child_pid > 0 ? stored.child_pid : null,
+      container_id: stored.container_id ? sanitizeText(stored.container_id, 128) : null,
     }
   })
 

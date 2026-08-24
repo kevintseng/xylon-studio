@@ -32,22 +32,26 @@ This proves only that the API process is running. The pipeline runtime gate sepa
 
 ### Request
 
-```json
-{
-  "rtl_code": "module m; endmodule",
-  "testbench_code": "#include <iostream>\nint main() { std::cout << \"PASS\\n\"; return 0; }",
-  "coverage_target": 0.8,
-  "simulation_timeout": 300,
-  "lint_enabled": true,
-  "synthesis_enabled": false
-}
+Use the repository's real adder RTL and self-checking testbench for a
+copy-pasteable request:
+
+```bash
+jq -n \
+  --rawfile rtl examples/adder/adder_8bit.v \
+  --rawfile testbench examples/adder/tb_adder_8bit.cpp \
+  '{rtl_code: $rtl, testbench_code: $testbench, coverage_target: 0.8,
+    simulation_timeout: 300, lint_enabled: true, synthesis_enabled: true}' \
+| curl --fail-with-body \
+    --header 'Content-Type: application/json' \
+    --data-binary @- \
+    http://127.0.0.1:5001/api/pipeline/run
 ```
 
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `rtl_code` | yes | Verilog RTL source, maximum 1 MiB encoded as UTF-8 |
 | `testbench_code` | no | Independent self-checking C++ Verilator testbench, maximum 1 MiB encoded as UTF-8 |
-| `coverage_target` | no | Aggregate target from 0.0 to 1.0; default 0.8 |
+| `coverage_target` | no | Aggregate target greater than 0.0 and up to 1.0; default 0.8. Zero is rejected because it would bypass the evidence threshold. |
 | `simulation_timeout` | no | One wall-clock budget shared by compile, simulation, and coverage collection; 1 to 3600 seconds, default 300 |
 | `lint_enabled` | no | Include the Verilator lint gate; default true. It must remain true when no testbench is provided; otherwise the run fails with `configuration_error` instead of claiming `lint_only`. |
 | `synthesis_enabled` | no | Add a Yosys structural report; default false |
@@ -80,7 +84,7 @@ rejected with `422` before EDA work begins.
     "branch_coverage": null,
     "score": 1.0,
     "metric_sources": {
-      "toggle_coverage": "verilator_coverage_summary",
+      "toggle_coverage": "verilator_summary",
       "score": "computed_verilator_point_counts"
     },
     "uncovered_lines": []
@@ -93,7 +97,11 @@ rejected with `422` before EDA work begins.
   "artifacts": {
     "run_directory": "550e8400-e29b-41d4-a716-446655440000",
     "manifest_path": "manifest.json",
-    "files": [],
+    "files": [
+      {"role": "rtl_input", "path": "inputs/design.v", "sha256": "...", "size_bytes": 512, "media_type": "text/x-verilog"},
+      {"role": "testbench_input", "path": "inputs/testbench.cpp", "sha256": "...", "size_bytes": 2048, "media_type": "text/x-c++src"},
+      {"role": "step_log", "path": "logs/steps.json", "sha256": "...", "size_bytes": 4096, "media_type": "application/json"}
+    ],
     "rerun_argv": ["agent/venv/bin/python", "-m", "agent.cli", "rerun", "manifest.json"],
     "schema_version": 1
   },
@@ -107,7 +115,7 @@ Nullable coverage means unavailable, not zero. Consumers must not infer a dimens
 
 | Outcome | `success` | Meaning |
 | --- | --- | --- |
-| `verified` | true | Independent tests and every required evidence gate passed; target met |
+| `verified` | true | The supplied self-check, requested measured coverage, required gates, and artifact readback passed. This does not prove that the supplied testbench completely represents the design specification. |
 | `lint_only` | false | Syntax/lint evidence completed without functional verification |
 | `target_not_met` | false | Measured coverage is below the requested target |
 | `inconclusive` | false | Required evidence is missing or ambiguous |
