@@ -13,6 +13,7 @@ import {
 import path from 'node:path'
 
 import { parseOrfsTimingReport, TIMING_REPORT_LIMIT_BYTES } from './timing-report.mjs'
+import { TIMING_FLOW_RECIPE } from './timing-recipe.mjs'
 
 export const TIMING_RUN_ID_PATTERN = /^[a-f0-9]{32}$/
 const INPUT_RTL_LIMIT = 2 * 1024 * 1024
@@ -102,16 +103,18 @@ function renderConfig(topModule, cpus) {
   return [
     `export DESIGN_NAME = ${topModule}`,
     `export DESIGN_NICKNAME = ${topModule}`,
-    'export PLATFORM = sky130hd',
+    `export PLATFORM = ${TIMING_FLOW_RECIPE.platform}`,
     'export VERILOG_FILES = /work/inputs/design.v',
     'export SDC_FILE = /work/inputs/effective.sdc',
     `export NUM_CORES = ${cpus}`,
-    'export CORE_UTILIZATION = 35',
-    'export CORE_ASPECT_RATIO = 1.0',
-    'export CORE_MARGIN = 10',
-    'export PLACE_DENSITY = 0.60',
-    'export TNS_END_PERCENT = 100',
-    'export FLOW_VARIANT = base',
+    `export CORE_UTILIZATION = ${TIMING_FLOW_RECIPE.coreUtilizationPercent}`,
+    `export CORE_ASPECT_RATIO = ${TIMING_FLOW_RECIPE.coreAspectRatio.toFixed(1)}`,
+    `export CORE_MARGIN = ${TIMING_FLOW_RECIPE.coreMarginMicrons}`,
+    `export PLACE_DENSITY = ${TIMING_FLOW_RECIPE.placeDensity.toFixed(2)}`,
+    `export TNS_END_PERCENT = ${TIMING_FLOW_RECIPE.tnsEndPercent}`,
+    `export SKIP_CTS_REPAIR_TIMING = ${TIMING_FLOW_RECIPE.skipCtsRepairTiming ? 1 : 0}`,
+    `export LEC_CHECK = ${TIMING_FLOW_RECIPE.lecCheck ? 1 : 0}`,
+    `export FLOW_VARIANT = ${TIMING_FLOW_RECIPE.variant}`,
     '',
   ].join('\n')
 }

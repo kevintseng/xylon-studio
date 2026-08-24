@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto'
 
+import { TIMING_FLOW_RECIPE } from './timing-recipe.mjs'
+
 export const TIMING_INPUT_CONTRACT_VERSION = 'xylon-timing-input/v1'
-export const SUPPORTED_TIMING_PLATFORM = 'sky130hd'
+export const SUPPORTED_TIMING_PLATFORM = TIMING_FLOW_RECIPE.platform
 
 export const TIMING_REPORT_RECIPE = Object.freeze({
   version: 'xylon-openroad-setup-report/v1',
@@ -9,6 +11,7 @@ export const TIMING_REPORT_RECIPE = Object.freeze({
   metrics: Object.freeze(['wns', 'tns', 'worst_setup_path']),
   pathCount: 1,
   digits: 3,
+  flow: TIMING_FLOW_RECIPE,
 })
 
 const MAX_RTL_BYTES = 1024 * 1024

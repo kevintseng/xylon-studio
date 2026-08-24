@@ -10,10 +10,12 @@ import {
 import path from 'node:path'
 import { promisify } from 'node:util'
 
+import { PINNED_ORFS_IMAGE } from './timing-recipe.mjs'
+
 const execFileAsync = promisify(execFile)
 
 export const TIMING_OWNER = 'xylon-timing'
-export const DEFAULT_OPENROAD_IMAGE = 'openroad/orfs@sha256:305f9bb42a714a37d287f9755e6f9eae1f82007a54f488a87cd663caf9900422'
+export const DEFAULT_OPENROAD_IMAGE = PINNED_ORFS_IMAGE
 
 const IDENTITY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/
 const IMAGE_PATTERN = /^openroad\/orfs@sha256:[a-f0-9]{64}$/
