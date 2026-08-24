@@ -117,6 +117,40 @@ def test_manifest_verification_detects_modified_frozen_input(tmp_path):
         verify_artifact_manifest(manifest_path)
 
 
+def test_passed_synthesis_report_is_saved_with_descriptor_and_checksum(tmp_path):
+    yosys_stdout = "=== adder ===\n2 cells\n1 $_AND_\n1 $_XOR_\n"
+    result = _verified_result("synthesis-evidence")
+    result.steps.append(
+        StepResult(
+            "synthesis",
+            StepStatus.PASSED,
+            0.2,
+            output={"cell_count": 2, "report": yosys_stdout},
+        )
+    )
+
+    bundle = persist_pipeline_artifacts(
+        result=result,
+        rtl_code="module adder; endmodule\n",
+        testbench_code='int main() { puts("PASS"); }\n',
+        config=PipelineConfig(
+            synthesis_enabled=True,
+            artifact_root=str(tmp_path),
+        ),
+    )
+
+    run_dir = tmp_path / result.pipeline_id
+    report_path = run_dir / "reports/synthesis.txt"
+    assert report_path.read_text() == yosys_stdout
+    descriptor = next(
+        item for item in bundle.files if item.role == "synthesis_report"
+    )
+    assert descriptor.path == "reports/synthesis.txt"
+    checksums = (run_dir / bundle.checksums_path).read_text()
+    assert f"{descriptor.sha256}  reports/synthesis.txt\n" in checksums
+    verify_artifact_manifest(run_dir / bundle.manifest_path)
+
+
 def test_persistence_fails_closed_when_final_readback_cannot_be_verified(tmp_path):
     result = _verified_result("readback-failure")
 

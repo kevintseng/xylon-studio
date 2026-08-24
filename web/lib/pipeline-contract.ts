@@ -105,48 +105,6 @@ export function buildPipelineFlow(
   })
 }
 
-export type AgentWorkflowBoundary = 'human' | 'orchestrator' | 'tool' | 'decision'
-
-export interface AgentWorkflowStage {
-  key: 'intent' | 'plan' | 'execute' | 'outcome' | 'recover'
-  boundary: AgentWorkflowBoundary
-  titleKey: string
-  detailKey: string
-}
-
-export const AGENT_WORKFLOW_STAGES: readonly AgentWorkflowStage[] = [
-  {
-    key: 'intent',
-    boundary: 'human',
-    titleKey: 'pipeline.agent.intent.title',
-    detailKey: 'pipeline.agent.intent.detail',
-  },
-  {
-    key: 'plan',
-    boundary: 'orchestrator',
-    titleKey: 'pipeline.agent.plan.title',
-    detailKey: 'pipeline.agent.plan.detail',
-  },
-  {
-    key: 'execute',
-    boundary: 'tool',
-    titleKey: 'pipeline.agent.execute.title',
-    detailKey: 'pipeline.agent.execute.detail',
-  },
-  {
-    key: 'outcome',
-    boundary: 'decision',
-    titleKey: 'pipeline.agent.outcome.title',
-    detailKey: 'pipeline.agent.outcome.detail',
-  },
-  {
-    key: 'recover',
-    boundary: 'human',
-    titleKey: 'pipeline.agent.recover.title',
-    detailKey: 'pipeline.agent.recover.detail',
-  },
-]
-
 type OutcomeTone = 'positive' | 'warning' | 'negative' | 'neutral'
 
 interface OutcomePresentation {
@@ -159,8 +117,8 @@ interface OutcomePresentation {
 
 const OUTCOMES: Record<PipelineOutcome, OutcomePresentation> = {
   verified: {
-    title: 'Verified',
-    detail: 'Required tests and evidence gates executed and passed.',
+    title: 'Provided checks passed',
+    detail: 'The supplied self-check, requested coverage, required gates, and artifact readback passed. This does not prove the testbench fully represents the design specification.',
     titleKey: 'pipeline.outcome.verified.title',
     detailKey: 'pipeline.outcome.verified.detail',
     tone: 'positive',

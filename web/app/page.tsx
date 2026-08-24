@@ -3,6 +3,7 @@
 import { useState, type KeyboardEvent } from 'react'
 import { CircuitBackground } from '@/components/circuit-bg'
 import { useI18n } from '@/lib/i18n'
+import { getRovingTabTargetIndex } from '@/lib/roving-tab-index'
 import {
   HOME_AGENT_STAGES,
   PRODUCT_SCOPE,
@@ -29,11 +30,7 @@ export default function Home() {
   }
 
   const handleStageKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
-    const nextIndex = event.key === 'ArrowRight' ? index + 1
-      : event.key === 'ArrowLeft' ? index - 1
-        : event.key === 'Home' ? 0
-          : event.key === 'End' ? HOME_AGENT_STAGES.length - 1
-            : null
+    const nextIndex = getRovingTabTargetIndex(index, event.key, HOME_AGENT_STAGES.length)
     if (nextIndex === null) return
     event.preventDefault()
     selectStageAt(nextIndex)

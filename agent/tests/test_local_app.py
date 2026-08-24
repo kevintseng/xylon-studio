@@ -13,6 +13,8 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.request import urlopen
 
+import pytest
+
 import agent.local_app as local_app
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -42,6 +44,7 @@ def test_resource_preflight_allows_capacity_for_one_capped_local_run():
         load_one_minute=8.0,
         memory_free_percent=61,
         disk_free_bytes=47 * 1024**3,
+        memory_available_bytes=10 * 1024**3,
     )
 
     assert evaluate(snapshot) == []
@@ -57,13 +60,107 @@ def test_resource_preflight_blocks_saturated_cpu_low_memory_and_low_disk():
         load_one_minute=12.0,
         memory_free_percent=19,
         disk_free_bytes=9 * 1024**3,
+        memory_available_bytes=6 * 1024**3,
     )
 
     assert evaluate(snapshot) == [
         "CPU load 12.00 has reached 12 logical CPUs",
+        "memory available 6.0 GiB is below the 8.0 GiB safety floor",
         "memory free 19% is below the 20% safety floor",
         "workspace disk free 9.0 GiB is below the 10.0 GiB safety floor",
     ]
+
+
+@pytest.mark.parametrize("error", [OSError("unreadable"), ValueError("invalid")])
+def test_resource_integer_probe_returns_unknown_on_io_or_format_failure(
+    tmp_path: Path,
+    error: Exception,
+):
+    memory_value = tmp_path / "memory.current"
+    memory_value.write_text("123", encoding="utf-8")
+
+    with patch.object(Path, "read_text", side_effect=error):
+        assert local_app._read_integer(memory_value) is None
+
+
+def test_linux_memory_probe_returns_unknown_when_proc_meminfo_is_unreadable():
+    with patch.object(Path, "read_text", side_effect=OSError("proc unavailable")):
+        assert local_app._read_linux_memory() == (None, None)
+
+
+def test_linux_memory_probe_tolerates_absent_cgroup_limit_without_hiding_host_data():
+    def read_text(path: Path, **_kwargs) -> str:
+        if path == Path("/proc/meminfo"):
+            return "MemTotal: 16777216 kB\nMemAvailable: 10485760 kB\n"
+        if path in {
+            Path("/sys/fs/cgroup/memory.max"),
+            Path("/sys/fs/cgroup/memory.current"),
+        }:
+            raise OSError("not cgroup v2")
+        raise AssertionError(f"unexpected read: {path}")
+
+    with patch.object(Path, "read_text", autospec=True, side_effect=read_text):
+        assert local_app._read_linux_memory() == (
+            16 * 1024**3,
+            10 * 1024**3,
+        )
+
+
+def test_linux_memory_probe_fails_closed_on_invalid_cgroup_limit():
+    def read_text(path: Path, **_kwargs) -> str:
+        if path == Path("/proc/meminfo"):
+            return "MemTotal: 16777216 kB\nMemAvailable: 10485760 kB\n"
+        if path == Path("/sys/fs/cgroup/memory.max"):
+            return "not-a-limit"
+        if path == Path("/sys/fs/cgroup/memory.current"):
+            return "1024"
+        raise AssertionError(f"unexpected read: {path}")
+
+    with patch.object(Path, "read_text", autospec=True, side_effect=read_text):
+        assert local_app._read_linux_memory() == (None, None)
+
+
+def test_macos_memory_probe_returns_unknown_when_system_command_fails():
+    with (
+        patch("agent.local_app.shutil.which", side_effect=lambda command: f"/usr/bin/{command}"),
+        patch("agent.local_app.subprocess.run", side_effect=OSError("spawn failed")),
+    ):
+        assert local_app._read_macos_memory() == (None, None, None)
+
+
+def test_macos_memory_probe_returns_unknown_for_invalid_total_memory():
+    pressure = subprocess.CompletedProcess(
+        ["memory_pressure", "-Q"],
+        0,
+        stdout="System-wide memory free percentage: 62%\n",
+        stderr="",
+    )
+    total = subprocess.CompletedProcess(
+        ["sysctl", "-n", "hw.memsize"],
+        0,
+        stdout="invalid\n",
+        stderr="",
+    )
+    with (
+        patch("agent.local_app.shutil.which", side_effect=lambda command: f"/usr/bin/{command}"),
+        patch("agent.local_app.subprocess.run", side_effect=[pressure, total]),
+    ):
+        assert local_app._read_macos_memory() == (None, None, None)
+
+
+def test_resource_snapshot_keeps_load_failures_visible_as_a_safe_zero(tmp_path: Path):
+    with (
+        patch("agent.local_app.os.getloadavg", side_effect=OSError("unavailable")),
+        patch(
+            "agent.local_app._read_linux_memory",
+            return_value=(16 * 1024**3, 10 * 1024**3),
+        ),
+    ):
+        snapshot = local_app.collect_resource_snapshot(tmp_path)
+
+    assert snapshot.load_one_minute == 0.0
+    assert snapshot.memory_free_percent == 62
+    assert snapshot.memory_available_bytes == 10 * 1024**3
 
 
 def test_runtime_version_preflight_accepts_supported_python_and_node():
@@ -260,6 +357,88 @@ def test_stop_preserves_a_live_process_when_identity_cannot_be_read(monkeypatch)
         _force_cleanup(child)
 
 
+def test_stop_reports_cleanup_unverified_when_process_survives_sigkill(monkeypatch):
+    record = local_app.ManagedProcess(
+        name="api",
+        pid=12345,
+        command_marker="xylon-test-api",
+        log_path="api.log",
+    )
+    signals: list[int] = []
+    monkeypatch.setattr(local_app, "_pid_exists", lambda _pid: True)
+    monkeypatch.setattr(
+        local_app,
+        "_process_command",
+        lambda _pid: "python xylon-test-api",
+    )
+    monkeypatch.setattr(local_app, "_process_state", lambda _pid: "S")
+    monkeypatch.setattr(local_app, "_process_is_running", lambda _pid: True)
+    monkeypatch.setattr(
+        local_app.os,
+        "killpg",
+        lambda _pid, sent_signal: signals.append(sent_signal),
+    )
+
+    assert (
+        local_app.terminate_managed_process(record, grace_seconds=0)
+        == "cleanup_unverified"
+    )
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
+
+
+def test_termination_verification_fails_closed_on_conflicting_liveness_reads(
+    monkeypatch,
+):
+    monkeypatch.setattr(local_app, "_process_is_running", lambda _pid: True)
+    monkeypatch.setattr(local_app, "_process_state", lambda _pid: "Z")
+    monkeypatch.setattr(local_app, "_pid_exists", lambda _pid: True)
+
+    assert local_app._termination_is_verified(12345) is False
+
+
+def test_termination_verification_fails_closed_when_existing_pid_is_unobservable(
+    monkeypatch,
+):
+    monkeypatch.setattr(local_app, "_process_is_running", lambda _pid: False)
+    monkeypatch.setattr(local_app, "_process_state", lambda _pid: None)
+    monkeypatch.setattr(local_app, "_pid_exists", lambda _pid: True)
+
+    assert local_app._termination_is_verified(12345) is False
+
+
+def test_stop_treats_a_missing_process_group_during_sigkill_as_not_running(
+    monkeypatch,
+):
+    record = local_app.ManagedProcess(
+        name="api",
+        pid=12345,
+        command_marker="xylon-test-api",
+        log_path="api.log",
+    )
+    signals: list[int] = []
+
+    def signal_process_group(_pid: int, sent_signal: int) -> None:
+        signals.append(sent_signal)
+        if sent_signal == signal.SIGKILL:
+            raise ProcessLookupError
+
+    monkeypatch.setattr(local_app, "_pid_exists", lambda _pid: True)
+    monkeypatch.setattr(
+        local_app,
+        "_process_command",
+        lambda _pid: "python xylon-test-api",
+    )
+    monkeypatch.setattr(local_app, "_process_state", lambda _pid: "S")
+    monkeypatch.setattr(local_app, "_process_is_running", lambda _pid: True)
+    monkeypatch.setattr(local_app.os, "killpg", signal_process_group)
+
+    assert (
+        local_app.terminate_managed_process(record, grace_seconds=0)
+        == "not_running"
+    )
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
+
+
 def _write_state(state_dir: Path, *, api_pid: int, api_marker: str, web_pid: int) -> Path:
     state_dir.mkdir(parents=True)
     state_path = state_dir / "state.json"
@@ -342,12 +521,14 @@ def test_stop_keeps_state_when_a_saved_pid_belongs_to_an_unrelated_process(tmp_p
 class _TestRuntime:
     def __init__(self) -> None:
         self.running = False
+        self.actions: list[str] = []
 
     def is_running(self) -> bool:
         return self.running
 
     def run(self, action: str, *, timeout: float) -> bool:
         del timeout
+        self.actions.append(action)
         if action in {"up", "verify"}:
             self.running = True
             return True
@@ -363,7 +544,118 @@ def _safe_resource_probe() -> local_app.ResourceSnapshot:
         load_one_minute=4.0,
         memory_free_percent=60,
         disk_free_bytes=40 * 1024**3,
+        memory_available_bytes=12 * 1024**3,
     )
+
+
+def _managed_state(*, runtime_owned: bool = True) -> local_app.LocalState:
+    return local_app.LocalState(
+        schema_version=2,
+        runtime_owned=runtime_owned,
+        api_port=5001,
+        web_port=3000,
+        api=local_app.ManagedProcess("api", 1001, "xylon-test-api", "api.log"),
+        web=local_app.ManagedProcess("web", 1002, "xylon-test-web", "web.log"),
+    )
+
+
+def test_stop_keeps_runtime_and_state_when_service_cleanup_is_unverified(
+    tmp_path: Path,
+    capsys,
+):
+    runtime = _TestRuntime()
+    runtime.running = True
+    app = local_app.LocalApplication(
+        repo_root=REPO_ROOT,
+        state_dir=tmp_path / "local",
+        runtime=runtime,
+    )
+    app._write_state(_managed_state())
+
+    with patch(
+        "agent.local_app.terminate_managed_process",
+        side_effect=["cleanup_unverified", "stopped"],
+    ):
+        assert app.stop(grace_seconds=0) == 1
+
+    assert app.state_path.exists()
+    assert runtime.running is True
+    assert "down" not in runtime.actions
+    output = capsys.readouterr().out
+    assert "EDA runtime shutdown was intentionally skipped" in output
+    assert "rerun scripts/xylon stop" in output
+
+
+def test_rollback_writes_state_and_keeps_runtime_when_identity_is_unavailable(
+    tmp_path: Path,
+    capsys,
+):
+    runtime = _TestRuntime()
+    runtime.running = True
+    app = local_app.LocalApplication(
+        repo_root=REPO_ROOT,
+        state_dir=tmp_path / "local",
+        runtime=runtime,
+    )
+
+    with patch(
+        "agent.local_app.terminate_managed_process",
+        side_effect=["identity_unavailable", "not_running"],
+    ):
+        assert app._rollback(_managed_state(), grace_seconds=0) is False
+
+    assert app.state_path.exists()
+    assert runtime.running is True
+    assert "down" not in runtime.actions
+    output = capsys.readouterr().out
+    assert "identity_unavailable" in output
+    assert "EDA runtime shutdown was intentionally skipped" in output
+
+
+def test_rollback_removes_state_after_services_and_runtime_are_stopped(tmp_path: Path):
+    runtime = _TestRuntime()
+    runtime.running = True
+    app = local_app.LocalApplication(
+        repo_root=REPO_ROOT,
+        state_dir=tmp_path / "local",
+        runtime=runtime,
+    )
+    app._write_state(_managed_state())
+
+    with patch(
+        "agent.local_app.terminate_managed_process",
+        side_effect=["stopped", "not_running"],
+    ):
+        assert app._rollback(_managed_state(), grace_seconds=0) is True
+
+    assert app.state_path.exists() is False
+    assert runtime.running is False
+    assert runtime.actions == ["down"]
+
+
+def test_rollback_keeps_state_when_runtime_shutdown_fails(tmp_path: Path, capsys):
+    runtime = _TestRuntime()
+    runtime.running = True
+    app = local_app.LocalApplication(
+        repo_root=REPO_ROOT,
+        state_dir=tmp_path / "local",
+        runtime=runtime,
+    )
+    app._write_state(_managed_state())
+
+    with (
+        patch(
+            "agent.local_app.terminate_managed_process",
+            side_effect=["stopped", "not_running"],
+        ),
+        patch.object(runtime, "run", return_value=False) as runtime_run,
+    ):
+        assert app._rollback(_managed_state(), grace_seconds=0) is False
+
+    runtime_run.assert_called_once_with("down", timeout=60)
+    assert app.state_path.exists()
+    assert runtime.running is True
+    assert "restore Docker" in capsys.readouterr().out
 
 
 def _unused_port() -> int:
@@ -493,6 +785,7 @@ def test_start_blocks_before_runtime_or_services_when_host_resources_are_unsafe(
         load_one_minute=12.5,
         memory_free_percent=15,
         disk_free_bytes=8 * 1024**3,
+        memory_available_bytes=4 * 1024**3,
     )
     app = local_app.LocalApplication(
         repo_root=REPO_ROOT,
@@ -607,6 +900,7 @@ def test_scripts_xylon_is_the_supported_doctor_entry_point():
     )
 
     assert result.returncode == 0, result.stderr
+    assert "Python 3.9" not in result.stderr
     assert "READY: local prerequisites are available" in result.stdout
 
 

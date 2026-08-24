@@ -6,13 +6,19 @@ repo_root="$(cd -- "${script_dir}/../../.." && pwd)"
 state_dir="${XYLON_OPENROAD_STATE_DIR:-${repo_root}/.xylon/openroad}"
 work_dir="${state_dir}/work"
 image="${XYLON_OPENROAD_IMAGE:-openroad/orfs@sha256:305f9bb42a714a37d287f9755e6f9eae1f82007a54f488a87cd663caf9900422}"
-container_name="xylon-openroad-${PPID}-$$"
+session_id="${XYLON_OPENROAD_SESSION_ID:?XYLON_OPENROAD_SESSION_ID is required}"
+server_id="${XYLON_OPENROAD_SERVER_ID:?XYLON_OPENROAD_SERVER_ID is required}"
+repo_id="${XYLON_OPENROAD_REPO_ID:?XYLON_OPENROAD_REPO_ID is required}"
+cid_dir="${XYLON_OPENROAD_CID_DIR:?XYLON_OPENROAD_CID_DIR is required}"
+[[ "${session_id}" =~ ^[A-Za-z0-9_-]{1,48}$ ]] || { echo "Invalid OpenROAD session identity" >&2; exit 2; }
+[[ "${server_id}" =~ ^[A-Za-z0-9_-]{8,128}$ ]] || { echo "Invalid OpenROAD server identity" >&2; exit 2; }
+[[ "${repo_id}" =~ ^[A-Za-z0-9_-]{8,128}$ ]] || { echo "Invalid OpenROAD repository identity" >&2; exit 2; }
+cidfile="${cid_dir}/${session_id}.cid"
 tty_echo_disabled=false
 
-mkdir -p "${work_dir}"
+mkdir -p "${work_dir}" "${cid_dir}"
 
 cleanup() {
-  docker stop --time 2 "${container_name}" >/dev/null 2>&1 || true
   if [[ "${tty_echo_disabled}" == "true" ]]; then
     stty echo 2>/dev/null || true
     tty_echo_disabled=false
@@ -27,8 +33,11 @@ fi
 
 set +e
 docker run --rm -i \
-  --name "${container_name}" \
+  --cidfile "${cidfile}" \
   --label "io.xylon.owner=openroad-mcp" \
+  --label "io.xylon.session=${session_id}" \
+  --label "io.xylon.server=${server_id}" \
+  --label "io.xylon.repo=${repo_id}" \
   --platform linux/amd64 \
   --cpus 4 \
   --memory 8g \

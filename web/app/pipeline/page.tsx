@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useMemo } from 'react'
 import { useI18n } from '@/lib/i18n'
+import { getLintSummary } from '@/lib/lint-summary'
 import {
   getPipelineCloseErrorKey,
   requestPipelineCancellation,
@@ -731,14 +732,17 @@ export default function PipelinePage() {
                                 </div>
                               ) : null}
 
-                              {step.step_name === 'lint' && typeof output.warning_count === 'number' ? (
-                                <div className="p-2 bg-slate-800 rounded">
-                                  <p className="text-xs text-slate-400">
-                                    {parseInt(String(output.error_count ?? 0), 10) || 0} {t('pipeline.detail.errorCountLabel')}, {' '}
-                                    {parseInt(String(output.warning_count ?? 0), 10) || 0} {t('pipeline.detail.warningCountLabel')}
-                                  </p>
-                                </div>
-                              ) : null}
+                              {step.step_name === 'lint' ? (() => {
+                                const lintSummary = getLintSummary(output)
+                                return lintSummary ? (
+                                  <div className="p-2 bg-slate-800 rounded">
+                                    <p className="text-xs text-slate-400">
+                                      {lintSummary.errorsCount} {t('pipeline.detail.errorCountLabel')}, {' '}
+                                      {lintSummary.warningsCount} {t('pipeline.detail.warningCountLabel')}
+                                    </p>
+                                  </div>
+                                ) : null
+                              })() : null}
 
                               {step.step_name === 'simulate' && typeof output.test_passed === 'boolean' ? (
                                 <div className="p-2 bg-slate-800 rounded">

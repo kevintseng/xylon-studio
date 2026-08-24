@@ -14,6 +14,19 @@ from agent.pipeline.models import FailureKind, StepResult, StepStatus
 logger = logging.getLogger(__name__)
 
 STEP_NAME = "synthesis"
+MAX_SYNTHESIS_REPORT_BYTES = 256 * 1024
+_TRUNCATION_MARKER = b"[SYNTHESIS REPORT TRUNCATED; SHOWING FINAL OUTPUT]\n"
+
+
+def _bounded_synthesis_report(stdout: str) -> str:
+    encoded = stdout.encode("utf-8")
+    if len(encoded) <= MAX_SYNTHESIS_REPORT_BYTES:
+        return stdout
+    tail_size = MAX_SYNTHESIS_REPORT_BYTES - len(_TRUNCATION_MARKER)
+    return (_TRUNCATION_MARKER + encoded[-tail_size:]).decode(
+        "utf-8",
+        errors="ignore",
+    )
 
 
 async def run_synthesis_step(
@@ -112,6 +125,7 @@ async def run_synthesis_step(
                 "wire_bits": stats.get("wire_bits", 0),
                 "memories": stats.get("memories", 0),
                 "memory_bits": stats.get("memory_bits", 0),
+                "report": _bounded_synthesis_report(stdout),
             },
             errors=[],
             warnings=_synthesis_warnings(cell_count, stats),

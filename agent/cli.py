@@ -72,7 +72,12 @@ def main():
     run_parser = sub.add_parser("run", help="Run verification pipeline on RTL file")
     run_parser.add_argument("rtl_file", help="Path to Verilog RTL file")
     run_parser.add_argument("--testbench", "-t", help="Path to C++ testbench file")
-    run_parser.add_argument("--coverage-target", type=float, default=0.80, help="Coverage target (0.0-1.0)")
+    run_parser.add_argument(
+        "--coverage-target",
+        type=float,
+        default=0.80,
+        help="Coverage target (greater than 0.0, up to 1.0)",
+    )
     run_parser.add_argument("--synthesis", action="store_true", help="Run Yosys synthesis after verification")
     run_parser.add_argument("--timeout", type=int, default=300, help="Simulation timeout in seconds")
 

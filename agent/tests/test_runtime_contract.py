@@ -58,6 +58,17 @@ def test_compose_caps_local_eda_resources_and_does_not_auto_restart():
     assert 'restart: "no"' in compose
 
 
+def test_public_launchers_use_repo_python_instead_of_path_python():
+    for relative_path in (
+        "scripts/xylon",
+        "scripts/eda-runtime",
+        "scripts/xylon-openroad",
+    ):
+        source = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        assert 'python_bin="${repo_root}/agent/venv/bin/python"' in source
+        assert "python3 -m agent." not in source
+
+
 def test_runtime_up_reuses_an_existing_image_instead_of_forcing_a_rebuild(tmp_path: Path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()

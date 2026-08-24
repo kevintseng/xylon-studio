@@ -11,13 +11,21 @@ import {
   ListSessionsTool,
   SessionHistoryTool,
   SessionMetricsTool,
-  TerminateSessionTool,
 } from 'openroad-mcp/dist/tools/interactive.js'
 import { z } from 'zod'
 
-import { executeWithCompletionProof } from './execution.mjs'
+import {
+  attemptTermination,
+  completionInterruptionRecord,
+  executeWithCompletionProof,
+  inspectSessionLiveness,
+  persistFailureOrRequestStop,
+  shutdownOwnedRuntime,
+  terminationFailureDetails,
+} from './execution.mjs'
 import { acquireServerLease } from './lease.mjs'
 import { SESSION_ID_PATTERN } from './protocol.mjs'
+import { createDockerRuntimeOwnership, terminateSessionWithProof } from './runtime.mjs'
 import {
   appendRecord,
   buildSnapshot,
@@ -39,6 +47,15 @@ const repoRoot = path.resolve(process.env.XYLON_REPO_ROOT ?? path.join(import.me
 const stateDir = path.resolve(process.env.XYLON_OPENROAD_STATE_DIR ?? path.join(repoRoot, '.xylon', 'openroad'))
 const workDir = path.join(stateDir, 'work')
 const runtimeImage = process.env.XYLON_OPENROAD_IMAGE ?? 'unconfigured'
+const serverId = randomUUID().replaceAll('-', '')
+const repoId = createHash('sha256').update(repoRoot).digest('hex')
+const runtimeOwnership = createDockerRuntimeOwnership({ stateDir, serverId, repoId })
+const terminateOwnedSession = (sessionId, force = true) => terminateSessionWithProof({
+  manager,
+  sessionId,
+  runtimeOwnership,
+  force,
+})
 const sessionIdSchema = z.string().regex(SESSION_ID_PATTERN)
 
 const recordStore = new Map()
@@ -172,12 +189,10 @@ async function runWithCompletionProof(command, sessionId, timeoutMs) {
     command,
     sessionId,
     timeoutMs: timeoutMs ?? 60_000,
+    terminateSession: terminateOwnedSession,
   })
   if (result.error === 'CommandCompletionUnproven') {
-    appendRecord(recordStore, sessionId, {
-      status: 'error',
-      interruption_reason: 'Command completion marker was not observed; session terminated to prevent desynchronized reuse.',
-    })
+    appendRecord(recordStore, sessionId, completionInterruptionRecord(result))
   }
   return JSON.stringify(result)
 }
@@ -187,7 +202,6 @@ const listTool = new ListSessionsTool(manager)
 const inspectTool = new InspectSessionTool(manager)
 const historyTool = new SessionHistoryTool(manager)
 const metricsTool = new SessionMetricsTool(manager)
-const terminateTool = new TerminateSessionTool(manager)
 
 const mcp = new McpServer({ name: 'xylon-openroad', version: XYLON_VERSION })
 
@@ -196,9 +210,15 @@ mcp.registerTool('create_openroad_session', {
   inputSchema: { session_id: sessionIdSchema.optional() },
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 }, async ({ session_id: sessionId }) => {
-  const raw = await createTool.execute(sessionId, ['openroad'], undefined, workDir)
+  const requestedSessionId = sessionId ?? randomUUID().replaceAll('-', '').slice(0, 12)
+  const raw = await createTool.execute(
+    requestedSessionId,
+    ['openroad'],
+    runtimeOwnership.environment(requestedSessionId),
+    workDir,
+  )
   const parsed = parseToolResult(raw)
-  const resolvedSessionId = resultSessionId(parsed, sessionId)
+  const resolvedSessionId = resultSessionId(parsed, requestedSessionId)
   const stored = appendRecord(recordStore, resolvedSessionId, { status: parsed.error ? 'error' : 'starting' })
   if (parsed.error) {
     await persistSnapshot(parsed.error)
@@ -212,13 +232,24 @@ mcp.registerTool('create_openroad_session', {
     await persistSnapshot()
     return asText({ ...parsed, startup_banner: ready.banner, openroad_version: ready.version })
   } catch (error) {
-    stored.status = 'error'
-    await manager.terminateSession(resolvedSessionId, true).catch(() => {})
-    await persistSnapshot(error)
+    const cleanup = await attemptTermination(terminateOwnedSession, resolvedSessionId, true)
+    if (cleanup.terminated) {
+      stored.status = 'terminated'
+      stored.interruption_reason = 'OpenROAD did not become ready; the owned runtime was terminated with PID and container readback.'
+    } else {
+      Object.assign(stored, terminationFailureDetails(cleanup.error, resolvedSessionId))
+      stored.status = 'error'
+      stored.interruption_reason = 'OpenROAD did not become ready and cleanup could not be verified; ownership remains fail-closed.'
+    }
+    await persistSnapshot(cleanup.error ?? error)
     return asText({
       ...parsed,
       error: error instanceof Error ? error.message : String(error),
-      recovery: 'Check scripts/xylon-openroad doctor, then create a new session.',
+      session_terminated: cleanup.terminated,
+      ...(cleanup.error && terminationFailureDetails(cleanup.error, resolvedSessionId)),
+      recovery: cleanup.error
+        ? 'Do not reuse this session. Stop the MCP server and inspect the exact owned PID/container before retrying.'
+        : 'Check scripts/xylon-openroad doctor, then create a new session.',
     })
   }
 })
@@ -369,10 +400,36 @@ mcp.registerTool('terminate_openroad_session', {
   inputSchema: { session_id: z.string(), force: z.boolean().optional() },
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
 }, async ({ session_id: sessionId, force }) => {
-  const raw = await terminateTool.execute(sessionId, force ?? false)
-  appendRecord(recordStore, sessionId, { status: 'terminated' })
-  await persistSnapshot()
-  return asText(raw)
+  const inspection = await inspectSessionLiveness(manager, sessionId)
+  if (!inspection.available) {
+    await persistSnapshot(inspection.error)
+    return asText({
+      session_id: sessionId,
+      terminated: false,
+      error: inspection.error.message,
+      recovery: 'Inspect the session id and create a new explicit session if it no longer exists.',
+    })
+  }
+  const termination = await attemptTermination(terminateOwnedSession, sessionId, force ?? false)
+  if (termination.terminated) {
+    appendRecord(recordStore, sessionId, { status: 'terminated' })
+    await persistSnapshot()
+    return asText({ ...termination.proof, was_alive: inspection.wasAlive, force: force ?? false })
+  }
+  appendRecord(recordStore, sessionId, {
+    status: 'error',
+    interruption_reason: 'Session termination could not be verified; ownership remains fail-closed.',
+    ...terminationFailureDetails(termination.error, sessionId),
+  })
+  await persistSnapshot(termination.error)
+  return asText({
+    session_id: sessionId,
+    terminated: false,
+    was_alive: inspection.wasAlive,
+    error: termination.error.message,
+    ...terminationFailureDetails(termination.error, sessionId),
+    recovery: 'Do not reuse this session. Inspect the exact owned PID/container and stop the MCP server before retrying.',
+  })
 })
 
 const transport = new StdioServerTransport()
@@ -387,7 +444,7 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 
 let idleSweep
 let idleSweepRunning = false
-const lease = await acquireServerLease()
+const lease = await acquireServerLease({ leasePath: process.env.XYLON_OPENROAD_LEASE_PATH })
 try {
   await restoreSnapshotRecords(stateDir, recordStore)
   await mcp.connect(transport)
@@ -396,12 +453,21 @@ try {
   idleSweep = setInterval(async () => {
     if (idleSweepRunning) return
     idleSweepRunning = true
-    const before = new Set(manager.sessions.keys())
     try {
-      await manager.cleanupIdleSessions(IDLE_TIMEOUT_SECONDS, true)
-      const terminated = [...before].filter((sessionId) => !manager.sessions.has(sessionId))
-      if (terminated.length > 0) {
-        for (const sessionId of terminated) {
+      const expired = [...manager.sessions.entries()]
+        .filter(([, session]) => session?.isIdleTimeout(IDLE_TIMEOUT_SECONDS))
+        .map(([sessionId]) => sessionId)
+      if (expired.length > 0) {
+        for (const sessionId of expired) {
+          const termination = await attemptTermination(terminateOwnedSession, sessionId, true)
+          if (!termination.terminated) {
+            appendRecord(recordStore, sessionId, {
+              status: 'error',
+              interruption_reason: 'Idle session cleanup could not be verified; ownership remains fail-closed.',
+              ...terminationFailureDetails(termination.error, sessionId),
+            })
+            throw termination.error
+          }
           appendRecord(recordStore, sessionId, {
             status: 'terminated',
             interruption_reason: `Session exceeded the configured ${IDLE_TIMEOUT_SECONDS}s idle timeout.`,
@@ -411,7 +477,15 @@ try {
       }
     } catch (error) {
       lastSnapshotError = error
-      await persistSnapshot(error).catch(() => {})
+      const persistence = await persistFailureOrRequestStop({
+        failure: error,
+        persistFailure: persistSnapshot,
+        requestStop,
+      })
+      if (!persistence.persisted) {
+        serverStatus = 'error'
+        lastSnapshotError = persistence.error
+      }
     } finally {
       idleSweepRunning = false
     }
@@ -420,18 +494,28 @@ try {
   await stopped
 } finally {
   if (idleSweep) clearInterval(idleSweep)
-  serverStatus = 'stopping'
-  try {
-    const ownedSessionIds = [...manager.sessions.keys()]
-    await manager.cleanupAll()
-    for (const sessionId of ownedSessionIds) {
-      appendRecord(recordStore, sessionId, { status: 'terminated' })
-    }
-    serverStatus = 'stopped'
-    await persistSnapshot()
-  } catch (error) {
-    serverStatus = 'error'
-    await persistSnapshot(error).catch(() => {})
-  }
-  await lease?.release().catch(() => {})
+  const preserveServerError = serverStatus === 'error'
+  if (!preserveServerError) serverStatus = 'stopping'
+  await shutdownOwnedRuntime({
+    manager,
+    terminateSession: terminateOwnedSession,
+    markTerminated: async (ownedSessionIds) => {
+      for (const sessionId of ownedSessionIds) {
+        appendRecord(recordStore, sessionId, { status: 'terminated' })
+      }
+    },
+    persistStopped: async () => {
+      if (preserveServerError) {
+        await persistSnapshot(lastSnapshotError)
+      } else {
+        serverStatus = 'stopped'
+        await persistSnapshot()
+      }
+    },
+    persistFailure: async (error) => {
+      serverStatus = 'error'
+      await persistSnapshot(error)
+    },
+    releaseLease: () => lease.release(),
+  })
 }

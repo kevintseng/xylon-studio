@@ -10,9 +10,12 @@ from agent.pipeline.steps.coverage import (
     _parse_coverage_metrics,
     run_coverage_step,
 )
-from agent.pipeline.steps.lint import run_lint_step, run_lint_step_from_string
+from agent.pipeline.steps.lint import run_lint_step
 from agent.pipeline.steps.simulate import _extract_test_result, run_simulate_step
-from agent.pipeline.steps.synthesis import run_synthesis_step
+from agent.pipeline.steps.synthesis import (
+    MAX_SYNTHESIS_REPORT_BYTES,
+    run_synthesis_step,
+)
 
 # ── Lint Step Tests ──
 
@@ -78,30 +81,15 @@ async def test_lint_step_fails_on_error(mock_sandbox, rtl_file):
 
 
 @pytest.mark.asyncio
-async def test_lint_step_from_string(mock_sandbox):
-    mock_sandbox.lint_verilog_string.return_value = {
-        "success": True,
-        "warnings": [],
-        "errors": [],
-        "stdout": "",
-        "stderr": "",
-        "duration_seconds": 0.3,
-    }
-
-    result = await run_lint_step_from_string("module foo; endmodule", mock_sandbox)
-
-    assert result.status == StepStatus.PASSED
-    mock_sandbox.lint_verilog_string.assert_called_once_with("module foo; endmodule")
-
-
-@pytest.mark.asyncio
 async def test_lint_step_handles_exception(mock_sandbox, rtl_file):
-    mock_sandbox.lint_verilog_string.side_effect = Exception("Docker not running")
+    mock_sandbox.lint_verilog_string.side_effect = OSError("Docker not running")
 
     result = await run_lint_step(rtl_file, mock_sandbox)
 
     assert result.status == StepStatus.ERROR
     assert "Docker not running" in result.errors[0]
+    assert result.failure_kind == FailureKind.INFRASTRUCTURE
+    assert result.recovery_code == "repair_toolchain"
 
 
 # ── Simulate Step Tests ──
@@ -156,6 +144,23 @@ async def test_simulate_step_fails_on_build_error(mock_sandbox, rtl_file, tb_fil
     result = await run_simulate_step(rtl_file, tb_file, mock_sandbox)
 
     assert result.status == StepStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_simulate_step_classifies_sandbox_exception_as_infrastructure(
+    mock_sandbox,
+    rtl_file,
+    tb_file,
+):
+    mock_sandbox.run_verilator_sim_string.side_effect = OSError(
+        "docker transport failed"
+    )
+
+    result = await run_simulate_step(rtl_file, tb_file, mock_sandbox)
+
+    assert result.status == StepStatus.ERROR
+    assert result.failure_kind == FailureKind.INFRASTRUCTURE
+    assert result.recovery_code == "repair_toolchain"
 
 
 def test_extract_test_result_pass():
@@ -231,6 +236,38 @@ async def test_synthesis_reports_structural_cells_without_timing_claim(
     assert result.output["cell_count"] == 2
     assert "gate_count" not in result.output
     assert "critical_path" not in result.output
+    assert result.output["report"] == (
+        "=== adder ===\n"
+        "   3 wires\n"
+        "   12 wire bits\n"
+        "   0 memories\n"
+        "   0 memory bits\n"
+        "   2 cells\n"
+        "   1 $_AND_\n"
+        "   1 $_XOR_\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_synthesis_report_is_bounded_and_keeps_final_yosys_statistics(
+    mock_sandbox,
+    rtl_file,
+):
+    mock_sandbox.synthesize_verilog_string.return_value = {
+        "success": True,
+        "stdout": "x" * MAX_SYNTHESIS_REPORT_BYTES + "\n1 cells\n1 $_AND_\n",
+        "stderr": "",
+        "duration_seconds": 0.2,
+    }
+
+    result = await run_synthesis_step(rtl_file, mock_sandbox)
+
+    report = result.output["report"]
+    assert len(report.encode("utf-8")) <= MAX_SYNTHESIS_REPORT_BYTES
+    assert report.startswith(
+        "[SYNTHESIS REPORT TRUNCATED; SHOWING FINAL OUTPUT]\n"
+    )
+    assert report.endswith("\n1 cells\n1 $_AND_\n")
 
 
 # ── Coverage Step Tests ──

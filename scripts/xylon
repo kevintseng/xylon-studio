@@ -3,6 +3,13 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/.." && pwd)"
+python_bin="${repo_root}/agent/venv/bin/python"
+
+if [[ ! -x "${python_bin}" ]]; then
+  echo "Xylon Python environment is missing: ${python_bin}" >&2
+  echo "RECOVERY: create agent/venv and install requirements.lock as shown in README.md" >&2
+  exit 1
+fi
 
 cd "${repo_root}"
-exec python3 -m agent.local_app "$@"
+exec "${python_bin}" -m agent.local_app "$@"

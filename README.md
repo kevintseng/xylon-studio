@@ -66,9 +66,11 @@ scripts/xylon logs --tail 100
 scripts/xylon stop
 ```
 
-A lint-only run is never called functional verification. `verified` requires
-the independent self-check, every required gate, the requested measured
-coverage, and final artifact readback to pass.
+A lint-only run is never called functional verification. The internal
+`verified` outcome means the supplied self-check, every required gate, the
+requested measured coverage, and final artifact readback passed. The UI calls
+this “Provided checks passed” because Xylon does not yet prove that a
+user-supplied testbench completely represents the design specification.
 
 ## Connect the OpenROAD foundation
 
@@ -123,7 +125,7 @@ Run heavyweight checks serially on a resource-constrained machine:
 
 ```bash
 agent/venv/bin/python -m pytest -q agent
-agent/venv/bin/python -m ruff check agent setup.py
+agent/venv/bin/python -m ruff check agent
 
 cd web
 npm run test:contracts

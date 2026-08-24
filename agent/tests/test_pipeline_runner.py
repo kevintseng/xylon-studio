@@ -166,6 +166,112 @@ async def test_pipeline_classifies_missing_toolchain_as_infrastructure_error(
 
 
 @pytest.mark.asyncio
+async def test_pipeline_classifies_lint_sandbox_exception_as_infrastructure_error(
+    tmp_path,
+    mock_sandbox_manager,
+    mock_container_ops,
+):
+    mock_sandbox_manager.lint_verilog_string.side_effect = OSError(
+        "docker transport failed"
+    )
+
+    result = await run_pipeline(
+        SIMPLE_RTL,
+        config=PipelineConfig(
+            runtime_check_enabled=False,
+            artifact_root=str(tmp_path),
+        ),
+    )
+
+    lint = result.get_step("lint")
+    assert lint.status == StepStatus.ERROR
+    assert lint.failure_kind == FailureKind.INFRASTRUCTURE
+    assert lint.recovery_code == "repair_toolchain"
+    assert result.outcome.value == "infrastructure_error"
+    assert result.success is False
+
+
+@pytest.mark.asyncio
+async def test_pipeline_classifies_simulation_sandbox_exception_as_infrastructure_error(
+    tmp_path,
+    mock_sandbox_manager,
+    mock_container_ops,
+):
+    mock_sandbox_manager.lint_verilog_string.return_value = {
+        "success": True,
+        "warnings": [],
+        "errors": [],
+        "stdout": "",
+        "stderr": "",
+        "duration_seconds": 0.1,
+    }
+    mock_sandbox_manager.run_verilator_sim_string.side_effect = OSError(
+        "docker transport failed"
+    )
+
+    result = await run_pipeline(
+        SIMPLE_RTL,
+        testbench_code=SIMPLE_TB,
+        config=PipelineConfig(
+            runtime_check_enabled=False,
+            artifact_root=str(tmp_path),
+        ),
+    )
+
+    simulation = result.get_step("simulate")
+    assert simulation.status == StepStatus.ERROR
+    assert simulation.failure_kind == FailureKind.INFRASTRUCTURE
+    assert simulation.recovery_code == "repair_toolchain"
+    assert result.outcome.value == "infrastructure_error"
+    assert result.success is False
+
+
+@pytest.mark.asyncio
+async def test_pipeline_workspace_cleanup_failure_blocks_verified_outcome(
+    tmp_path,
+    mock_sandbox_manager,
+    mock_container_ops,
+):
+    mock_sandbox_manager.lint_verilog_string.return_value = {
+        "success": True,
+        "warnings": [],
+        "errors": [],
+        "stdout": "",
+        "stderr": "",
+        "duration_seconds": 0.1,
+    }
+    mock_sandbox_manager.run_verilator_sim_string.return_value = {
+        "success": False,
+        "stdout": "PASS\n",
+        "stderr": (
+            "Container workspace cleanup failed. "
+            "Run ./scripts/eda-runtime down, up, and verify before retrying."
+        ),
+        "vcd_file": None,
+        "coverage_data": None,
+        "duration_seconds": 0.2,
+        "failure_kind": "infrastructure",
+        "recovery_code": "repair_toolchain",
+    }
+
+    result = await run_pipeline(
+        SIMPLE_RTL,
+        testbench_code=SIMPLE_TB,
+        config=PipelineConfig(
+            runtime_check_enabled=False,
+            artifact_root=str(tmp_path),
+        ),
+    )
+
+    simulation = result.get_step("simulate")
+    assert simulation.output["test_passed"] is False
+    assert simulation.failure_kind == FailureKind.INFRASTRUCTURE
+    assert simulation.recovery_code == "repair_toolchain"
+    assert result.outcome.value == "infrastructure_error"
+    assert result.success is False
+
+
+@pytest.mark.asyncio
 async def test_pipeline_classifies_invalid_rtl_as_configuration_error(
     mock_sandbox_manager,
     mock_container_ops,

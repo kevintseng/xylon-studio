@@ -26,6 +26,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PROC_ROOT = Path("/proc")
 MINIMUM_PYTHON_VERSION = (3, 11, 0)
 MINIMUM_NODE_VERSION = (20, 9, 0)
+RESOLVED_TERMINATION_OUTCOMES = frozenset({"stopped", "not_running"})
+MINIMUM_MEMORY_AVAILABLE_BYTES = 8 * 1024**3
 
 
 def _is_valid_port(value: object) -> bool:
@@ -103,6 +105,7 @@ class ResourceSnapshot:
     load_one_minute: float
     memory_free_percent: int | None
     disk_free_bytes: int
+    memory_available_bytes: int | None = None
 
 
 def evaluate_resource_preflight(snapshot: ResourceSnapshot) -> list[str]:
@@ -112,10 +115,23 @@ def evaluate_resource_preflight(snapshot: ResourceSnapshot) -> list[str]:
             f"CPU load {snapshot.load_one_minute:.2f} has reached "
             f"{snapshot.logical_cpus} logical CPUs"
         )
-    if (
-        snapshot.memory_free_percent is not None
-        and snapshot.memory_free_percent < 20
-    ):
+    if snapshot.memory_available_bytes is None:
+        blockers.append(
+            "available memory could not be measured safely; "
+            "retry after restoring the host or container memory probe"
+        )
+    elif snapshot.memory_available_bytes < MINIMUM_MEMORY_AVAILABLE_BYTES:
+        memory_available_gib = snapshot.memory_available_bytes / 1024**3
+        blockers.append(
+            f"memory available {memory_available_gib:.1f} GiB is below the "
+            "8.0 GiB safety floor"
+        )
+    if snapshot.memory_free_percent is None:
+        blockers.append(
+            "memory availability percentage could not be measured safely; "
+            "retry after restoring the host or container memory probe"
+        )
+    elif snapshot.memory_free_percent < 20:
         blockers.append(
             f"memory free {snapshot.memory_free_percent}% is below the 20% safety floor"
         )
@@ -127,6 +143,84 @@ def evaluate_resource_preflight(snapshot: ResourceSnapshot) -> list[str]:
     return blockers
 
 
+def _read_integer(path: Path) -> int | None:
+    try:
+        return int(path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _read_linux_memory() -> tuple[int | None, int | None]:
+    """Return host total/available bytes, bounded by cgroup v2 when present."""
+    try:
+        fields = {
+            key.rstrip(":"): int(value) * 1024
+            for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines()
+            if len(parts := line.split()) >= 2
+            for key, value in [parts[:2]]
+        }
+    except (OSError, ValueError):
+        return None, None
+
+    total = fields.get("MemTotal")
+    available = fields.get("MemAvailable")
+    cgroup_root = Path("/sys/fs/cgroup")
+    try:
+        memory_max = (cgroup_root / "memory.max").read_text(encoding="utf-8").strip()
+    except OSError:
+        memory_max = "max"
+    memory_current = _read_integer(cgroup_root / "memory.current")
+    if memory_max != "max":
+        try:
+            cgroup_limit = int(memory_max)
+        except ValueError:
+            return None, None
+        if memory_current is None:
+            return None, None
+        cgroup_available = max(cgroup_limit - memory_current, 0)
+        total = min(total, cgroup_limit) if total is not None else cgroup_limit
+        available = (
+            min(available, cgroup_available)
+            if available is not None
+            else cgroup_available
+        )
+    return total, available
+
+
+def _read_macos_memory() -> tuple[int | None, int | None, int | None]:
+    memory_pressure = shutil.which("memory_pressure")
+    sysctl = shutil.which("sysctl")
+    if memory_pressure is None or sysctl is None:
+        return None, None, None
+    try:
+        pressure_result = subprocess.run(
+            [memory_pressure, "-Q"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        total_result = subprocess.run(
+            [sysctl, "-n", "hw.memsize"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None, None, None
+    match = re.search(
+        r"System-wide memory free percentage:\s*(\d+)%",
+        f"{pressure_result.stdout}\n{pressure_result.stderr}",
+    )
+    if pressure_result.returncode != 0 or total_result.returncode != 0 or match is None:
+        return None, None, None
+    try:
+        total = int(total_result.stdout.strip())
+        percent = int(match.group(1))
+    except ValueError:
+        return None, None, None
+    return total, total * percent // 100, percent
+
+
 def collect_resource_snapshot(repo_root: Path) -> ResourceSnapshot:
     logical_cpus = max(os.cpu_count() or 1, 1)
     try:
@@ -134,27 +228,31 @@ def collect_resource_snapshot(repo_root: Path) -> ResourceSnapshot:
     except (AttributeError, OSError):
         load_one_minute = 0.0
 
+    memory_total_bytes, memory_available_bytes = _read_linux_memory()
     memory_free_percent: int | None = None
-    memory_pressure = shutil.which("memory_pressure")
-    if memory_pressure is not None:
-        result = subprocess.run(
-            [memory_pressure, "-Q"],
-            capture_output=True,
-            text=True,
-            check=False,
+    if memory_total_bytes is None or memory_available_bytes is None:
+        (
+            memory_total_bytes,
+            memory_available_bytes,
+            memory_free_percent,
+        ) = _read_macos_memory()
+    if (
+        memory_free_percent is None
+        and memory_total_bytes is not None
+        and memory_total_bytes > 0
+        and memory_available_bytes is not None
+    ):
+        memory_free_percent = min(
+            100,
+            max(0, round(memory_available_bytes * 100 / memory_total_bytes)),
         )
-        match = re.search(
-            r"System-wide memory free percentage:\s*(\d+)%",
-            f"{result.stdout}\n{result.stderr}",
-        )
-        if result.returncode == 0 and match is not None:
-            memory_free_percent = int(match.group(1))
 
     return ResourceSnapshot(
         logical_cpus=logical_cpus,
         load_one_minute=load_one_minute,
         memory_free_percent=memory_free_percent,
         disk_free_bytes=shutil.disk_usage(repo_root).free,
+        memory_available_bytes=memory_available_bytes,
     )
 
 
@@ -303,6 +401,26 @@ def _pid_exists(pid: int) -> bool:
     return True
 
 
+def _termination_is_verified(pid: int) -> bool:
+    if _process_is_running(pid):
+        return False
+    state = _process_state(pid)
+    if state is not None:
+        return state.startswith("Z")
+    return not _pid_exists(pid)
+
+
+def _wait_for_verified_exit(pid: int, *, timeout: float) -> bool:
+    deadline = time.monotonic() + max(timeout, 0.0)
+    while True:
+        if _termination_is_verified(pid):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.05, remaining))
+
+
 def terminate_managed_process(
     process: ManagedProcess,
     *,
@@ -324,18 +442,16 @@ def terminate_managed_process(
     except ProcessLookupError:
         return "not_running"
 
-    deadline = time.monotonic() + grace_seconds
-    while time.monotonic() < deadline:
-        if not _process_is_running(process.pid):
-            return "stopped"
-        time.sleep(0.05)
+    if _wait_for_verified_exit(process.pid, timeout=grace_seconds):
+        return "stopped"
 
-    if _process_is_running(process.pid):
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    return "stopped"
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return "not_running"
+    if _wait_for_verified_exit(process.pid, timeout=grace_seconds):
+        return "stopped"
+    return "cleanup_unverified"
 
 
 class LocalApplication:
@@ -468,12 +584,34 @@ class LocalApplication:
             time.sleep(0.05)
         return False
 
-    def _rollback(self, state: LocalState, *, grace_seconds: float = 1.0) -> None:
+    def _rollback(self, state: LocalState, *, grace_seconds: float = 1.0) -> bool:
+        unresolved: list[str] = []
         for process in (state.web, state.api):
-            terminate_managed_process(process, grace_seconds=grace_seconds)
-        if state.runtime_owned:
-            self.runtime.run("down", timeout=60)
+            outcome = terminate_managed_process(
+                process,
+                grace_seconds=grace_seconds,
+            )
+            print(f"rollback {process.name}: {outcome}")
+            if outcome not in RESOLVED_TERMINATION_OUTCOMES:
+                unresolved.append(f"{process.name}: {outcome}")
+
+        if unresolved:
+            self._write_state(state)
+            print(f"RECOVERY: inspect ownership state at {self.state_path}")
+            print(
+                "RECOVERY: resolve the listed service cleanup, then rerun "
+                "scripts/xylon stop; EDA runtime shutdown was intentionally skipped"
+            )
+            return False
+
+        if state.runtime_owned and not self.runtime.run("down", timeout=60):
+            self._write_state(state)
+            print(f"RECOVERY: inspect ownership state at {self.state_path}")
+            print("RECOVERY: restore Docker, then rerun scripts/xylon stop")
+            return False
+
         self.state_path.unlink(missing_ok=True)
+        return True
 
     def start(self, *, health_timeout: float = 15.0) -> int:
         try:
@@ -636,23 +774,27 @@ class LocalApplication:
             print("STOPPED: no launcher-owned local services")
             return 0
 
-        unresolved = False
+        unresolved: list[str] = []
         for process in (state.web, state.api):
             outcome = terminate_managed_process(
                 process,
                 grace_seconds=grace_seconds,
             )
             print(f"{process.name}: {outcome}")
-            unresolved = unresolved or outcome in {
-                "identity_mismatch",
-                "identity_unavailable",
-            }
-
-        if state.runtime_owned and not self.runtime.run("down", timeout=60):
-            unresolved = True
+            if outcome not in RESOLVED_TERMINATION_OUTCOMES:
+                unresolved.append(f"{process.name}: {outcome}")
 
         if unresolved:
             print(f"RECOVERY: inspect ownership state at {self.state_path}")
+            print(
+                "RECOVERY: resolve the listed service cleanup, then rerun "
+                "scripts/xylon stop; EDA runtime shutdown was intentionally skipped"
+            )
+            return 1
+
+        if state.runtime_owned and not self.runtime.run("down", timeout=60):
+            print(f"RECOVERY: inspect ownership state at {self.state_path}")
+            print("RECOVERY: restore Docker, then rerun scripts/xylon stop")
             return 1
 
         self.state_path.unlink(missing_ok=True)
@@ -713,8 +855,10 @@ def doctor(*, api_port: int = 5001, web_port: int = 3000) -> int:
             print(f"RESOURCE BLOCKED: {blocker}")
     else:
         memory = (
-            f"{resources.memory_free_percent}%"
+            f"{resources.memory_free_percent}%/"
+            f"{resources.memory_available_bytes / 1024**3:.1f}GiB"
             if resources.memory_free_percent is not None
+            and resources.memory_available_bytes is not None
             else "Unavailable"
         )
         print(

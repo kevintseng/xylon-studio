@@ -57,9 +57,9 @@ class PipelineRequest(BaseModel):
     )
     coverage_target: float = Field(
         0.8,
-        ge=0.0,
+        gt=0.0,
         le=1.0,
-        description="Target coverage (0.0-1.0)",
+        description="Target coverage (greater than 0.0, up to 1.0)",
     )
     simulation_timeout: int = Field(
         300,

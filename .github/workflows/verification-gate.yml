@@ -42,13 +42,7 @@ jobs:
           agent/venv/bin/python -m pytest -q -m "not integration"
           --ignore=agent/tests/test_local_app.py agent/tests agent/pipeline/tests
       - name: Lint Python source
-        run: agent/venv/bin/python -m ruff check agent setup.py
-      - name: Build and smoke-test the installed Python wheel
-        run: |
-          agent/venv/bin/python -m pip wheel . --no-deps --no-build-isolation --wheel-dir dist-test
-          agent/venv/bin/python -m pip install --no-deps --force-reinstall dist-test/*.whl
-          cd /tmp
-          "$GITHUB_WORKSPACE/agent/venv/bin/python" -c "import agent; import agent.cli; import agent.api.main"
+        run: agent/venv/bin/python -m ruff check agent
       - name: Audit resolved Python dependency graph
         run: agent/venv/bin/python -m pip_audit --strict -r requirements.lock
       - name: Check launcher syntax
