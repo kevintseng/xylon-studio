@@ -129,7 +129,7 @@ export async function createTimingRunWorkspace({ repoRoot, validatedInput, runId
   if (!isWithin(root, canonicalRunsRoot)) throw new Error('TimingArtifactInvalid: timing state root escapes the repository')
   const runDir = path.join(canonicalRunsRoot, runId)
   await mkdir(runDir, { mode: 0o700 })
-  for (const directory of ['inputs', 'design', 'runtime', 'baseline', 'after']) {
+  for (const directory of ['inputs', 'design', 'runtime', 'baseline', 'proposal', 'candidate']) {
     await mkdir(path.join(runDir, directory), { mode: 0o700 })
   }
   await writePrivateFile(path.join(runDir, 'inputs', 'design.v'), validatedInput.rtl, INPUT_RTL_LIMIT)
