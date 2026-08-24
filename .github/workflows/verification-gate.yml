@@ -26,11 +26,11 @@ jobs:
           - "3.14"
     steps:
       - name: Check out exact revision
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Install Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: ${{ matrix.python }}
       - name: Install hash-locked dependencies
@@ -38,7 +38,9 @@ jobs:
           python -m venv agent/venv
           agent/venv/bin/python -m pip install --require-hashes -r requirements.lock
       - name: Run backend contract suite
-        run: agent/venv/bin/python -m pytest -q -m "not integration" agent/tests agent/pipeline/tests
+        run: >-
+          agent/venv/bin/python -m pytest -q -m "not integration"
+          --ignore=agent/tests/test_local_app.py agent/tests agent/pipeline/tests
       - name: Lint Python source
         run: agent/venv/bin/python -m ruff check agent setup.py
       - name: Build and smoke-test the installed Python wheel
@@ -58,11 +60,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out exact revision
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Install Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: "22"
           cache: npm
@@ -85,6 +87,47 @@ jobs:
       - name: Build production application
         working-directory: web
         run: npm run build
+      - name: Retain production Web build for launcher tests
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: web-production-build
+          path: |
+            web/.next/BUILD_ID
+            web/.next/standalone
+            web/.next/static
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 1
+
+  local-application:
+    name: Local application (Linux)
+    needs: frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "22"
+      - name: Install hash-locked dependencies
+        run: |
+          python -m venv agent/venv
+          agent/venv/bin/python -m pip install --require-hashes -r requirements.lock
+      - name: Restore production Web build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: web-production-build
+          path: web/.next
+      - name: Run Linux launcher ownership and recovery tests
+        run: agent/venv/bin/python -m pytest -q agent/tests/test_local_app.py
 
   runtime-integration:
     name: Runtime integration
@@ -92,11 +135,11 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Check out exact revision
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Install Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.11"
       - name: Install hash-locked runtime test dependencies
@@ -126,7 +169,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out complete history
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false

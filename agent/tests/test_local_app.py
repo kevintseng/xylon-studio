@@ -18,23 +18,18 @@ import agent.local_app as local_app
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_doctor_accepts_the_current_prebuilt_workspace_without_starting_services():
-    result = subprocess.run(
-        [sys.executable, "-m", "agent.local_app", "doctor"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+def test_doctor_accepts_the_current_prebuilt_workspace_without_starting_services(capsys):
+    api_port = _unused_port()
+    web_port = _unused_port()
+    while web_port == api_port:
+        web_port = _unused_port()
 
-    assert result.returncode == 0, result.stderr
-    assert "READY: local prerequisites are available" in result.stdout
-    assert "RESOURCE READY:" in result.stdout or "RESOURCE BLOCKED:" in result.stdout
-    assert "STOPPED: API http://127.0.0.1:5001" in result.stdout
-    assert re.search(
-        r"(?:STOPPED|LISTENING): Web http://127\.0\.0\.1:3000",
-        result.stdout,
-    )
+    assert local_app.doctor(api_port=api_port, web_port=web_port) == 0
+    output = capsys.readouterr().out
+    assert "READY: local prerequisites are available" in output
+    assert "RESOURCE READY:" in output or "RESOURCE BLOCKED:" in output
+    assert f"STOPPED: API http://127.0.0.1:{api_port}" in output
+    assert f"STOPPED: Web http://127.0.0.1:{web_port}" in output
 
 
 def test_resource_preflight_allows_capacity_for_one_capped_local_run():
@@ -188,6 +183,50 @@ def test_process_identity_lookup_fails_closed_when_ps_is_not_permitted(monkeypat
     monkeypatch.setattr(local_app.subprocess, "run", deny_ps)
 
     assert local_app._process_command(12345) is None
+
+
+def test_process_identity_lookup_reads_the_full_linux_proc_command(
+    tmp_path: Path,
+    monkeypatch,
+):
+    process_dir = tmp_path / "12345"
+    process_dir.mkdir()
+    long_marker = "xylon-test-owned-" + "x" * 256
+    (process_dir / "cmdline").write_bytes(
+        b"python\0-c\0import time; time.sleep(60)\0"
+        + long_marker.encode()
+        + b"\0"
+    )
+    monkeypatch.setattr(local_app, "PROC_ROOT", tmp_path)
+
+    with patch("agent.local_app.subprocess.run") as run:
+        assert local_app._process_command(12345) == (
+            "python -c import time; time.sleep(60) " + long_marker
+        )
+
+    run.assert_not_called()
+
+
+def test_process_identity_lookup_requests_an_untruncated_ps_fallback(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setattr(local_app, "PROC_ROOT", tmp_path / "missing-proc")
+    completed = subprocess.CompletedProcess(
+        args=[],
+        returncode=0,
+        stdout="python xylon-test-owned\n",
+        stderr="",
+    )
+    with patch("agent.local_app.subprocess.run", return_value=completed) as run:
+        assert local_app._process_command(12345) == "python xylon-test-owned"
+
+    run.assert_called_once_with(
+        ["ps", "-ww", "-p", "12345", "-o", "command="],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
 
 def test_stop_preserves_a_live_process_when_identity_cannot_be_read(monkeypatch):
