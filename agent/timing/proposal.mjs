@@ -4,20 +4,24 @@ import {
   SUPPORTED_TIMING_PLATFORM,
   TIMING_REPORT_RECIPE_SHA256,
 } from '../openroad/timing-contract.mjs'
-import { TIMING_FLOW_RECIPE } from '../openroad/timing-recipe.mjs'
+import {
+  TIMING_CANDIDATE_FLOW_RECIPE,
+  TIMING_FLOW_RECIPE,
+} from '../openroad/timing-recipe.mjs'
 
 export const TIMING_PROPOSAL_VERSION = 'xylon-timing-repair-proposal/v1'
 export const TIMING_REPAIR_ACTION = Object.freeze({
   type: 'orfs_flow_parameter',
   parameter: 'PLACE_DENSITY',
   from: TIMING_FLOW_RECIPE.placeDensity,
-  to: 0.65,
+  to: TIMING_CANDIDATE_FLOW_RECIPE.placeDensity,
 })
 
 const DEFAULT_TTL_MS = 15 * 60 * 1000
 const MAX_TTL_MS = 60 * 60 * 1000
 const SHA256 = /^[a-f0-9]{64}$/
 const RUN_ID = /^[a-f0-9]{32}$/
+const SOURCE_REVISION = /^[a-f0-9]{40}$/
 
 function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
@@ -50,8 +54,13 @@ function requireBaseline(baseline) {
   if (baseline.metrics?.violations !== true || !(baseline.metrics.wns < 0 || baseline.metrics.tns < 0)) {
     throw new Error('TimingProposalInvalid: this bounded repair requires a measured setup violation')
   }
+  const sourceRevision = baseline.source_revision ?? null
+  if (sourceRevision !== null && !SOURCE_REVISION.test(sourceRevision)) {
+    throw new Error('TimingProposalInvalid: baseline source revision is invalid')
+  }
   return {
     baseline_run_id: baseline.run_id,
+    source_revision: sourceRevision,
     design_platform_sha256: requireDigest(baseline.identities?.design_platform_sha256, 'design/platform'),
     report_recipe_sha256: requireDigest(baseline.identities?.report_recipe_sha256, 'report recipe'),
     checkpoint_sha256: requireDigest(baseline.artifacts?.checkpoint?.sha256, 'baseline checkpoint'),

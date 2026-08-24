@@ -43,8 +43,12 @@ function publicConfirmation(verified, proposal, now) {
   if (!CONFIRMATION_ID.test(verified.confirmation_id ?? '')) {
     throw new Error('TimingConfirmationInvalid: confirmation identity is invalid')
   }
-  if (verified.actor_class !== 'local_human_user' || verified.source !== 'timing_ui') {
-    throw new Error('TimingConfirmationInvalid: only the local human timing UI may confirm this proposal')
+  const localHumanSource = verified.actor_class === 'local_human_user'
+    && ['timing_ui', 'timing_cli_tty'].includes(verified.source)
+  const protectedCiSource = verified.actor_class === 'protected_ci_test'
+    && verified.source === 'protected_ci_test'
+  if (!localHumanSource && !protectedCiSource) {
+    throw new Error('TimingConfirmationInvalid: confirmation principal and source are not supported')
   }
   return {
     schema_version: 'xylon-external-timing-confirmation/v1',

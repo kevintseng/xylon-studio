@@ -14,3 +14,9 @@ export const TIMING_FLOW_RECIPE = Object.freeze({
   skipCtsRepairTiming: true,
   lecCheck: false,
 })
+
+export const TIMING_CANDIDATE_FLOW_RECIPE = Object.freeze({
+  ...TIMING_FLOW_RECIPE,
+  version: 'xylon-orfs-sky130hd-grt-place-density-065/v1',
+  placeDensity: 0.65,
+})
