@@ -75,11 +75,13 @@ test('reads checksummed ORFS baseline artifacts and parses metrics', async (cont
   await writeFile(path.join(runDir, 'reports', prefix, '5_global_route.rpt'), [
     'wns max -0.100',
     'tns max -0.500',
+    'global route report_checks -path_delay max',
+    '--------------------------------------------------------------------------',
     'Startpoint: q_reg',
     'Endpoint: out_reg',
     'Path Group: core_clock',
     'Path Type: max',
-    'slack (VIOLATED) -0.100',
+    '-0.100 slack (VIOLATED)',
     '',
   ].join('\n'))
   await writeFile(path.join(runDir, 'results', prefix, '5_1_grt.odb'), 'odb')
