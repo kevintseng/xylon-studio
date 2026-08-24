@@ -5,7 +5,7 @@ export type OpenroadSessionStatus =
   | 'error'
   | 'unknown'
 
-export type OpenroadHistoryMode = 'query' | 'change' | 'approve' | 'other'
+export type OpenroadHistoryMode = 'query' | 'change' | 'other'
 
 export interface OpenroadHistoryEntry {
   number: number
@@ -15,12 +15,6 @@ export interface OpenroadHistoryEntry {
   durationMs: number | null
   outputPreview: string | null
   error: string | null
-}
-
-export interface OpenroadReport {
-  name: string
-  path: string | null
-  summary: string | null
 }
 
 export interface OpenroadSession {
@@ -33,7 +27,6 @@ export interface OpenroadSession {
   cpuTimeSeconds: number | null
   openroadVersion: string | null
   history: OpenroadHistoryEntry[]
-  reports: OpenroadReport[]
 }
 
 export interface OpenroadSnapshot {
@@ -49,14 +42,28 @@ export interface OpenroadServer {
   xylonVersion: string | null
   openroadMcpVersion: string | null
   runtimeImage: string | null
-  pendingApprovals: number
+  pendingPreparations: number
   activeSessions: number
 }
 
 export interface OpenroadStage {
-  key: 'connect' | 'session' | 'query' | 'approve' | 'evidence'
+  key: 'connect' | 'session' | 'query' | 'change' | 'evidence'
   status: 'complete' | 'active' | 'blocked' | 'inactive'
 }
+
+export type OpenroadSnapshotFreshnessStatus =
+  | 'fresh'
+  | 'stale'
+  | 'missing'
+  | 'invalid'
+  | 'error'
+
+export interface OpenroadSnapshotFreshness {
+  status: OpenroadSnapshotFreshnessStatus
+  ageMs: number | null
+}
+
+export const OPENROAD_SNAPSHOT_STALE_AFTER_MS = 15_000
 
 type SessionState = 'empty' | 'live' | 'stopped' | 'error'
 type Tone = 'emerald' | 'blue' | 'amber' | 'slate' | 'red'
@@ -83,7 +90,7 @@ function truncateText(value: string | null, maxLength: number): string | null {
 }
 
 function normalizeHistoryMode(value: unknown): OpenroadHistoryMode {
-  if (value === 'query' || value === 'change' || value === 'approve') {
+  if (value === 'query' || value === 'change') {
     return value
   }
   if (value === 'exec') return 'change'
@@ -114,8 +121,6 @@ export function normalizeOpenroadSnapshot(input: Record<string, unknown>): Openr
       const sessionRecord = session as Record<string, unknown>
 
       const historyInput = Array.isArray(sessionRecord.history) ? sessionRecord.history : []
-      const reportsInput = Array.isArray(sessionRecord.reports) ? sessionRecord.reports : []
-
       return {
         sessionId: asString(sessionRecord.session_id) ?? 'unknown-session',
         status: normalizeSessionStatus(sessionRecord.status),
@@ -144,21 +149,6 @@ export function normalizeOpenroadSnapshot(input: Record<string, unknown>): Openr
             }
           })
           .filter((entry: OpenroadHistoryEntry | null): entry is OpenroadHistoryEntry => entry !== null),
-        reports: reportsInput
-          .map((report: unknown): OpenroadReport | null => {
-            if (report === null || typeof report !== 'object') {
-              return null
-            }
-
-            const reportRecord = report as Record<string, unknown>
-
-            return {
-              name: asString(reportRecord.name) ?? 'Unnamed report',
-              path: asString(reportRecord.path),
-              summary: truncateText(asString(reportRecord.summary), 180),
-            }
-          })
-          .filter((report: OpenroadReport | null): report is OpenroadReport => report !== null),
       }
     })
     .filter((session: OpenroadSession | null): session is OpenroadSession => session !== null)
@@ -170,7 +160,7 @@ export function normalizeOpenroadSnapshot(input: Record<string, unknown>): Openr
         xylonVersion: asString((serverInput as Record<string, unknown>).xylon_version),
         openroadMcpVersion: asString((serverInput as Record<string, unknown>).openroad_mcp_version),
         runtimeImage: asString((serverInput as Record<string, unknown>).runtime_image),
-        pendingApprovals: asNumber((serverInput as Record<string, unknown>).pending_approvals) ?? 0,
+        pendingPreparations: asNumber((serverInput as Record<string, unknown>).pending_preparations) ?? 0,
         activeSessions: asNumber((serverInput as Record<string, unknown>).active_sessions) ?? 0,
       }
     : null
@@ -194,6 +184,23 @@ export function getOpenroadSessionState(snapshot: OpenroadSnapshot): SessionStat
   return 'stopped'
 }
 
+export function getOpenroadSnapshotFreshness(
+  snapshot: OpenroadSnapshot,
+  observedAt = Date.now(),
+): OpenroadSnapshotFreshness {
+  if (snapshot.lastError) return { status: 'error', ageMs: null }
+  if (!snapshot.updatedAt) return { status: 'missing', ageMs: null }
+
+  const updatedAt = new Date(snapshot.updatedAt).getTime()
+  if (!Number.isFinite(updatedAt)) return { status: 'invalid', ageMs: null }
+
+  const ageMs = Math.max(0, observedAt - updatedAt)
+  return {
+    status: ageMs > OPENROAD_SNAPSHOT_STALE_AFTER_MS ? 'stale' : 'fresh',
+    ageMs,
+  }
+}
+
 export function getOpenroadStatusPresentation(
   status: OpenroadSessionStatus,
 ): OpenroadStatusPresentation {
@@ -211,36 +218,75 @@ export function getOpenroadStatusPresentation(
   }
 }
 
-export function buildOpenroadStages(snapshot: OpenroadSnapshot): OpenroadStage[] {
-  const primarySession = snapshot.sessions[0] ?? null
-  const hasSession = primarySession !== null
-  const hasHistory = Boolean(primarySession && primarySession.history.length > 0)
-  const approvalPending = (snapshot.server?.pendingApprovals ?? 0) > 0
-  const hasApprovedChange = Boolean(
-    primarySession?.history.some((entry) => entry.mode === 'change' && entry.success === true),
-  )
-  const hasEvidence = Boolean(primarySession && (primarySession.reports.length > 0 || primarySession.history.length > 0))
+export function buildOpenroadStages(
+  snapshot: OpenroadSnapshot,
+  observedAt = Date.now(),
+): OpenroadStage[] {
+  const freshness = getOpenroadSnapshotFreshness(snapshot, observedAt)
+  const serverStatus = snapshot.server?.status.toLowerCase() ?? null
+  const serverFailed = serverStatus !== null
+    && !['ready', 'stopped', 'starting', 'stopping'].includes(serverStatus)
+
+  if (freshness.status !== 'fresh' || snapshot.lastError || serverFailed) {
+    return [
+      { key: 'connect', status: 'blocked' },
+      { key: 'session', status: 'blocked' },
+      { key: 'query', status: 'blocked' },
+      { key: 'change', status: 'blocked' },
+      { key: 'evidence', status: 'blocked' },
+    ]
+  }
+
+  if (!snapshot.server || serverStatus === 'starting' || serverStatus === 'stopping') {
+    return [
+      { key: 'connect', status: 'active' },
+      { key: 'session', status: 'inactive' },
+      { key: 'query', status: 'inactive' },
+      { key: 'change', status: 'inactive' },
+      { key: 'evidence', status: 'inactive' },
+    ]
+  }
+
+  const primarySession = snapshot.sessions.find(
+    (session) => session.status === 'active' || session.status === 'starting',
+  ) ?? snapshot.sessions.at(-1) ?? null
+  const sessionReady = primarySession?.status === 'active' || primarySession?.status === 'terminated'
+  const sessionStarting = primarySession?.status === 'starting'
+  const sessionFailed = primarySession?.status === 'error' || primarySession?.status === 'unknown'
+  const confirmationPending = (snapshot.server?.pendingPreparations ?? 0) > 0
+  const latestQuery = primarySession?.history.filter((entry) => entry.mode === 'query').at(-1) ?? null
+  const latestChange = primarySession?.history
+    .filter((entry) => entry.mode === 'change')
+    .at(-1) ?? null
+  const latestHistory = primarySession?.history.at(-1) ?? null
+
+  const eventStatus = (entry: OpenroadHistoryEntry | null): OpenroadStage['status'] => {
+    if (!entry) return sessionReady ? 'active' : 'inactive'
+    if (entry.success === true) return 'complete'
+    if (entry.success === false) return 'blocked'
+    return 'active'
+  }
 
   return [
     {
       key: 'connect',
-      status: snapshot.server ? 'complete' : snapshot.lastError ? 'blocked' : 'active',
+      status: 'complete',
     },
     {
       key: 'session',
-      status: hasSession ? 'complete' : snapshot.lastError ? 'blocked' : 'inactive',
+      status: sessionReady ? 'complete' : sessionFailed ? 'blocked' : sessionStarting ? 'active' : 'inactive',
     },
     {
       key: 'query',
-      status: hasHistory ? 'complete' : hasSession ? 'active' : 'inactive',
+      status: eventStatus(latestQuery),
     },
     {
-      key: 'approve',
-      status: approvalPending ? 'active' : hasApprovedChange ? 'complete' : 'inactive',
+      key: 'change',
+      status: confirmationPending ? 'active' : latestChange ? eventStatus(latestChange) : 'inactive',
     },
     {
       key: 'evidence',
-      status: hasEvidence ? 'complete' : hasSession ? 'active' : 'inactive',
+      status: eventStatus(latestHistory),
     },
   ]
 }

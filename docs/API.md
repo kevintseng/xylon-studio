@@ -1,9 +1,12 @@
-# XylonStudio Canonical Pipeline API
+# XylonStudio Local API
 
-Version: 1.0.0
+Version: 0.4.0
 Local base URL used by the web app: `http://127.0.0.1:5001`
 
-The API exposes local RTL verification only. It does not expose RTL generation, testbench generation, OpenROAD, or legacy Dragon endpoints.
+The API exposes the canonical local RTL-verification pipeline and a read-only
+snapshot of the separate OpenROAD MCP runtime. It does not expose RTL or
+testbench generation, a natural-language timing agent, or legacy Dragon
+endpoints.
 
 Run one API worker. REST and WebSocket requests share one local execution slot,
 so heavy EDA pipeline work is serialized instead of competing for host resources.
@@ -17,7 +20,7 @@ The supported API binds to `127.0.0.1`; it is not an authenticated network servi
 {
   "status": "healthy",
   "service": "xylonstudio-api",
-  "version": "1.0.0"
+  "version": "0.4.0"
 }
 ```
 
@@ -46,7 +49,7 @@ This proves only that the API process is running. The pipeline runtime gate sepa
 | `testbench_code` | no | Independent self-checking C++ Verilator testbench, maximum 1 MiB encoded as UTF-8 |
 | `coverage_target` | no | Aggregate target from 0.0 to 1.0; default 0.8 |
 | `simulation_timeout` | no | One wall-clock budget shared by compile, simulation, and coverage collection; 1 to 3600 seconds, default 300 |
-| `lint_enabled` | no | Include the Verilator lint gate; default true |
+| `lint_enabled` | no | Include the Verilator lint gate; default true. It must remain true when no testbench is provided; otherwise the run fails with `configuration_error` instead of claiming `lint_only`. |
 | `synthesis_enabled` | no | Add a Yosys structural report; default false |
 
 Unknown fields are rejected with `422`. In particular, removed `llm_config`, `llm_provider`, `model`, and generation controls are unsupported.
@@ -170,9 +173,43 @@ Unsupported fields return an error without starting EDA work:
 }
 ```
 
+## OpenROAD snapshot
+
+`GET /api/openroad/snapshot`
+
+This read-only endpoint returns bounded activity written by the separate MCP
+server. When no snapshot exists, it truthfully reports a stopped server with no
+sessions:
+
+```json
+{
+  "schema_version": 1,
+  "updated_at": null,
+  "server": {"status": "stopped"},
+  "sessions": [],
+  "last_error": null
+}
+```
+
+A session may include status, timestamps, OpenROAD version, bounded command
+history, completion/error evidence, and process metrics when available. The
+route rejects unsupported schemas, malformed JSON, symlinks, out-of-workspace
+paths, and snapshots larger than 1 MiB.
+
+This snapshot is activity evidence only. It does not contain a verified
+RTL/SDC/PDK design identity, a worst timing path, a signed human-approval
+identity, report artifacts, signoff results, or a before/after improvement
+comparison. Clients must treat missing, stale, interrupted, failed, or
+inconclusive evidence as non-complete.
+
 ## Artifact and rerun contract
 
-The default artifact root is `.xylon/runs`. Each terminal run publishes an atomic directory containing frozen inputs, reports/logs, terminal result, file checksums, and `manifest.json`. The CLI verifies checksums before replay and reports `REPRODUCED` only when the terminal outcome matches.
+The default artifact root is `.xylon/runs`. Each terminal run publishes an
+atomic directory containing frozen inputs, reports/logs, terminal result, file
+checksums, and `manifest.json`. Publication succeeds only after the final
+directory and manifest are read back and checksum-verified. The CLI verifies
+checksums again before replay and reports `REPRODUCED` only when the terminal
+outcome matches.
 
 ```bash
 agent/venv/bin/python -m agent.cli rerun \
@@ -188,4 +225,7 @@ The following paths intentionally return 404 and will not be restored for compat
 - `/api/design/*`
 - `/api/verification/*`
 
-Natural-language design, AI-generated testbenches, and OpenROAD require new evidence-backed contracts before they can become public API surfaces.
+Natural-language design, AI-generated testbenches, and the complete OpenROAD
+timing-improvement journey require new evidence-backed contracts before they
+can become public API surfaces. The existing OpenROAD endpoint is read-only
+activity evidence, not that journey.

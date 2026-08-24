@@ -1,6 +1,7 @@
 """Durable pipeline artifact contract tests."""
 
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -107,6 +108,58 @@ def test_manifest_verification_detects_modified_frozen_input(tmp_path):
 
     with pytest.raises(ArtifactIntegrityError, match="inputs/design.v"):
         verify_artifact_manifest(manifest_path)
+
+
+def test_persistence_fails_closed_when_final_readback_cannot_be_verified(tmp_path):
+    result = _verified_result("readback-failure")
+
+    with patch(
+        "agent.pipeline.artifacts.verify_artifact_manifest",
+        side_effect=ArtifactIntegrityError("seeded final readback failure"),
+    ):
+        with pytest.raises(
+            ArtifactIntegrityError,
+            match="seeded final readback failure",
+        ):
+            persist_pipeline_artifacts(
+                result=result,
+                rtl_code="module original; endmodule\n",
+                testbench_code="PASS\n",
+                config=PipelineConfig(artifact_root=str(tmp_path)),
+            )
+
+    assert result.artifacts is None
+    assert not (tmp_path / result.pipeline_id).exists()
+    assert not list(tmp_path.glob(".*.staging-*"))
+
+
+def test_publish_race_preserves_a_bundle_created_by_another_owner(tmp_path):
+    result = _verified_result("concurrent-run")
+    final_dir = tmp_path / result.pipeline_id
+
+    def create_competing_bundle_and_fail(_source, _destination):
+        final_dir.mkdir()
+        (final_dir / "existing-evidence.txt").write_text(
+            "preserve me\n",
+            encoding="utf-8",
+        )
+        raise FileExistsError("seeded concurrent publisher")
+
+    with patch(
+        "agent.pipeline.artifacts.os.replace",
+        side_effect=create_competing_bundle_and_fail,
+    ):
+        with pytest.raises(FileExistsError, match="seeded concurrent publisher"):
+            persist_pipeline_artifacts(
+                result=result,
+                rtl_code="module replacement; endmodule\n",
+                testbench_code="PASS\n",
+                config=PipelineConfig(artifact_root=str(tmp_path)),
+            )
+
+    assert result.artifacts is None
+    assert (final_dir / "existing-evidence.txt").read_text(encoding="utf-8") == "preserve me\n"
+    assert not list(tmp_path.glob(".*.staging-*"))
 
 
 @pytest.mark.parametrize("pipeline_id", ["../escape", "nested/run", "..", "."])

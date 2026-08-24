@@ -207,7 +207,8 @@ class SandboxManager:
             output_file: Output JSON file (optional)
 
         Returns:
-            dict with success, gate_count, critical_path
+            Raw Yosys success, stdout, stderr, duration, and failure classification.
+            This function does not produce timing or mapped-gate evidence.
 
         Example:
             manager = SandboxManager()
@@ -265,7 +266,7 @@ class SandboxManager:
             verilog_code: Verilog source code as a string
 
         Returns:
-            dict with success, gate_count, stdout, stderr, duration_seconds
+            Raw Yosys success, stdout, stderr, duration, and failure classification.
         """
         import uuid
         job_id = uuid.uuid4().hex[:8]
@@ -305,8 +306,8 @@ class SandboxManager:
             coverage: Enable Verilator coverage collection (--coverage)
 
         Returns:
-            dict with simulation results (stdout, stderr, vcd_file,
-            and coverage_data if coverage=True)
+            dict with simulation results and coverage_data if coverage=True.
+            Waveform export is not implemented, so vcd_file is always None.
 
         Example:
             manager = SandboxManager()
@@ -379,12 +380,6 @@ class SandboxManager:
                 workdir=workdir,
             )
 
-            # Look for VCD file
-            vcd_file = None
-            vcd_pattern = f"{module_name}.vcd"
-            if os.path.exists(vcd_pattern):
-                vcd_file = vcd_pattern
-
             # Step 3: Collect coverage data if enabled
             coverage_data = None
             if coverage and run_result.success:
@@ -404,7 +399,7 @@ class SandboxManager:
                 'success': run_result.success,
                 'stdout': run_result.stdout,
                 'stderr': run_result.stderr,
-                'vcd_file': vcd_file,
+                'vcd_file': None,
                 'coverage_data': coverage_data,
                 'duration_seconds': (
                     verilate_result.duration_seconds
@@ -648,34 +643,14 @@ class SandboxManager:
         }
 
 
-def main():
-    """Main entry point."""
-    logger.info("Starting Sandbox Manager...")
-
-    manager = SandboxManager()
-
-    # Health check (warning only - Docker Compose manages containers)
-    try:
-        health = manager.health_check()
-        logger.info(f"Health check: {health}")
-
-        if not all(health.values()):
-            logger.warning("Health check failed - containers may not be ready yet")
-            logger.warning("This is expected in Docker Compose environment")
-            logger.warning("Docker Compose will manage container lifecycle")
-    except Exception as e:
-        logger.warning(f"Health check failed with error: {e}")
-        logger.warning("Continuing anyway - assuming Docker Compose manages containers")
-
-    logger.info("Sandbox Manager ready")
-
-    # TODO: Connect to Redis and process tasks
-    # For now, just run in idle mode
-    import time
-    while True:
-        time.sleep(60)
-        logger.debug("Sandbox Manager heartbeat")
+def main() -> int:
+    """Reject the unsupported standalone daemon entrypoint."""
+    logger.error(
+        "Standalone sandbox daemon is not implemented. "
+        "Use the pipeline API or CLI, which invoke SandboxManager directly."
+    )
+    return 2
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

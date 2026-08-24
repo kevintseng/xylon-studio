@@ -12,6 +12,7 @@ from agent.pipeline.steps.coverage import (
 )
 from agent.pipeline.steps.lint import run_lint_step, run_lint_step_from_string
 from agent.pipeline.steps.simulate import _extract_test_result, run_simulate_step
+from agent.pipeline.steps.synthesis import run_synthesis_step
 
 # ── Lint Step Tests ──
 
@@ -198,6 +199,38 @@ def test_extract_test_result_non_empty_output_is_inconclusive():
 def test_extract_test_result_empty_output_is_inconclusive():
     """A zero-exit simulation with no self-check result must not pass."""
     assert _extract_test_result("") is False
+
+
+# ── Synthesis Step Tests ──
+
+
+@pytest.mark.asyncio
+async def test_synthesis_reports_structural_cells_without_timing_claim(
+    mock_sandbox,
+    rtl_file,
+):
+    mock_sandbox.synthesize_verilog_string.return_value = {
+        "success": True,
+        "stdout": (
+            "=== adder ===\n"
+            "   3 wires\n"
+            "   12 wire bits\n"
+            "   0 memories\n"
+            "   0 memory bits\n"
+            "   2 cells\n"
+            "   1 $_AND_\n"
+            "   1 $_XOR_\n"
+        ),
+        "stderr": "",
+        "duration_seconds": 0.2,
+    }
+
+    result = await run_synthesis_step(rtl_file, mock_sandbox)
+
+    assert result.status == StepStatus.PASSED
+    assert result.output["cell_count"] == 2
+    assert "gate_count" not in result.output
+    assert "critical_path" not in result.output
 
 
 # ── Coverage Step Tests ──

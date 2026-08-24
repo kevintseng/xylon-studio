@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import asdict
 from pathlib import Path
 
@@ -59,7 +60,8 @@ def main(argv: list[str] | None = None) -> int:
         "resource": asdict(snapshot),
         "blockers": blockers,
     }
-    print(json.dumps(payload, sort_keys=True))
+    stream = sys.stderr if blockers else sys.stdout
+    print(json.dumps(payload, sort_keys=True), file=stream)
     return 1 if blockers else 0
 
 

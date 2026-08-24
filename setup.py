@@ -6,7 +6,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="xylonstudio",
-    version="1.0.0",
+    version="0.4.0",
     description="XylonStudio - reproducible local RTL verification",
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",

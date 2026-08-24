@@ -3,62 +3,73 @@ import path from 'node:path'
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { isExecCommand } from 'openroad-mcp/dist/config/command_whitelist.js'
+import { isExecCommand, isQueryCommand } from 'openroad-mcp/dist/config/command_whitelist.js'
 import { manager } from 'openroad-mcp/dist/core/manager.js'
 import {
   CreateSessionTool,
   InspectSessionTool,
   ListSessionsTool,
-  QueryShellTool,
-  ExecShellTool,
   SessionHistoryTool,
   SessionMetricsTool,
   TerminateSessionTool,
 } from 'openroad-mcp/dist/tools/interactive.js'
-import { ListReportImagesTool, ReadReportImageTool } from 'openroad-mcp/dist/tools/report_images.js'
 import { z } from 'zod'
 
+import { executeWithCompletionProof } from './execution.mjs'
+import { acquireServerLease } from './lease.mjs'
+import { SESSION_ID_PATTERN } from './protocol.mjs'
 import {
   appendRecord,
   buildSnapshot,
   extractOpenROADVersion,
   parseToolResult,
+  restoreSnapshotRecords,
   sanitizeText,
   writeSnapshotAtomic,
 } from './state.mjs'
 
-const XYLON_VERSION = '0.1.0'
+const XYLON_VERSION = '0.4.0'
 const OPENROAD_MCP_VERSION = '0.6.1'
-const APPROVAL_TTL_MS = 5 * 60 * 1000
-const MAX_PENDING_APPROVALS = 8
+const PREPARATION_TTL_MS = 5 * 60 * 1000
+const MAX_PENDING_PREPARATIONS = 8
 const STARTUP_TIMEOUT_MS = 30 * 1000
+const IDLE_TIMEOUT_SECONDS = Math.max(1, Number(process.env.OPENROAD_SESSION_IDLE_TIMEOUT) || 300)
+const IDLE_SWEEP_INTERVAL_MS = Math.min(60_000, Math.max(1_000, IDLE_TIMEOUT_SECONDS * 500))
 const repoRoot = path.resolve(process.env.XYLON_REPO_ROOT ?? path.join(import.meta.dirname, '..', '..'))
 const stateDir = path.resolve(process.env.XYLON_OPENROAD_STATE_DIR ?? path.join(repoRoot, '.xylon', 'openroad'))
 const workDir = path.join(stateDir, 'work')
 const runtimeImage = process.env.XYLON_OPENROAD_IMAGE ?? 'unconfigured'
+const sessionIdSchema = z.string().regex(SESSION_ID_PATTERN)
 
 const recordStore = new Map()
-const pendingApprovals = new Map()
+const pendingPreparations = new Map()
 let serverStatus = 'starting'
 let lastSnapshotError = null
 
-function pruneExpiredApprovals() {
+function pruneExpiredPreparations() {
   const now = Date.now()
-  for (const [approvalId, approval] of pendingApprovals) {
-    if (approval.expiresAt < now) pendingApprovals.delete(approvalId)
+  for (const [preparationId, preparation] of pendingPreparations) {
+    if (preparation.expiresAt < now) pendingPreparations.delete(preparationId)
   }
 }
 
 const serverMeta = () => {
-  pruneExpiredApprovals()
+  pruneExpiredPreparations()
   return {
     status: serverStatus,
     xylon_version: XYLON_VERSION,
     openroad_mcp_version: OPENROAD_MCP_VERSION,
     runtime_image: runtimeImage,
     runtime_platform: 'linux/amd64 compatibility mode',
-    resource_limits: { cpus: 4, memory_gib: 8, network: 'none', max_sessions: 1 },
-    pending_approvals: pendingApprovals.size,
+    resource_limits: {
+      cpus: 4,
+      memory_gib: 8,
+      network: 'none',
+      max_sessions: 1,
+      session_idle_timeout_seconds: IDLE_TIMEOUT_SECONDS,
+    },
+    pending_preparations: pendingPreparations.size,
+    confirmation_boundary: 'External MCP host confirmation is required and is not authenticated by this server.',
   }
 }
 
@@ -78,7 +89,7 @@ function asText(value) {
 }
 
 function commandDigest(command, sessionId) {
-  return createHash('sha256').update(`${sessionId ?? ''}\0${command}`).digest('hex')
+  return createHash('sha256').update(`${sessionId}\0${command}`).digest('hex')
 }
 
 function resultSessionId(parsed, fallback) {
@@ -145,22 +156,44 @@ async function runRecorded({ mode, command, sessionId, operation }) {
   return asText(raw)
 }
 
-const queryTool = new QueryShellTool(manager)
-const execTool = new ExecShellTool(manager)
+async function activeSessionError(sessionId) {
+  try {
+    const info = await manager.getSessionInfo(sessionId)
+    if (info.isAlive) return null
+    return `SessionNotActive: ${sessionId}`
+  } catch (error) {
+    return `SessionUnavailable: ${error instanceof Error ? error.message : String(error)}`
+  }
+}
+
+async function runWithCompletionProof(command, sessionId, timeoutMs) {
+  const result = await executeWithCompletionProof({
+    manager,
+    command,
+    sessionId,
+    timeoutMs: timeoutMs ?? 60_000,
+  })
+  if (result.error === 'CommandCompletionUnproven') {
+    appendRecord(recordStore, sessionId, {
+      status: 'error',
+      interruption_reason: 'Command completion marker was not observed; session terminated to prevent desynchronized reuse.',
+    })
+  }
+  return JSON.stringify(result)
+}
+
 const createTool = new CreateSessionTool(manager)
 const listTool = new ListSessionsTool(manager)
 const inspectTool = new InspectSessionTool(manager)
 const historyTool = new SessionHistoryTool(manager)
 const metricsTool = new SessionMetricsTool(manager)
 const terminateTool = new TerminateSessionTool(manager)
-const listImagesTool = new ListReportImagesTool(manager)
-const readImageTool = new ReadReportImageTool(manager)
 
 const mcp = new McpServer({ name: 'xylon-openroad', version: XYLON_VERSION })
 
 mcp.registerTool('create_openroad_session', {
   description: 'Create one Xylon-owned, resource-capped real OpenROAD session.',
-  inputSchema: { session_id: z.string().regex(/^[A-Za-z0-9_-]{1,48}$/).optional() },
+  inputSchema: { session_id: sessionIdSchema.optional() },
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 }, async ({ session_id: sessionId }) => {
   const raw = await createTool.execute(sessionId, ['openroad'], undefined, workDir)
@@ -194,26 +227,54 @@ mcp.registerTool('query_openroad', {
   description: 'Run a read-only OpenROAD report/get/check/help/version query. Mutating commands are blocked.',
   inputSchema: {
     command: z.string().min(1).max(4000),
-    session_id: z.string().optional(),
+    session_id: sessionIdSchema,
     timeout_ms: z.number().int().min(100).max(120000).optional(),
   },
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-}, async ({ command, session_id: sessionId, timeout_ms: timeoutMs }) => runRecorded({
-  mode: 'query',
-  command,
-  sessionId,
-  operation: () => queryTool.execute(command, sessionId, timeoutMs),
-}))
+}, async ({ command, session_id: sessionId, timeout_ms: timeoutMs }) => {
+  const sessionError = await activeSessionError(sessionId)
+  if (sessionError) {
+    await persistSnapshot(sessionError)
+    return asText({
+      output: '',
+      session_id: sessionId,
+      error: sessionError,
+      completion_proven: false,
+      recovery: 'Create an explicit OpenROAD session before running a query.',
+    })
+  }
+  const [allowed, blockedVerb] = isQueryCommand(command)
+  if (!allowed) {
+    const error = `CommandBlocked: ${blockedVerb}`
+    await persistSnapshot(error)
+    return asText({ output: '', session_id: sessionId, error, completion_proven: false })
+  }
+  return runRecorded({
+    mode: 'query',
+    command,
+    sessionId,
+    operation: () => runWithCompletionProof(command, sessionId, timeoutMs),
+  })
+})
 
 mcp.registerTool('prepare_openroad_change', {
-  description: 'Validate and stage a state-modifying OpenROAD command. This does not execute it.',
+  description: 'Validate and bind a state-modifying command to one live session. This does not execute or approve it.',
   inputSchema: {
     command: z.string().min(1).max(4000),
-    session_id: z.string().optional(),
+    session_id: sessionIdSchema,
     reason: z.string().min(1).max(500),
   },
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 }, async ({ command, session_id: sessionId, reason }) => {
+  const sessionError = await activeSessionError(sessionId)
+  if (sessionError) {
+    await persistSnapshot(sessionError)
+    return asText({
+      prepared: false,
+      error: sessionError,
+      recovery: 'Create an explicit OpenROAD session before preparing a change.',
+    })
+  }
   const [allowed, blockedVerb] = isExecCommand(command)
   if (!allowed) {
     await persistSnapshot(`CommandBlocked: ${blockedVerb}`)
@@ -223,18 +284,18 @@ mcp.registerTool('prepare_openroad_change', {
       recovery: 'Use an OpenROAD command that stays inside the restricted runtime.',
     })
   }
-  pruneExpiredApprovals()
-  if (pendingApprovals.size >= MAX_PENDING_APPROVALS) {
-    await persistSnapshot('ApprovalLimitReached')
+  pruneExpiredPreparations()
+  if (pendingPreparations.size >= MAX_PENDING_PREPARATIONS) {
+    await persistSnapshot('PreparationLimitReached')
     return asText({
       prepared: false,
-      error: 'ApprovalLimitReached',
-      recovery: 'Approve, reject, or wait for an existing prepared change to expire before preparing another.',
+      error: 'PreparationLimitReached',
+      recovery: 'Execute or wait for an existing command preparation to expire before preparing another.',
     })
   }
-  const approvalId = randomUUID()
-  const expiresAt = Date.now() + APPROVAL_TTL_MS
-  pendingApprovals.set(approvalId, {
+  const preparationId = randomUUID()
+  const expiresAt = Date.now() + PREPARATION_TTL_MS
+  pendingPreparations.set(preparationId, {
     digest: commandDigest(command, sessionId),
     command,
     sessionId,
@@ -244,39 +305,40 @@ mcp.registerTool('prepare_openroad_change', {
   await persistSnapshot()
   return asText({
     prepared: true,
-    approval_id: approvalId,
+    preparation_id: preparationId,
     command_sha256: commandDigest(command, sessionId),
     reason: sanitizeText(reason, 500),
     expires_at: new Date(expiresAt).toISOString(),
-    next_step: 'Ask the human to approve the destructive MCP tool call execute_approved_openroad_change.',
+    next_step: 'The MCP host must obtain external confirmation before calling execute_prepared_openroad_change.',
+    confirmation_boundary: 'Xylon binds command and session but does not authenticate or record who confirmed at the MCP host.',
   })
 })
 
-mcp.registerTool('execute_approved_openroad_change', {
-  description: 'Execute exactly one previously prepared OpenROAD change. The MCP client must obtain human approval for this destructive tool call.',
+mcp.registerTool('execute_prepared_openroad_change', {
+  description: 'Execute exactly one command-bound preparation after external MCP-host confirmation. This server does not authenticate the confirmer.',
   inputSchema: {
-    approval_id: z.string().uuid(),
+    preparation_id: z.string().uuid(),
     command: z.string().min(1).max(4000),
-    session_id: z.string().optional(),
+    session_id: sessionIdSchema,
     timeout_ms: z.number().int().min(100).max(120000).optional(),
   },
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
-}, async ({ approval_id: approvalId, command, session_id: sessionId, timeout_ms: timeoutMs }) => {
-  const approval = pendingApprovals.get(approvalId)
-  pendingApprovals.delete(approvalId)
-  if (!approval || approval.expiresAt < Date.now()) {
-    await persistSnapshot('ApprovalMissingOrExpired')
-    return asText({ executed: false, error: 'ApprovalMissingOrExpired', recovery: 'Prepare the exact command again.' })
+}, async ({ preparation_id: preparationId, command, session_id: sessionId, timeout_ms: timeoutMs }) => {
+  const preparation = pendingPreparations.get(preparationId)
+  pendingPreparations.delete(preparationId)
+  if (!preparation || preparation.expiresAt < Date.now()) {
+    await persistSnapshot('PreparationMissingOrExpired')
+    return asText({ executed: false, error: 'PreparationMissingOrExpired', recovery: 'Prepare the exact command again.' })
   }
-  if (approval.digest !== commandDigest(command, sessionId)) {
-    await persistSnapshot('ApprovalCommandMismatch')
-    return asText({ executed: false, error: 'ApprovalCommandMismatch', recovery: 'Execute the exact prepared command and session.' })
+  if (preparation.digest !== commandDigest(command, sessionId)) {
+    await persistSnapshot('PreparationCommandMismatch')
+    return asText({ executed: false, error: 'PreparationCommandMismatch', recovery: 'Execute the exact prepared command and session.' })
   }
   return runRecorded({
     mode: 'exec',
     command,
     sessionId,
-    operation: () => execTool.execute(command, sessionId, timeoutMs),
+    operation: () => runWithCompletionProof(command, sessionId, timeoutMs),
   })
 })
 
@@ -313,26 +375,6 @@ mcp.registerTool('terminate_openroad_session', {
   return asText(raw)
 })
 
-mcp.registerTool('list_openroad_report_images', {
-  description: 'List bounded ORFS report images when an ORFS artifact tree is configured.',
-  inputSchema: {
-    platform: z.string(), design: z.string(), run_slug: z.string(), stage: z.string().optional(),
-  },
-  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-}, async ({ platform, design, run_slug: runSlug, stage }) => asText(
-  await listImagesTool.execute(platform, design, runSlug, stage),
-))
-
-mcp.registerTool('read_openroad_report_image', {
-  description: 'Read one ORFS report image when an ORFS artifact tree is configured.',
-  inputSchema: {
-    platform: z.string(), design: z.string(), run_slug: z.string(), image_name: z.string(),
-  },
-  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-}, async ({ platform, design, run_slug: runSlug, image_name: imageName }) => asText(
-  await readImageTool.execute(platform, design, runSlug, imageName),
-))
-
 const transport = new StdioServerTransport()
 let requestStop
 const stopped = new Promise((resolve) => { requestStop = resolve })
@@ -343,20 +385,53 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.once(signal, () => requestStop(signal))
 }
 
+let idleSweep
+let idleSweepRunning = false
+const lease = await acquireServerLease()
 try {
+  await restoreSnapshotRecords(stateDir, recordStore)
   await mcp.connect(transport)
   serverStatus = 'ready'
   await persistSnapshot()
+  idleSweep = setInterval(async () => {
+    if (idleSweepRunning) return
+    idleSweepRunning = true
+    const before = new Set(manager.sessions.keys())
+    try {
+      await manager.cleanupIdleSessions(IDLE_TIMEOUT_SECONDS, true)
+      const terminated = [...before].filter((sessionId) => !manager.sessions.has(sessionId))
+      if (terminated.length > 0) {
+        for (const sessionId of terminated) {
+          appendRecord(recordStore, sessionId, {
+            status: 'terminated',
+            interruption_reason: `Session exceeded the configured ${IDLE_TIMEOUT_SECONDS}s idle timeout.`,
+          })
+        }
+        await persistSnapshot()
+      }
+    } catch (error) {
+      lastSnapshotError = error
+      await persistSnapshot(error).catch(() => {})
+    } finally {
+      idleSweepRunning = false
+    }
+  }, IDLE_SWEEP_INTERVAL_MS)
+  idleSweep.unref()
   await stopped
 } finally {
+  if (idleSweep) clearInterval(idleSweep)
   serverStatus = 'stopping'
   try {
+    const ownedSessionIds = [...manager.sessions.keys()]
     await manager.cleanupAll()
-    for (const session of recordStore.values()) session.status = 'terminated'
+    for (const sessionId of ownedSessionIds) {
+      appendRecord(recordStore, sessionId, { status: 'terminated' })
+    }
     serverStatus = 'stopped'
     await persistSnapshot()
   } catch (error) {
     serverStatus = 'error'
     await persistSnapshot(error).catch(() => {})
   }
+  await lease?.release().catch(() => {})
 }

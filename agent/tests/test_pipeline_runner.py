@@ -110,6 +110,37 @@ async def test_pipeline_lint_only(mock_sandbox_manager, mock_container_ops):
 
 
 @pytest.mark.asyncio
+async def test_pipeline_without_testbench_or_lint_fails_closed(
+    tmp_path,
+    mock_sandbox_manager,
+    mock_container_ops,
+):
+    """No evidence gate must never be described as lint-only evidence."""
+    result = await run_pipeline(
+        SIMPLE_RTL,
+        config=PipelineConfig(
+            lint_enabled=False,
+            runtime_check_enabled=False,
+            artifact_root=str(tmp_path),
+        ),
+    )
+
+    assert result.mode.value == "lint_only"
+    assert result.outcome.value == "configuration_error"
+    assert result.success is False
+    assert [step.step_name for step in result.steps] == [
+        "configuration",
+        "artifacts",
+    ]
+    configuration = result.get_step("configuration")
+    assert configuration.status == StepStatus.ERROR
+    assert configuration.failure_kind == FailureKind.CONFIGURATION
+    assert configuration.recovery_code == "enable_lint_or_provide_testbench"
+    mock_sandbox_manager.lint_verilog_string.assert_not_called()
+    mock_sandbox_manager.run_verilator_sim_string.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_pipeline_classifies_missing_toolchain_as_infrastructure_error(
     mock_sandbox_manager,
     mock_container_ops,

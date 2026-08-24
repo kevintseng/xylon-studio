@@ -1,75 +1,60 @@
 # XylonStudio
 
-以 Verilator 與 Yosys 執行真實、可重現的本機 RTL 驗證。
+以真實工具與可查驗的執行證據進行本機 RTL 驗證，並透過受限介面操作真實
+OpenROAD。
 
-📖 **[English](README.md)**
+[English](README.md)
 
-## 現在真正能做什麼
+## 現在可用
 
-XylonStudio 目前只提供一條有工具證據的驗證流程：
+Xylon 目前提供兩項真實且彼此獨立的功能：
+
+1. **RTL 驗證**：執行固定版本的 Verilator lint、選用的獨立 C++ 自我檢查、
+   覆蓋率收集、選用的 Yosys 結構統計，以及可精確重跑且含校驗碼的證據包。
+2. **OpenROAD MCP 控制介面**：讓支援 MCP 的 AI 助理建立一個資源受限的真實
+   OpenROAD 工作階段、執行受限指令，並在網頁顯示最新執行紀錄。
+
+OpenROAD 介面目前只是安全操作工具的基礎，還不是完整的 RTL→GDS 產品流程。
+Xylon 目前還不能匯入完整的 RTL／SDC／PDK 設計、找出最差時序路徑，或執行
+並比較時序改善結果。
+
+## 接下來完成什麼
+
+下一個產品切片是完整的時序分析與改善流程：
 
 ```text
-使用者意圖
-  -> 固定版本 runtime preflight
-  -> Verilator lint
-  -> 選填的獨立 C++ 自我檢查模擬
-  -> coverage 證據
-  -> 選填的 Yosys 合成報告
-  -> 含 checksum 的 artifacts 與精確重跑
+真實 RTL + SDC + PDK 版本資訊
+  -> 在 OpenROAD 載入設計
+  -> 產生報告並解釋最差時序路徑
+  -> 提出一項範圍受限的修改
+  -> 使用者在外部 MCP 用戶端確認執行
+  -> 重新產生相同指標的報告
+  -> 比較前後結果
+  -> 失敗時提供下一個可執行動作
 ```
 
-CLI、REST API、WebSocket 與 Web UI 共用相同 run contract。UI 提供可互動的 gate flow、責任邊界、工具證據、確定性結果與下一個復原動作。
+在整條路徑以結果讀回證據跑通前，介面會標示尚未可用。只有工具連線、
+流程圖、模擬資料或 AI 助理回答都不算完成。
 
-真實性規則：
+## 執行 RTL 驗證
 
-- 只有 lint 的執行結果是 `lint_only`，絕不是功能驗證。
-- `verified` 必須有獨立自我檢查 C++ testbench、明確 `PASS`、所有必要 gate 通過，且 coverage 達到使用者目標。
-- 缺少的 coverage 會保持 unavailable，不會顯示為 `0%`，也不會用另一個指標填補。
-- 設定錯誤、環境錯誤、取消、不支援輸入、驗證失敗、未達目標與證據不足都是不同結果。
-- 每次 terminal run 預設在 `.xylon/runs/` 保存輸入、證據、checksum 與 rerun manifest。
-
-## 尚未實作
-
-XylonStudio 目前不會用 AI 生成 RTL 或 testbench、不會執行 OpenROAD 實體設計、不會進行 DRC/LVS sign-off，也不能判定投片就緒。Agentic OpenROAD 是已研究的 roadmap，不是現行能力。
-
-## 快速開始
-
-### 前置需求
-
-- Python 3.11+
-- Node.js 20.9+（建議使用仍在支援期的 Node.js LTS）
-- Docker Desktop 或 Docker Engine
-- 最低 8 GB RAM；本機流程建議 16 GB
-
-### 一次性安裝
-
-從 repository root 執行：
+需求：Python 3.11+、Node.js 22+、Docker、至少 8 GB RAM（建議 16 GB）。
 
 ```bash
 python3 -m venv agent/venv
-agent/venv/bin/pip install -r requirements.txt
+agent/venv/bin/python -m pip install --require-hashes -r requirements.lock
 
 cd web
 npm ci
 npm run build
 cd ..
-```
 
-鎖定的 Web stack 使用 Next.js 16 與 React 19。Production build 採用
-Next.js 正式支援的 Webpack 路徑與本機系統字型，因此乾淨建置不依賴
-Google Fonts 或 Turbopack 的內部本機 socket。`doctor` 會在啟動服務前
-檢查實際安裝的 Python 與 Node.js 版本。
-
-### 啟動完整本機產品
-
-單一指令會管理固定版本 EDA runtime、一個 API worker 與 production web server：
-
-```bash
 scripts/xylon doctor
 scripts/xylon start
 ```
 
-開啟 [http://127.0.0.1:3000/pipeline](http://127.0.0.1:3000/pipeline)。狀態、log 與安全停止都使用相同入口，而且只操作它自己啟動的程序：
+開啟 [http://127.0.0.1:3000/pipeline](http://127.0.0.1:3000/pipeline)。頁面會先
+載入真實範例 RTL 與獨立測試程式。下列指令只會查看或停止此工作目錄自行管理的服務：
 
 ```bash
 scripts/xylon status
@@ -77,113 +62,71 @@ scripts/xylon logs --tail 100
 scripts/xylon stop
 ```
 
-如果 3000 已被另一個本機專案使用，不需要停止它；可改用
-`scripts/xylon start --web-port 3100`。選定的 port 會寫入 launcher state，
-後續仍可直接使用一般的 `status` 與 `stop`。
+只有 lint 的結果不會被稱為功能驗證。必須通過獨立自我檢查、所有必要檢查、
+要求的實測覆蓋率與最終產物讀回，結果才會是 `verified`。
 
-如果一分鐘 CPU load 已達 logical CPU 數、可用記憶體低於 20%、workspace 磁碟低於 10 GiB，或選定的 port 已被占用，`start` 會拒絕增加負載。部分啟動失敗會自動 rollback；port 與程序身分記錄在 `.xylon/local/state.json`，避免 `stop` 誤殺被重用的 PID。本次 session log 位於 `.xylon/local/logs/`。
+## 連接 OpenROAD
 
-第一次啟動會建立含固定 commit Verilator 5.050 與 Yosys 0.65 的 image，可能需要數分鐘；之後直接重用。Xylon 會限制兩個 EDA container、只啟動一個 API worker，並依序執行高負載 gate。
-
-### 使用 CLI
+OpenROAD 是獨立、按需啟動的 MCP 執行環境；`scripts/xylon` 不管理它。
 
 ```bash
-# 只產生語法與 lint 證據，結果是 lint_only。
-agent/venv/bin/python -m agent.cli run examples/adder/adder_8bit.v
-
-# 使用獨立 C++ 自我檢查做功能驗證。
-agent/venv/bin/python -m agent.cli run \
-  examples/adder/adder_8bit.v \
-  --testbench examples/adder/tb_adder_8bit.cpp \
-  --coverage-target 0.80 \
-  --synthesis
+scripts/xylon-openroad install
+scripts/xylon-openroad doctor
+scripts/xylon-openroad config
 ```
 
-終端機會顯示 canonical outcome、gate 證據、coverage 可用性、artifact manifest 與精確重跑指令。
+把輸出的設定加入支援 MCP 的 AI 助理，再開啟
+[http://127.0.0.1:3000/openroad](http://127.0.0.1:3000/openroad) 查看最新工作階段
+與指令證據。
+
+唯讀指令可直接執行。會改變狀態的指令必須先準備，並綁定精確的工作階段與
+指令內容後才能執行。外部 MCP 用戶端負責取得操作人員確認；Xylon 不驗證或
+記錄確認者身分。
+
+`scripts/xylon-openroad install` 會下載大型、固定版本的 `linux/amd64` OpenROAD
+映像檔。在 Apple Silicon 上會透過相容層執行；如果本機 CPU、記憶體或磁碟空間
+不足，啟動前的資源檢查會拒絕執行。
+
+## 目前邊界
+
+| 現在可用 | 尚未可用 |
+| --- | --- |
+| Verilator／Yosys RTL 驗證 | AI 產生 RTL 或測試程式 |
+| 含校驗碼的執行產物與精確重跑 | 匯入完整 RTL／SDC／PDK 設計 |
+| 受限的真實 OpenROAD MCP 工作階段 | 自動改善最差時序路徑 |
+| 最新 OpenROAD 執行紀錄讀回 | DRC／LVS 通過判定或投片就緒判定 |
+
+缺少、過期、失敗、中斷或無法判定的證據都不會變成完成狀態。
+
+## 使用入口
+
+- `/pipeline`：執行目前的 RTL 驗證流程。
+- `/openroad`：查看獨立的 OpenROAD MCP 執行紀錄。
+- `POST /api/pipeline/run` 與 `WS /api/pipeline/ws`：標準驗證流程。
+- `GET /api/openroad/snapshot`：讀取範圍受限的 OpenROAD 執行紀錄。
+- `python -m agent.cli run ...` 與 `python -m agent.cli rerun ...`：CLI 與精確重跑。
+
+詳細規格請見 [API 說明](docs/API.md)、[安全邊界](SECURITY.md) 與
+[貢獻規範](CONTRIBUTING.md)。
+
+## 驗證變更
+
+資源有限的本機應依序執行高負載檢查：
 
 ```bash
-agent/venv/bin/python -m agent.cli rerun \
-  .xylon/runs/<pipeline-id>/manifest.json
-```
-
-### 引導式 Web 工作流程
-
-產品刻意只保留 `/` 與 `/pipeline` 兩條 route。某些 macOS Control Center 會使用 port 5000，所以本機 API 固定使用 5001。
-
-Pipeline 預設載入完整的 adder 驗證任務與獨立 testbench，因此第一次執行會做真實功能檢查，而不只是 lint。介面提供四個引導式任務：
-
-- 預期通過的 adder、counter 與交通號誌 FSM，分別涵蓋組合、循序與狀態機行為。
-- 一個診斷任務：RTL 刻意把 carry-in 計算兩次，但沿用正確、獨立的 adder checks。預期結果為 `verification_failed`；結果卡會直接顯示第一個失敗的自我檢查，完整 simulator 輸出仍可在 Simulation gate 展開。
-
-只要編輯任一輸入，情境就會切換為自訂任務；此時預期結果會標示 unavailable，因為 Xylon 不會在工具執行前猜測結果。
-
-使用完成後停止整個自有 stack：
-
-```bash
-scripts/xylon stop
-```
-
-## API
-
-只有 canonical pipeline 是公開 API：
-
-| 方法 | 路徑 | 用途 |
-| --- | --- | --- |
-| `POST` | `/api/pipeline/run` | 執行完整 REST run |
-| `WS` | `/api/pipeline/ws` | 串流 gate 進度與相同 terminal result |
-| `GET` | `/health` | API process health |
-
-請見 [docs/API.md](docs/API.md)。已移除的 Design／Verification Dragon 與 LLM generation 欄位會被拒絕，沒有 compatibility shim。
-
-## 支援輸入與證據
-
-- RTL：Verilog 與固定版本 Verilator／Yosys 可接受的子集。
-- 功能測試：由 Verilator 編譯的 C++ testbench。它必須自行檢查，並只在所有檢查通過後輸出 `PASS`；任何 `FAIL` marker 都優先判定失敗。
-- Coverage：只填入固定 Verilator report 中實際解析到的指標。目前範例可取得 toggle coverage；line／branch 可能 unavailable。
-- Synthesis：選填的 Yosys 結構統計。它不證明面積、功耗、timing closure 或實體可行性。
-
-可用 RTL/testbench 組合位於 `examples/adder`、`examples/counter`、`examples/fsm`、`examples/barrel_shifter` 與 `examples/risc-v-alu`。
-
-## 開發驗證
-
-在資源有限的本機依序執行：
-
-```bash
-agent/venv/bin/pip install -r requirements-dev.txt
 agent/venv/bin/python -m pytest -q agent
 agent/venv/bin/python -m ruff check agent setup.py
 
 cd web
-node --experimental-strip-types --test lib/*.test.ts
+npm run test:contracts
+npm run lint
 npm run type-check
 npm run build
 ```
 
-Compose 會把每個 EDA 容器限制為 2 CPU、4 GB，而且不自動重啟。Launcher
-只啟動一個 API worker；REST 與 WebSocket pipeline 會被序列化，確保同一時間
-只有一個重型 EDA 工作。開發者仍可用 `scripts/eda-runtime` 手動管理 runtime，
-但那不是一般產品入口。
+離線測試只證明程式介面。任何真實 EDA 或使用者流程宣稱，都必須在同一版本上
+取得固定執行環境、結果讀回、失敗路徑、清理、獨立審查與受保護 CI 的證據。
 
-標記為 Docker integration 的測試應在固定 runtime healthy 後另外執行。Offline test 不等於真實 EDA runtime 證據。
+## 授權
 
-## 專案結構
-
-```text
-xylon/
-├── agent/
-│   ├── pipeline/          # Canonical model、runner、gate 與 artifacts
-│   ├── api/               # Pipeline REST 與 WebSocket adapters
-│   ├── sandbox/           # 固定 runtime 檢查與 container execution
-│   └── cli.py             # Run 與精確 rerun 指令
-├── runtime/               # 固定 Verilator/Yosys image 定義
-├── scripts/eda-runtime    # Runtime lifecycle 與驗證
-├── web/
-│   ├── app/               # 真實首頁與 pipeline routes
-│   └── lib/               # 共用 UI contract 與雙語文案
-├── examples/              # RTL 與獨立 C++ 自我檢查
-└── docs/API.md            # 公開 API contract
-```
-
-## 授權與貢獻
-
-本 repository 採用 [MIT License](LICENSE)。貢獻必須維持 evidence boundary：沒有真實 runtime 證據前，不得在文件或 UI 宣稱能力。請見 [CONTRIBUTING.md](CONTRIBUTING.md)。
+[MIT](LICENSE)
