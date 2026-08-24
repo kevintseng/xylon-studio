@@ -4,6 +4,8 @@ import { promisify } from 'node:util'
 
 const execFile = promisify(execFileCallback)
 const MAX_DIAGNOSTIC_LENGTH = 500
+const DEFAULT_CPUS = '4'
+const BOUNDED_CPU_BUDGET = /^[1-4]$/
 
 function parseResourcePayload(text) {
   try {
@@ -21,9 +23,21 @@ function parseResourcePayload(text) {
   }
 }
 
-export async function checkOpenROADResourceAdmission({ repoRoot, execute = execFile }) {
+export async function checkOpenROADResourceAdmission({
+  repoRoot,
+  requestedCpus = process.env.XYLON_OPENROAD_CPUS ?? DEFAULT_CPUS,
+  execute = execFile,
+}) {
+  const cpuBudget = String(requestedCpus)
+  if (!BOUNDED_CPU_BUDGET.test(cpuBudget)) {
+    return {
+      ready: false,
+      blockers: ['OpenROAD CPU budget must be an integer from 1 to 4'],
+      resource: null,
+    }
+  }
   const python = path.join(repoRoot, 'agent', 'venv', 'bin', 'python')
-  const args = ['-m', 'agent.openroad.resource', '--repo', repoRoot, '--cpus', '4']
+  const args = ['-m', 'agent.openroad.resource', '--repo', repoRoot, '--cpus', cpuBudget]
   try {
     const result = await execute(python, args, {
       cwd: repoRoot,

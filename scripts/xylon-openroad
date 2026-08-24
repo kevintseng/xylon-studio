@@ -7,6 +7,13 @@ package_dir="${repo_root}/agent/openroad"
 state_dir="${repo_root}/.xylon/openroad"
 image="openroad/orfs@sha256:305f9bb42a714a37d287f9755e6f9eae1f82007a54f488a87cd663caf9900422"
 python_bin="${repo_root}/agent/venv/bin/python"
+openroad_cpus="${XYLON_OPENROAD_CPUS:-4}"
+
+if [[ ! "${openroad_cpus}" =~ ^[1-4]$ ]]; then
+  echo "BLOCKED: XYLON_OPENROAD_CPUS must be an integer from 1 to 4" >&2
+  exit 2
+fi
+export XYLON_OPENROAD_CPUS="${openroad_cpus}"
 
 if [[ ! -x "${python_bin}" ]]; then
   echo "Xylon Python environment is missing: ${python_bin}" >&2
@@ -15,7 +22,7 @@ if [[ ! -x "${python_bin}" ]]; then
 fi
 
 resource_preflight() {
-  (cd "${repo_root}" && "${python_bin}" -m agent.openroad.resource --repo "${repo_root}" --cpus 4)
+  (cd "${repo_root}" && "${python_bin}" -m agent.openroad.resource --repo "${repo_root}" --cpus "${openroad_cpus}")
 }
 
 node_pty_spawn_helper() {
