@@ -165,8 +165,11 @@ export function classifyTimingFailure(runtimeResult) {
   if (/no clocks|clock .*not found|create_clock|sdc.*error/i.test(diagnostic)) {
     return { code: 'TimingClockConstraintInvalid', recovery: 'Provide one supported create_clock constraint whose port exists as an RTL input.' }
   }
-  if (/floorplan|core area|placeable area|pdn.*(fail|error)|design is too small/i.test(diagnostic)) {
-    return { code: 'TimingFloorplanTooSmall', recovery: 'Use a larger fixed core area or analyze a representative block with enough sequential logic, then rerun the same sky130hd recipe.' }
+  if (/GPL-0301|utilization\s+[\d.]+\s*%\s+exceeds\s+100%|floorplan|core area|placeable area|pdn.*(fail|error)|design is too small/i.test(diagnostic)) {
+    return {
+      code: 'TimingFloorplanCapacityExceeded',
+      recovery: 'Analyze a smaller timing block or reduce duplicated logic, then rerun; this bounded slice will not silently expand beyond its controlled automatic floorplan recipe.',
+    }
   }
   return {
     code: 'TimingRuntimeFailed',
