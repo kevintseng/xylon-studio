@@ -6,6 +6,7 @@ import { useI18n } from '@/lib/i18n'
 import { fetchOpenroadSnapshot, resolveOpenroadSnapshotUrl } from '@/lib/openroad-client'
 import {
   buildOpenroadStages,
+  getOpenroadSnapshotFreshness,
   getOpenroadSessionState,
   getOpenroadStatusPresentation,
   normalizeOpenroadSnapshot,
@@ -91,7 +92,7 @@ function SessionCard({
         </div>
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-[1.15fr_.85fr]">
+      <div className="mt-4">
         <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
           <div className="flex items-center justify-between gap-3">
             <h4 className="text-sm font-semibold text-slate-100">{t('openroad.history.title')}</h4>
@@ -146,28 +147,6 @@ function SessionCard({
             </ol>
           )}
         </section>
-
-        <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-          <div className="flex items-center justify-between gap-3">
-            <h4 className="text-sm font-semibold text-slate-100">{t('openroad.reports.title')}</h4>
-            <span className="text-xs text-slate-500">{session.reports.length}</span>
-          </div>
-          {session.reports.length === 0 ? (
-            <p className="mt-3 text-sm text-slate-400">{t('openroad.reports.empty')}</p>
-          ) : (
-            <ul className="mt-4 space-y-3">
-              {session.reports.map((report) => (
-                <li key={`${session.sessionId}-${report.name}`} className="rounded-xl border border-slate-800 bg-slate-950/80 p-3">
-                  <p className="text-sm font-semibold text-slate-100">{report.name}</p>
-                  <p className="mt-1 text-xs text-slate-500">{report.path ?? t('openroad.reports.pathUnavailable')}</p>
-                  {report.summary ? (
-                    <p className="mt-3 text-sm leading-6 text-slate-300">{report.summary}</p>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
       </div>
 
       <div className="mt-4 grid gap-3 text-xs text-slate-400 sm:grid-cols-2">
@@ -187,6 +166,7 @@ export default function OpenroadPage() {
   const [selectedStageKey, setSelectedStageKey] = useState<OpenroadStage['key']>('connect')
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState<string | null>(null)
+  const [observedAt, setObservedAt] = useState(() => Date.now())
   const [snapshot, setSnapshot] = useState(() => normalizeOpenroadSnapshot({ schema_version: 0, sessions: [] }))
 
   useEffect(() => {
@@ -203,10 +183,12 @@ export default function OpenroadPage() {
         if (cancelled) return
         setSnapshot(normalizeOpenroadSnapshot(payload as Record<string, unknown>))
         setFetchError(null)
+        setObservedAt(Date.now())
       } catch (error) {
         if (cancelled || controller.signal.aborted) return
         const message = error instanceof Error ? error.message : 'openroad_snapshot_failed'
         setFetchError(message)
+        setObservedAt(Date.now())
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -224,9 +206,20 @@ export default function OpenroadPage() {
     }
   }, [])
 
-  const stages = useMemo(() => buildOpenroadStages(snapshot), [snapshot])
+  const effectiveSnapshot = useMemo(
+    () => fetchError ? { ...snapshot, lastError: fetchError } : snapshot,
+    [fetchError, snapshot],
+  )
+  const freshness = useMemo(
+    () => getOpenroadSnapshotFreshness(effectiveSnapshot, observedAt),
+    [effectiveSnapshot, observedAt],
+  )
+  const stages = useMemo(
+    () => buildOpenroadStages(effectiveSnapshot, observedAt),
+    [effectiveSnapshot, observedAt],
+  )
   const selectedStage = stages.find((stage) => stage.key === selectedStageKey) ?? stages[0]
-  const sessionState = getOpenroadSessionState(snapshot)
+  const sessionState = getOpenroadSessionState(effectiveSnapshot)
   const serverLabel = snapshot.server
     ? `${snapshot.server.status} · MCP ${snapshot.server.openroadMcpVersion ?? t('common.unavailable')}`
     : t('openroad.state.disconnected')
@@ -327,7 +320,7 @@ export default function OpenroadPage() {
 
       <section className="border-b border-slate-800 py-12 sm:py-16">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
               <p className="text-xs uppercase tracking-[0.18em] text-slate-500">{t('openroad.snapshot.updated')}</p>
               <p className="mt-2 text-sm font-semibold text-slate-100">{formatDate(snapshot.updatedAt, locale)}</p>
@@ -339,6 +332,13 @@ export default function OpenroadPage() {
             <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4" aria-live="polite">
               <p className="text-xs uppercase tracking-[0.18em] text-slate-500">{t('openroad.snapshot.sessions')}</p>
               <p className="mt-2 text-sm font-semibold text-slate-100">{snapshot.sessions.length}</p>
+            </div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4" aria-live="polite">
+              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">{t('openroad.snapshot.freshness')}</p>
+              <p className="mt-2 text-sm font-semibold text-slate-100">
+                {t(`openroad.freshness.${freshness.status}`)}
+                {freshness.ageMs === null ? '' : ` · ${Math.floor(freshness.ageMs / 1000)} s`}
+              </p>
             </div>
           </div>
 

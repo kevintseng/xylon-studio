@@ -123,6 +123,7 @@ def persist_pipeline_artifacts(
             dir=root,
         )
     )
+    published = False
     try:
         _atomic_write_text(staging / "inputs/design.v", rtl_code)
         files = [
@@ -210,10 +211,14 @@ def persist_pipeline_artifacts(
         _atomic_write_text(staging / "checksums.sha256", checksum_text)
 
         os.replace(staging, final_dir)
+        published = True
+        verify_artifact_manifest(final_dir / "manifest.json")
         return bundle
     except Exception:
         if staging.exists():
             shutil.rmtree(staging)
+        if published and final_dir.exists():
+            shutil.rmtree(final_dir)
         result.artifacts = None
         raise
 

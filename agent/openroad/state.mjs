@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, rename, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 export const MAX_HISTORY = 50
 export const MAX_PREVIEW_CHARS = 1200
 export const MAX_RETAINED_SESSIONS = 5
+export const MAX_SNAPSHOT_BYTES = 1024 * 1024
 
 const SECRET_PATTERN = /\b(authorization|bearer|password|passwd|secret|token|api[_-]?key)\b\s*[:=]?\s*[^\s,;]+/gi
 
@@ -30,6 +31,61 @@ export async function writeSnapshotAtomic(stateDir, payload) {
   await writeFile(temporary, `${JSON.stringify(payload, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
   await rename(temporary, target)
   return target
+}
+
+function boundedHistory(history) {
+  if (!Array.isArray(history)) return []
+  return history.slice(-MAX_HISTORY).map((entry, index) => ({
+    number: Number.isInteger(entry?.number) ? entry.number : index + 1,
+    mode: entry?.mode === 'exec' ? 'exec' : 'query',
+    command: sanitizeText(entry?.command, 500),
+    success: Boolean(entry?.success),
+    duration_ms: Math.max(0, Number(entry?.duration_ms) || 0),
+    output_preview: sanitizeText(entry?.output_preview),
+    error: entry?.error ? sanitizeText(entry.error, 500) : null,
+    timestamp: typeof entry?.timestamp === 'string' ? entry.timestamp : null,
+  }))
+}
+
+export async function restoreSnapshotRecords(stateDir, store) {
+  const root = path.resolve(stateDir)
+  const target = assertContained(root, path.join(root, 'snapshot.json'))
+  let metadata
+  try {
+    metadata = await lstat(target)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return 0
+    throw error
+  }
+  if (!metadata.isFile() || metadata.isSymbolicLink()) {
+    throw new Error('OpenROAD snapshot must be a regular non-symlink file')
+  }
+  if (metadata.size > MAX_SNAPSHOT_BYTES) {
+    throw new Error(`OpenROAD snapshot exceeds ${MAX_SNAPSHOT_BYTES} bytes`)
+  }
+
+  const snapshot = JSON.parse(await readFile(target, 'utf8'))
+  const sessions = Array.isArray(snapshot?.sessions)
+    ? snapshot.sessions.slice(-MAX_RETAINED_SESSIONS)
+    : []
+  for (const session of sessions) {
+    if (!session || typeof session.session_id !== 'string' || !/^[A-Za-z0-9_-]{1,48}$/.test(session.session_id)) {
+      continue
+    }
+    const wasLive = ['active', 'starting', 'stopping'].includes(session.status)
+    store.set(session.session_id, {
+      session_id: session.session_id,
+      status: wasLive ? 'interrupted' : (session.status ?? 'terminated'),
+      created_at: typeof session.created_at === 'string' ? session.created_at : null,
+      last_activity: typeof session.last_activity === 'string' ? session.last_activity : null,
+      openroad_version: session.openroad_version ? sanitizeText(session.openroad_version, 100) : null,
+      history: boundedHistory(session.history),
+      interruption_reason: wasLive
+        ? 'Previous MCP server stopped before recording a clean session termination.'
+        : (session.interruption_reason ? sanitizeText(session.interruption_reason, 500) : null),
+    })
+  }
+  return store.size
 }
 
 export function parseToolResult(raw) {
@@ -62,6 +118,7 @@ export function appendRecord(store, sessionId, record) {
     history: [],
   }
   current.status = record.status ?? current.status
+  current.interruption_reason = record.interruption_reason ?? current.interruption_reason ?? null
   current.last_activity = record.timestamp ?? new Date().toISOString()
   if (record.command) {
     current.history.push({
@@ -107,7 +164,7 @@ export async function buildSnapshot({ manager, store, server, lastError = null }
       cpu_time_seconds: metric?.performance?.totalCpuTime ?? null,
       openroad_version: stored.openroad_version ?? null,
       history: stored.history.slice(-MAX_HISTORY),
-      reports: stored.reports ?? [],
+      interruption_reason: stored.interruption_reason ?? null,
     }
   })
 

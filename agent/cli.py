@@ -37,6 +37,14 @@ RECOVERY_GUIDANCE = {
     "inspect_synthesis_report": "Inspect the raw Yosys report for format or tool drift.",
     "repair_artifact_storage": "Repair artifact storage permissions or capacity.",
     "rerun_when_ready": "Rerun when you are ready.",
+    "add_explicit_result_marker": (
+        "Make the self-checking testbench print PASS only after every check succeeds "
+        "or FAIL when any check fails."
+    ),
+    "use_supported_hdl": "Rewrite the input using the supported Verilog subset, then rerun.",
+    "enable_lint_or_provide_testbench": (
+        "Enable Verilator lint or provide an independent self-checking C++ testbench."
+    ),
 }
 
 
@@ -138,7 +146,7 @@ async def run_command(args):
                 f"score={_format_coverage_value(step.output.get('score'))}"
             )
         elif step.step_name == "synthesis" and step.output:
-            total = step.output.get("gate_count")
+            total = step.output.get("cell_count")
             print(f"    {total} cells, {step.output.get('wires', '?')} wires")
 
     # Run pipeline

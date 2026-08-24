@@ -127,6 +127,23 @@ async def run_pipeline(
         return await finish()
 
     try:
+        if mode == RunMode.LINT_ONLY and not config.lint_enabled:
+            configuration_step = StepResult(
+                step_name="configuration",
+                status=StepStatus.ERROR,
+                duration_seconds=0.0,
+                errors=[
+                    "A run without a testbench must keep lint enabled; "
+                    "otherwise no verification evidence would be produced."
+                ],
+                failure_kind=FailureKind.CONFIGURATION,
+                recovery_code="enable_lint_or_provide_testbench",
+                required=True,
+            )
+            steps.append(configuration_step)
+            await emit(configuration_step)
+            return await finish()
+
         cancelled = await cancel_if_requested()
         if cancelled is not None:
             return cancelled

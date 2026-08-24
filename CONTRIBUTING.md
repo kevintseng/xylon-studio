@@ -104,11 +104,23 @@ Required UX properties:
 - exact evidence provenance and availability;
 - no celebratory success treatment for incomplete evidence.
 
-## Future Agentic OpenROAD contributions
+## Next OpenROAD product journey
 
-Agentic OpenROAD is roadmap work, not a current capability. Proposed work must begin with a public reference platform and pinned ORFS runtime, then define stage inputs/outputs, message IDs, reports, checkpoints, QoR, semantic outcomes, recovery, resource limits, and approval boundaries.
+The repository currently has a restricted real OpenROAD MCP console and bounded
+activity readback. It is a control-plane foundation, not a complete agentic
+physical-design capability.
 
-Do not contribute an opaque `make` wrapper or an unconstrained parameter-tuning loop. The first acceptable vertical slice is a reproducible upstream reference design with environment preflight, stage evidence, checksummed artifacts, bounded resource use, and seeded-failure recovery.
+The next accepted vertical slice is intentionally narrow: import a real,
+checksummed RTL/SDC/PDK design identity; load it into OpenROAD; report and locate
+the worst timing path; propose one bounded change; obtain host/operator
+approval; execute it; rerun the same report; and compare before/after evidence.
+Every failed stage must return one executable next action.
+
+Do not contribute an opaque `make` wrapper, an unconstrained parameter-tuning
+loop, a synthetic PPA score, or an agent persona without this runtime path. Use
+a reproducible upstream reference design with environment preflight, stage
+evidence, checksummed artifacts, bounded resource use, and seeded-failure
+recovery.
 
 ## Pull request evidence
 

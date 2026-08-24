@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -10,6 +10,7 @@ import {
   assertContained,
   buildSnapshot,
   extractOpenROADVersion,
+  restoreSnapshotRecords,
   sanitizeText,
   writeSnapshotAtomic,
 } from '../state.mjs'
@@ -58,7 +59,7 @@ test('snapshot is atomically written with bounded command history', async () => 
   const snapshot = await buildSnapshot({
     manager,
     store,
-    server: { status: 'ready', pending_approvals: 0 },
+    server: { status: 'ready', pending_preparations: 0 },
   })
   assert.equal(snapshot.sessions[0].history.length, 50)
   assert.equal(snapshot.sessions[0].history[0].command, 'report_5')
@@ -76,4 +77,27 @@ test('record store evicts the oldest session before snapshots can grow without b
   assert.equal(store.size, MAX_RETAINED_SESSIONS)
   assert.equal(store.has('session-0'), false)
   assert.equal(store.has(`session-${MAX_RETAINED_SESSIONS + 1}`), true)
+})
+
+test('startup restores bounded history and marks previously live sessions interrupted', async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), 'xylon-openroad-restore-'))
+  const sessions = Array.from({ length: MAX_RETAINED_SESSIONS + 2 }, (_, sessionIndex) => ({
+    session_id: `prior-${sessionIndex}`,
+    status: sessionIndex === MAX_RETAINED_SESSIONS + 1 ? 'active' : 'terminated',
+    history: Array.from({ length: 55 }, (_, commandIndex) => ({
+      number: commandIndex + 1,
+      mode: 'query',
+      command: `report_${commandIndex}`,
+      success: true,
+      output_preview: 'ok',
+    })),
+  }))
+  await writeFile(path.join(stateDir, 'snapshot.json'), JSON.stringify({ sessions }), { mode: 0o600 })
+  const store = new Map()
+  assert.equal(await restoreSnapshotRecords(stateDir, store), MAX_RETAINED_SESSIONS)
+  assert.equal(store.has('prior-0'), false)
+  assert.equal(store.get(`prior-${MAX_RETAINED_SESSIONS + 1}`).status, 'interrupted')
+  assert.match(store.get(`prior-${MAX_RETAINED_SESSIONS + 1}`).interruption_reason, /Previous MCP server/)
+  assert.equal(store.get(`prior-${MAX_RETAINED_SESSIONS + 1}`).history.length, 50)
+  assert.equal(store.get(`prior-${MAX_RETAINED_SESSIONS + 1}`).history[0].command, 'report_5')
 })

@@ -1,7 +1,7 @@
 """
 Synthesis Report Step.
 
-Runs Yosys synthesis on RTL to produce gate count and area estimates.
+Runs Yosys synthesis on RTL to produce structural cell statistics.
 This step is optional (controlled by config.synthesis_enabled).
 """
 
@@ -30,7 +30,7 @@ async def run_synthesis_step(
         timeout: Synthesis timeout in seconds
 
     Returns:
-        StepResult with gate count, cell breakdown, and timing info
+        StepResult with structural cell and wire counts. This is not timing evidence.
     """
     logger.info(f"Synthesis step starting: {rtl_file}")
     start = time.monotonic()
@@ -99,14 +99,14 @@ async def run_synthesis_step(
                 recovery_code="inspect_synthesis_report",
             )
 
-        gate_count = stats["cell_count"]
+        cell_count = stats["cell_count"]
 
         return StepResult(
             step_name=STEP_NAME,
             status=StepStatus.PASSED,
             duration_seconds=duration,
             output={
-                "gate_count": gate_count,
+                "cell_count": cell_count,
                 "cells": stats.get("cells", {}),
                 "wires": stats.get("wires", 0),
                 "wire_bits": stats.get("wire_bits", 0),
@@ -114,7 +114,7 @@ async def run_synthesis_step(
                 "memory_bits": stats.get("memory_bits", 0),
             },
             errors=[],
-            warnings=_synthesis_warnings(gate_count, stats),
+            warnings=_synthesis_warnings(cell_count, stats),
         )
 
     except Exception as e:
@@ -192,12 +192,12 @@ def _parse_yosys_stats(stdout: str) -> dict:
     return stats
 
 
-def _synthesis_warnings(gate_count: int, stats: dict) -> list[str]:
+def _synthesis_warnings(cell_count: int, stats: dict) -> list[str]:
     """Generate warnings based on synthesis results."""
     warnings = []
 
-    if gate_count == 0:
-        warnings.append("Synthesis produced 0 gates — module may be empty or optimized away")
+    if cell_count == 0:
+        warnings.append("Synthesis produced 0 cells — module may be empty or optimized away")
 
     if stats.get("memories", 0) > 0:
         warnings.append(

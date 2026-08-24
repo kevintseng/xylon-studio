@@ -16,9 +16,11 @@ does not promise a fixed security-response SLA.
 
 ## Current trust boundary
 
-XylonStudio is a single-user local RTL verifier, not a hosted or multi-tenant
-service. The supported launcher binds the API and Web application to
-`127.0.0.1`, starts one API worker, and serializes heavy EDA runs.
+XylonStudio is a single-user local RTL verifier plus a separate restricted
+OpenROAD MCP control plane, not a hosted or multi-tenant service. The supported
+application launcher binds the API and Web application to `127.0.0.1`, starts
+one API worker, and serializes heavy RTL-verification runs. An MCP host starts
+the OpenROAD stdio server independently and on demand.
 
 Implemented controls:
 
@@ -38,6 +40,14 @@ Implemented controls:
 - Terminal artifacts are checksummed and atomically published under
   `.xylon/runs/`. They contain the submitted RTL/testbench and must be protected
   as source material.
+- The OpenROAD runtime is network-disabled, read-only outside its bounded work
+  directory, capability-dropped, and CPU/memory/PID limited. A host-global
+  lease prevents multiple adapter processes from owning concurrent sessions;
+  idle sessions are swept and temporary runtime state is bounded.
+- State-changing OpenROAD commands use a two-step, one-use binding to the exact
+  session and command. The MCP host is responsible for obtaining operator
+  confirmation. Xylon does not authenticate or prove the human approver's
+  identity.
 
 Not implemented:
 
@@ -45,7 +55,8 @@ Not implemented:
 - network-facing deployment hardening, TLS termination, or IP rate limiting
 - encrypted artifact storage, retention automation, or remote deletion workflow
 - AI/LLM execution, prompt-injection controls, or model cost limiting
-- OpenROAD, PDK, DRC/LVS, physical-design, or tape-out security boundaries
+- verified RTL/SDC/PDK design provenance, licensed or proprietary PDK handling,
+  DRC/LVS signoff, physical-design signoff, or tape-out security boundaries
 
 Do not expose the local API to a LAN or the public Internet. A non-browser client
 does not provide a trustworthy browser `Origin`, so origin checking is not an

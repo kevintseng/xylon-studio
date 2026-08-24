@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="XylonStudio API",
     description="Local Verilator and Yosys verification with reproducible evidence",
-    version="1.0.0",
+    version="0.4.0",
     docs_url="/docs",
     redoc_url="/redoc"
 )
@@ -84,7 +84,7 @@ async def root():
     """Root endpoint."""
     return {
         "name": "XylonStudio API",
-        "version": "1.0.0",
+        "version": "0.4.0",
         "status": "running",
         "docs": "/docs"
     }
@@ -96,7 +96,7 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "xylonstudio-api",
-        "version": "1.0.0"
+        "version": "0.4.0"
     }
 
 

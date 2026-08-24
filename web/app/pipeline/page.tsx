@@ -14,14 +14,12 @@ import {
   type PipelineScenario,
 } from '@/lib/pipeline-scenarios'
 import {
-  AGENT_WORKFLOW_STAGES,
   buildPipelineFlow,
   getFirstFailingSelfCheck,
   getOutcomePresentation,
   getPrimaryRecoveryCode,
   getRecoveryPresentation,
   type PipelineResult,
-  type AgentWorkflowBoundary,
   type StepState,
   type StepStatus,
 } from '@/lib/pipeline-contract'
@@ -65,13 +63,6 @@ const OUTCOME_STYLES = {
   },
 }
 
-const AGENT_BOUNDARY_STYLES: Record<AgentWorkflowBoundary, string> = {
-  human: 'border-violet-500/40 bg-violet-500/10 text-violet-200',
-  orchestrator: 'border-blue-500/40 bg-blue-500/10 text-blue-200',
-  tool: 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200',
-  decision: 'border-amber-500/40 bg-amber-500/10 text-amber-200',
-}
-
 const DEFAULT_SCENARIO = getPipelineScenario(DEFAULT_PIPELINE_SCENARIO_KEY)
 
 export default function PipelinePage() {
@@ -99,34 +90,28 @@ export default function PipelinePage() {
   const [activeStep, setActiveStep] = useState<string | null>(null)
   const [stepElapsed, setStepElapsed] = useState(0)
   const [expandedStep, setExpandedStep] = useState<string | null>(null)
-  const [selectedAgentStageKey, setSelectedAgentStageKey] = useState<
-    (typeof AGENT_WORKFLOW_STAGES)[number]['key']
-  >('execute')
-
   const wsRef = useRef<WebSocket | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const stepStartRef = useRef<number>(0)
   const terminalMessageRef = useRef(false)
+  const hasTestbench = Boolean(testbenchCode.trim())
+  const effectiveLintEnabled = !hasTestbench || lintEnabled
 
   const requestedStepNames = useMemo(
     () => PIPELINE_STEP_ORDER.filter((name) => {
-      if (name === 'lint' && !lintEnabled) return false
+      if (name === 'lint' && !effectiveLintEnabled) return false
       if (name === 'synthesis' && !synthesisEnabled) return false
-      if ((name === 'simulate' || name === 'coverage') && !testbenchCode.trim()) return false
+      if ((name === 'simulate' || name === 'coverage') && !hasTestbench) return false
       return true
     }),
-    [lintEnabled, synthesisEnabled, testbenchCode],
+    [effectiveLintEnabled, hasTestbench, synthesisEnabled],
   )
 
   const flowNodes = useMemo(
     () => buildPipelineFlow(requestedStepNames, steps, activeStep),
     [requestedStepNames, steps, activeStep],
   )
-
-  const selectedAgentStage = AGENT_WORKFLOW_STAGES.find(
-    (stage) => stage.key === selectedAgentStageKey,
-  ) ?? AGENT_WORKFLOW_STAGES[0]
 
   const selectedScenario = selectedScenarioKey
     ? getPipelineScenario(selectedScenarioKey)
@@ -214,7 +199,7 @@ export default function PipelinePage() {
         rtl_code: rtlCode,
         testbench_code: testbenchCode || null,
         coverage_target: coverageTarget,
-        lint_enabled: lintEnabled,
+        lint_enabled: effectiveLintEnabled,
         synthesis_enabled: synthesisEnabled,
         simulation_timeout: simulationTimeout,
       }))
@@ -278,7 +263,7 @@ export default function PipelinePage() {
       if (errorKey) setError(t(errorKey))
       finishRun(ws)
     }
-  }, [rtlCode, testbenchCode, coverageTarget, lintEnabled, synthesisEnabled, simulationTimeout, finishRun, requestedStepNames, t])
+  }, [rtlCode, testbenchCode, coverageTarget, effectiveLintEnabled, synthesisEnabled, simulationTimeout, finishRun, requestedStepNames, t])
 
   const formatDuration = (seconds: number) => {
     if (seconds < 1) return '<1s'
@@ -297,54 +282,6 @@ export default function PipelinePage() {
       <div className="max-w-6xl mx-auto">
         <h1 className="text-3xl font-bold mb-2">{t('pipeline.title')}</h1>
         <p className="text-muted-foreground mb-8">{t('pipeline.subtitle')}</p>
-
-        <section className="mb-8 rounded-xl border border-slate-700 bg-slate-900/40 p-4 sm:p-5" aria-labelledby="agent-workflow-title">
-          <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <h2 id="agent-workflow-title" className="text-base font-semibold text-slate-100">
-                {t('pipeline.agent.title')}
-              </h2>
-              <p className="mt-1 text-sm text-slate-400">{t('pipeline.agent.subtitle')}</p>
-            </div>
-            <p className="mt-2 text-xs text-slate-500 sm:mt-0">{t('pipeline.agent.boundaryHint')}</p>
-          </div>
-
-          <ol className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5" aria-label={t('pipeline.agent.title')}>
-            {AGENT_WORKFLOW_STAGES.map((stage, index) => {
-              const selected = stage.key === selectedAgentStage.key
-              return (
-                <li key={stage.key} className="relative last:col-span-2 sm:last:col-span-1">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedAgentStageKey(stage.key)}
-                    aria-pressed={selected}
-                    aria-controls="agent-stage-detail"
-                    className={`h-full w-full rounded-lg border p-3 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
-                      selected
-                        ? AGENT_BOUNDARY_STYLES[stage.boundary]
-                        : 'border-slate-700 bg-slate-800/50 text-slate-300 hover:border-slate-500 hover:bg-slate-800'
-                    }`}
-                  >
-                    <span className="block text-[11px] font-mono text-current opacity-70">
-                      {String(index + 1).padStart(2, '0')}
-                    </span>
-                    <span className="mt-1 block text-sm font-medium">{t(stage.titleKey)}</span>
-                  </button>
-                </li>
-              )
-            })}
-          </ol>
-
-          <div id="agent-stage-detail" className="mt-3 rounded-lg border border-slate-700 bg-slate-950/60 p-3" aria-live="polite">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="text-sm font-medium text-slate-100">{t(selectedAgentStage.titleKey)}</p>
-              <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${AGENT_BOUNDARY_STYLES[selectedAgentStage.boundary]}`}>
-                {t(`pipeline.agent.boundary.${selectedAgentStage.boundary}`)}
-              </span>
-            </div>
-            <p className="mt-1 text-sm text-slate-300">{t(selectedAgentStage.detailKey)}</p>
-          </div>
-        </section>
 
         <div className="grid lg:grid-cols-5 gap-8">
           {/* Left: Input form */}
@@ -508,12 +445,12 @@ export default function PipelinePage() {
                   <label className="flex items-center gap-2 text-sm">
                     <input
                       type="checkbox"
-                      checked={lintEnabled}
+                      checked={effectiveLintEnabled}
                       onChange={(e) => {
                         invalidateDisplayedRun()
                         setLintEnabled(e.target.checked)
                       }}
-                      disabled={running}
+                      disabled={running || !hasTestbench}
                       className="rounded"
                     />
                     {t('pipeline.label.lint')}
@@ -532,6 +469,11 @@ export default function PipelinePage() {
                     {t('pipeline.label.synthesis')}
                   </label>
                 </div>
+                {!hasTestbench ? (
+                  <p className="text-xs leading-5 text-amber-200">
+                    {t('pipeline.lint.requiredWithoutTestbench')}
+                  </p>
+                ) : null}
               </div>
             )}
 
@@ -798,11 +740,11 @@ export default function PipelinePage() {
                                 </div>
                               ) : null}
 
-                              {step.step_name === 'synthesis' && typeof output.gate_count === 'number' ? (
+                              {step.step_name === 'synthesis' && typeof output.cell_count === 'number' ? (
                                 <div className="grid grid-cols-2 gap-2">
                                   <div className="p-2 bg-slate-800 rounded">
                                     <p className="text-xs text-slate-400">{t('pipeline.detail.cells')}</p>
-                                    <p className="text-lg font-semibold">{output.gate_count}</p>
+                                    <p className="text-lg font-semibold">{output.cell_count}</p>
                                   </div>
                                   <div className="p-2 bg-slate-800 rounded">
                                     <p className="text-xs text-slate-400">{t('pipeline.detail.wires')}</p>

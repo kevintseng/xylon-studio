@@ -52,7 +52,42 @@ jobs:
       - name: Audit resolved Python dependency graph
         run: agent/venv/bin/python -m pip_audit --strict -r requirements.lock
       - name: Check launcher syntax
-        run: bash -n scripts/xylon scripts/eda-runtime
+        run: >-
+          bash -n scripts/xylon scripts/eda-runtime scripts/xylon-openroad
+          runtime/openroad/bin/openroad
+
+  openroad-foundation:
+    name: OpenROAD foundation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: agent/openroad/package-lock.json
+      - name: Install locked adapter and pinned OpenROAD runtime
+        run: scripts/xylon-openroad install
+      - name: Run OpenROAD adapter contracts
+        working-directory: agent/openroad
+        run: npm test
+      - name: Audit OpenROAD adapter dependencies
+        working-directory: agent/openroad
+        run: npm audit
+      - name: Exercise real OpenROAD MCP query, blocked change, exact prepared execution, and cleanup
+        run: scripts/xylon-openroad smoke
+      - name: Reject leaked OpenROAD containers
+        if: always()
+        run: |
+          if docker ps -a --filter label=io.xylon.owner=openroad-mcp --format '{{.ID}}' | grep -q .; then
+            docker ps -a --filter label=io.xylon.owner=openroad-mcp
+            exit 1
+          fi
 
   frontend:
     name: Frontend
