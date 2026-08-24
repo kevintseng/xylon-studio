@@ -27,10 +27,11 @@ def test_public_surfaces_state_the_real_openroad_boundary() -> None:
     english_copy = " ".join(english_readme.split())
     traditional_chinese_copy = " ".join(traditional_chinese_readme.split())
 
-    assert "OpenROAD adapter is a control-plane foundation" in english_copy
+    assert "OpenROAD adapter is a control-plane boundary" in english_copy
     assert "not an RTL-to-GDS product journey" in english_copy
-    assert "OpenROAD 介面目前只是安全操作工具的基礎" in traditional_chinese_copy
-    assert "還不是完整的 RTL→GDS 產品流程" in traditional_chinese_copy
+    assert "OpenROAD 執行紀錄目前只證明受限指令確實執行" in traditional_chinese_copy
+    assert "還不能匯入完整的 RTL／SDC／PDK 設計" in traditional_chinese_copy
+    assert "或執行並比較時序改善結果" in traditional_chinese_copy
     assert "timing-improvement journey is the next product slice" in ui_copy
     assert "is not available yet" in ui_copy
     assert "RTL、SDC、PDK 的時序診斷與改善流程" in ui_copy
