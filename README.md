@@ -77,9 +77,15 @@ scripts/xylon logs --tail 100
 scripts/xylon stop
 ```
 
-`start` refuses to add load when the one-minute CPU load has reached the logical CPU count, free memory is below 20%, workspace disk is below 10 GiB, or ports 5001/3000 are already owned. It rolls back partial startup and records process identity in `.xylon/local/state.json` so `stop` cannot kill an unrelated reused PID. Current-session logs are under `.xylon/local/logs/`.
+If port 3000 belongs to another local project, choose another Web port without
+stopping that process: `scripts/xylon start --web-port 3100`. The selected port
+is stored in launcher state, so ordinary `status` and `stop` commands still work.
+
+`start` refuses to add load when the one-minute CPU load has reached the logical CPU count, free memory is below 20%, workspace disk is below 10 GiB, or the selected ports are already owned. It rolls back partial startup and records ports plus process identity in `.xylon/local/state.json` so `stop` cannot kill an unrelated reused PID. Current-session logs are under `.xylon/local/logs/`.
 
 The first start builds an image containing pinned Verilator 5.050 and Yosys 0.65 commits and may take several minutes; later starts reuse it. Xylon caps both EDA containers, runs one API worker, and serializes heavy gates.
+Each checkout uses a distinct Compose project identity, and `status` re-verifies
+the pinned image/tool identity rather than accepting any same-named container.
 
 ### Run from the CLI
 
@@ -135,6 +141,8 @@ See [docs/API.md](docs/API.md) for the exact request, outcome, progress, and can
 
 - RTL: Verilog and the subset accepted by the pinned Verilator/Yosys runtime.
 - Functional test: C++ testbench compiled by Verilator. It must perform its own checks and print `PASS` only after they succeed; any `FAIL` marker wins.
+- Input budget: RTL and testbench are each limited to 1 MiB encoded as UTF-8 across the REST, WebSocket, CLI, runner, and artifact paths.
+- Timeout: the requested simulation timeout is one wall-clock budget shared by compile, execution, and coverage collection.
 - Coverage: only metrics parsed from the pinned Verilator report are populated. In the current runtime, toggle coverage is available for the provided examples while line/branch may be unavailable.
 - Synthesis: optional Yosys structural statistics. It does not prove area, power, timing closure, or physical feasibility.
 
@@ -145,11 +153,13 @@ Example RTL/testbench pairs are under `examples/adder`, `examples/counter`, `exa
 Run serially on a resource-constrained local machine:
 
 ```bash
-agent/venv/bin/pip install -r requirements-dev.txt
+agent/venv/bin/python -m pip install --require-hashes -r requirements.lock
 agent/venv/bin/python -m pytest -q agent
+agent/venv/bin/python -m ruff check agent setup.py
+agent/venv/bin/python -m pip_audit --strict
 
 cd web
-node --experimental-strip-types --test lib/*.test.ts
+npm run test:contracts
 npm run type-check
 npm run build
 ```
@@ -159,6 +169,12 @@ auto-restart. The launcher runs one API worker and serializes REST and WebSocket
 pipeline work so only one heavy EDA run is active at a time. Manual runtime
 control remains available through `scripts/eda-runtime`, but it is not the
 normal product path.
+
+Python direct and transitive dependencies are hash-locked and audited in the
+verification gate. The runtime base image and EDA source commits are pinned, and
+the gate retains a runtime SBOM. Debian packages and Git sources are still
+fetched from upstream during image build, so fully snapshot-pinned image
+provenance remains an explicit security gap.
 
 Tests marked for Docker integration can be run separately after the pinned runtime is healthy. Offline tests do not count as real EDA runtime evidence.
 

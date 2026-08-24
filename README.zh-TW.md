@@ -77,7 +77,11 @@ scripts/xylon logs --tail 100
 scripts/xylon stop
 ```
 
-如果一分鐘 CPU load 已達 logical CPU 數、可用記憶體低於 20%、workspace 磁碟低於 10 GiB，或 5001／3000 已被占用，`start` 會拒絕增加負載。部分啟動失敗會自動 rollback；程序身分記錄在 `.xylon/local/state.json`，避免 `stop` 誤殺被重用的 PID。本次 session log 位於 `.xylon/local/logs/`。
+如果 3000 已被另一個本機專案使用，不需要停止它；可改用
+`scripts/xylon start --web-port 3100`。選定的 port 會寫入 launcher state，
+後續仍可直接使用一般的 `status` 與 `stop`。
+
+如果一分鐘 CPU load 已達 logical CPU 數、可用記憶體低於 20%、workspace 磁碟低於 10 GiB，或選定的 port 已被占用，`start` 會拒絕增加負載。部分啟動失敗會自動 rollback；port 與程序身分記錄在 `.xylon/local/state.json`，避免 `stop` 誤殺被重用的 PID。本次 session log 位於 `.xylon/local/logs/`。
 
 第一次啟動會建立含固定 commit Verilator 5.050 與 Yosys 0.65 的 image，可能需要數分鐘；之後直接重用。Xylon 會限制兩個 EDA container、只啟動一個 API worker，並依序執行高負載 gate。
 
@@ -147,6 +151,7 @@ scripts/xylon stop
 ```bash
 agent/venv/bin/pip install -r requirements-dev.txt
 agent/venv/bin/python -m pytest -q agent
+agent/venv/bin/python -m ruff check agent setup.py
 
 cd web
 node --experimental-strip-types --test lib/*.test.ts

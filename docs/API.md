@@ -7,6 +7,7 @@ The API exposes local RTL verification only. It does not expose RTL generation, 
 
 Run one API worker. REST and WebSocket requests share one local execution slot,
 so heavy EDA pipeline work is serialized instead of competing for host resources.
+The supported API binds to `127.0.0.1`; it is not an authenticated network service.
 
 ## Health
 
@@ -41,14 +42,16 @@ This proves only that the API process is running. The pipeline runtime gate sepa
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `rtl_code` | yes | Verilog RTL source |
-| `testbench_code` | no | Independent self-checking C++ Verilator testbench |
+| `rtl_code` | yes | Verilog RTL source, maximum 1 MiB encoded as UTF-8 |
+| `testbench_code` | no | Independent self-checking C++ Verilator testbench, maximum 1 MiB encoded as UTF-8 |
 | `coverage_target` | no | Aggregate target from 0.0 to 1.0; default 0.8 |
-| `simulation_timeout` | no | Bounded simulation timeout from 1 to 3600 seconds; default 300 |
+| `simulation_timeout` | no | One wall-clock budget shared by compile, simulation, and coverage collection; 1 to 3600 seconds, default 300 |
 | `lint_enabled` | no | Include the Verilator lint gate; default true |
 | `synthesis_enabled` | no | Add a Yosys structural report; default false |
 
 Unknown fields are rejected with `422`. In particular, removed `llm_config`, `llm_provider`, `model`, and generation controls are unsupported.
+An oversized REST envelope is rejected with `413`; field-size violations are
+rejected with `422` before EDA work begins.
 
 ### Response
 
@@ -147,6 +150,8 @@ The server emits:
 ```
 
 `pipeline_complete.result` uses the same canonical serialization as the REST response. It is the terminal authority; streamed steps are live progress.
+If the connection closes without `pipeline_complete` or an explicit error, the
+client must report an interrupted run and must not infer an outcome from partial steps.
 
 To cancel without disconnecting before the terminal result:
 
