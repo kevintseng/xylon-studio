@@ -59,10 +59,12 @@ def _sha256(path: Path) -> str:
 
 def _atomic_write_text(path: Path, content: str) -> None:
     """Publish a complete file without exposing a partial write."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
     temporary = path.with_name(f".{path.name}.tmp-{uuid.uuid4().hex}")
     try:
         with temporary.open("x", encoding="utf-8", newline="\n") as handle:
+            os.fchmod(handle.fileno(), 0o600)
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
@@ -112,7 +114,8 @@ def persist_pipeline_artifacts(
     _validate_pipeline_id(result.pipeline_id)
 
     root = Path(config.artifact_root).expanduser().resolve()
-    root.mkdir(parents=True, exist_ok=True)
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(root, 0o700)
     final_dir = root / result.pipeline_id
     if final_dir.exists():
         raise FileExistsError(f"Artifact run already exists: {final_dir}")

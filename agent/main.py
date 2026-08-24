@@ -9,6 +9,8 @@ Usage:
 
 import uvicorn
 
+from agent.pipeline.limits import MAX_PIPELINE_WS_MESSAGE_BYTES
+
 
 def main():
     """Start the API server."""
@@ -17,6 +19,7 @@ def main():
         host="127.0.0.1",
         port=5000,
         reload=False,
+        ws_max_size=MAX_PIPELINE_WS_MESSAGE_BYTES,
     )
 
 

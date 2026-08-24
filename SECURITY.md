@@ -26,7 +26,9 @@ Implemented controls:
 
 - REST, WebSocket, CLI, runner, and artifact publication enforce a 1 MiB UTF-8
   byte limit for each RTL or testbench input. The REST body has an additional
-  bounded envelope and rejects oversized requests before JSON validation.
+  bounded envelope and rejects oversized requests before JSON validation. The
+  supported Uvicorn launcher also caps each WebSocket frame before application
+  parsing; the route repeats the UTF-8 byte check as a fail-closed backstop.
 - The WebSocket accepts only configured local browser origins when an `Origin`
   header is present. Unexpected server exceptions are logged locally and are
   not copied into REST or WebSocket responses.
@@ -39,7 +41,8 @@ Implemented controls:
   annotation, and coverage readback.
 - Terminal artifacts are checksummed and atomically published under
   `.xylon/runs/`. They contain the submitted RTL/testbench and must be protected
-  as source material.
+  as source material. On POSIX systems, Xylon explicitly creates artifact
+  directories with mode `0700` and files with mode `0600`.
 - The OpenROAD runtime is network-disabled, read-only outside its bounded work
   directory, capability-dropped, and CPU/memory/PID limited. A host-global
   lease prevents multiple adapter processes from owning concurrent sessions;
@@ -83,5 +86,7 @@ on a disposable workstation or stronger isolation boundary.
   retention policy.
 - Never place credentials in RTL, testbenches, screenshots, console logs, or bug
   report JSON.
-- Review generated bug-report JSON before attaching it to GitHub; it can contain
+- Browser diagnostics redact common password, token, API-key, and Bearer shapes
+  before bug-report collection. This is defense in depth, not a completeness
+  guarantee. Review generated JSON before attaching it to GitHub; it can contain
   console output, browser metadata, page URLs, and an optional screenshot.

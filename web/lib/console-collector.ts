@@ -12,6 +12,16 @@ export interface ConsoleEntry {
 }
 
 const MAX_ENTRIES = 200
+const AUTHORIZATION_BEARER = /\b(authorization\b\s*["']?\s*[:=]\s*["']?)Bearer\s+[A-Za-z0-9._~+/=-]+/gi
+const SECRET_ASSIGNMENT = /\b(password|passwd|secret|token|api[_-]?key)\b(\s*["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}\]]+)/gi
+const BEARER_CREDENTIAL = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi
+
+export function sanitizeDiagnosticText(value: unknown): string {
+  return String(value)
+    .replace(AUTHORIZATION_BEARER, '$1Bearer [REDACTED]')
+    .replace(BEARER_CREDENTIAL, 'Bearer [REDACTED]')
+    .replace(SECRET_ASSIGNMENT, '$1$2[REDACTED]')
+}
 
 class ConsoleCollector {
   private entries: ConsoleEntry[] = []
@@ -27,11 +37,13 @@ class ConsoleCollector {
       console[level] = (...args: unknown[]) => {
         this.entries.push({
           level,
-          message: args
-            .map((a) =>
-              typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a)
-            )
-            .join(' '),
+          message: sanitizeDiagnosticText(
+            args
+              .map((a) =>
+                typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a)
+              )
+              .join(' '),
+          ),
           timestamp: new Date().toISOString(),
         })
         if (this.entries.length > MAX_ENTRIES) {
@@ -44,7 +56,9 @@ class ConsoleCollector {
     window.addEventListener('error', (event) => {
       this.entries.push({
         level: 'error',
-        message: `Uncaught: ${event.message} at ${event.filename}:${event.lineno}:${event.colno}`,
+        message: sanitizeDiagnosticText(
+          `Uncaught: ${event.message} at ${event.filename}:${event.lineno}:${event.colno}`,
+        ),
         timestamp: new Date().toISOString(),
       })
     })
@@ -52,7 +66,7 @@ class ConsoleCollector {
     window.addEventListener('unhandledrejection', (event) => {
       this.entries.push({
         level: 'error',
-        message: `Unhandled Promise Rejection: ${event.reason}`,
+        message: sanitizeDiagnosticText(`Unhandled Promise Rejection: ${event.reason}`),
         timestamp: new Date().toISOString(),
       })
     })

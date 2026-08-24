@@ -1,6 +1,7 @@
 """Durable pipeline artifact contract tests."""
 
 import json
+import stat
 from unittest.mock import patch
 
 import pytest
@@ -85,6 +86,12 @@ def test_persisted_manifest_is_complete_integrity_checked_and_rerunnable(tmp_pat
         "coverage_report",
     }
     verify_artifact_manifest(manifest_path)
+
+    assert stat.S_IMODE(tmp_path.stat().st_mode) == 0o700
+    assert stat.S_IMODE(run_dir.stat().st_mode) == 0o700
+    for path in run_dir.rglob("*"):
+        expected_mode = 0o700 if path.is_dir() else 0o600
+        assert stat.S_IMODE(path.stat().st_mode) == expected_mode
 
     replay = load_rerun_manifest(manifest_path)
     assert replay.rtl_code == "module adder; endmodule\n"

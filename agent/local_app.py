@@ -19,6 +19,7 @@ from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
+from agent.pipeline.limits import MAX_PIPELINE_WS_MESSAGE_BYTES
 from agent.sandbox.runtime import runtime_project_name as runtime_project_name
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -374,6 +375,8 @@ class LocalApplication:
             str(api_port),
             "--workers",
             "1",
+            "--ws-max-size",
+            str(MAX_PIPELINE_WS_MESSAGE_BYTES),
         ]
         self.web_command = web_command or [
             shutil.which("node") or "node",

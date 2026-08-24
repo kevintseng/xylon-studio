@@ -543,7 +543,7 @@ export default function PipelinePage() {
                         type="button"
                         onClick={() => node.has_evidence && setExpandedStep(selected ? null : node.step_name)}
                         disabled={!node.has_evidence}
-                        aria-pressed={node.has_evidence ? selected : undefined}
+                        aria-expanded={node.has_evidence ? selected : undefined}
                         aria-controls={node.has_evidence ? `pipeline-step-detail-${node.step_name}` : undefined}
                         className={`min-w-0 flex-1 rounded-lg border px-3 py-2 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-default ${style.border} ${style.bg}`}
                       >
@@ -584,9 +584,11 @@ export default function PipelinePage() {
                   >
                     {/* Step header — clickable to expand */}
                     <button
+                      id={`pipeline-step-detail-trigger-${step.step_name}`}
                       onClick={() => hasOutput ? setExpandedStep(isExpanded ? null : step.step_name) : undefined}
                       className={`w-full p-4 flex items-center justify-between text-left ${hasOutput ? 'cursor-pointer hover:bg-slate-800/30' : 'cursor-default'} transition-colors rounded-lg`}
                       aria-expanded={hasOutput ? isExpanded : undefined}
+                      aria-controls={hasOutput ? `pipeline-step-detail-${step.step_name}` : undefined}
                     >
                       <div className="flex items-center gap-3">
                         {/* Status indicator */}
@@ -658,7 +660,12 @@ export default function PipelinePage() {
 
                     {/* Expanded detail panel */}
                     {isExpanded && stepData && (
-                      <div id={`pipeline-step-detail-${step.step_name}`} className="px-4 pb-4 space-y-3 border-t border-slate-700/50">
+                      <div
+                        id={`pipeline-step-detail-${step.step_name}`}
+                        role="region"
+                        aria-labelledby={`pipeline-step-detail-trigger-${step.step_name}`}
+                        className="px-4 pb-4 space-y-3 border-t border-slate-700/50"
+                      >
                         {/* Errors */}
                         {stepData.errors && stepData.errors.length > 0 && (
                           <div className="mt-3 p-3 bg-red-500/5 border border-red-500/20 rounded">
@@ -727,7 +734,8 @@ export default function PipelinePage() {
                               {step.step_name === 'lint' && typeof output.warning_count === 'number' ? (
                                 <div className="p-2 bg-slate-800 rounded">
                                   <p className="text-xs text-slate-400">
-                                    {parseInt(String(output.error_count ?? 0), 10) || 0} errors, {parseInt(String(output.warning_count ?? 0), 10) || 0} warnings
+                                    {parseInt(String(output.error_count ?? 0), 10) || 0} {t('pipeline.detail.errorCountLabel')}, {' '}
+                                    {parseInt(String(output.warning_count ?? 0), 10) || 0} {t('pipeline.detail.warningCountLabel')}
                                   </p>
                                 </div>
                               ) : null}
@@ -764,7 +772,7 @@ export default function PipelinePage() {
 
                               {output.stdout ? (
                                 <div className="mt-2">
-                                  <p className="text-xs font-medium text-slate-400 mb-1">stdout</p>
+                                  <p className="text-xs font-medium text-slate-400 mb-1">{t('pipeline.detail.stdout')}</p>
                                   <pre className="text-xs font-mono text-slate-300 bg-slate-900 p-2 rounded max-h-48 overflow-y-auto whitespace-pre-wrap">
                                     {String(output.stdout)}
                                   </pre>
@@ -773,7 +781,7 @@ export default function PipelinePage() {
 
                               {output.stderr ? (
                                 <div className="mt-2">
-                                  <p className="text-xs font-medium text-slate-400 mb-1">stderr</p>
+                                  <p className="text-xs font-medium text-slate-400 mb-1">{t('pipeline.detail.stderr')}</p>
                                   <pre className="text-xs font-mono text-red-300 bg-slate-900 p-2 rounded max-h-48 overflow-y-auto whitespace-pre-wrap">
                                     {String(output.stderr)}
                                   </pre>
@@ -812,7 +820,7 @@ export default function PipelinePage() {
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <div className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${outcomeStyle.badge}`}>
-                        {result.outcome}
+                        {t(outcome.titleKey)}
                       </div>
                       <h2 id="pipeline-outcome-title" className="mt-3 text-2xl font-semibold tracking-tight">
                         {t(outcome.titleKey)}
@@ -936,7 +944,7 @@ export default function PipelinePage() {
 
             {/* Connection error */}
             {error && !result && (
-              <div className="mt-6 p-4 bg-red-500/10 border border-red-500/30 rounded-md">
+              <div role="alert" className="mt-6 p-4 bg-red-500/10 border border-red-500/30 rounded-md">
                 <p className="text-red-400 font-medium">{t('common.error')}</p>
                 <p className="text-sm mt-1 text-red-300">{error}</p>
               </div>

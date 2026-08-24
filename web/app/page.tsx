@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, type KeyboardEvent } from 'react'
 import { CircuitBackground } from '@/components/circuit-bg'
 import { useI18n } from '@/lib/i18n'
 import {
@@ -20,6 +20,24 @@ export default function Home() {
   const { t } = useI18n()
   const [selectedKey, setSelectedKey] = useState<(typeof HOME_AGENT_STAGES)[number]['key']>('execute')
   const selected = HOME_AGENT_STAGES.find((stage) => stage.key === selectedKey) ?? HOME_AGENT_STAGES[0]
+
+  const selectStageAt = (index: number) => {
+    const normalizedIndex = (index + HOME_AGENT_STAGES.length) % HOME_AGENT_STAGES.length
+    const nextStage = HOME_AGENT_STAGES[normalizedIndex]
+    setSelectedKey(nextStage.key)
+    requestAnimationFrame(() => document.getElementById(`home-flow-tab-${nextStage.key}`)?.focus())
+  }
+
+  const handleStageKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const nextIndex = event.key === 'ArrowRight' ? index + 1
+      : event.key === 'ArrowLeft' ? index - 1
+        : event.key === 'Home' ? 0
+          : event.key === 'End' ? HOME_AGENT_STAGES.length - 1
+            : null
+    if (nextIndex === null) return
+    event.preventDefault()
+    selectStageAt(nextIndex)
+  }
 
   return (
     <div className="relative overflow-hidden">
@@ -95,15 +113,20 @@ export default function Home() {
 
           <div className="mt-10 grid gap-6 xl:grid-cols-[1.45fr_.55fr]">
             <div className="rounded-2xl border border-slate-700 bg-slate-900/30 p-4 sm:p-6">
-              <ol className="grid gap-3 md:grid-cols-5" aria-label={t('home.flow.title')}>
+              <ol className="grid gap-3 md:grid-cols-5" role="tablist" aria-label={t('home.flow.title')}>
                 {HOME_AGENT_STAGES.map((stage, index) => {
                   const active = stage.key === selected.key
                   return (
                     <li key={stage.key} className="relative">
                       <button
                         type="button"
+                        id={`home-flow-tab-${stage.key}`}
+                        role="tab"
                         onClick={() => setSelectedKey(stage.key)}
-                        aria-pressed={active}
+                        onKeyDown={(event) => handleStageKeyDown(event, index)}
+                        tabIndex={active ? 0 : -1}
+                        aria-selected={active}
+                        aria-controls="home-flow-panel"
                         className={`h-full w-full rounded-xl border p-4 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 ${active ? 'border-blue-400 bg-blue-500/10 shadow-lg shadow-blue-950/40' : 'border-slate-700 bg-slate-950/60 hover:border-slate-500'}`}
                       >
                         <span className="text-xs text-slate-500">0{index + 1}</span>
@@ -121,7 +144,13 @@ export default function Home() {
               </ol>
             </div>
 
-            <aside className="rounded-2xl border border-blue-500/30 bg-blue-500/5 p-6" aria-live="polite">
+            <aside
+              id="home-flow-panel"
+              role="tabpanel"
+              aria-labelledby={`home-flow-tab-${selected.key}`}
+              className="rounded-2xl border border-blue-500/30 bg-blue-500/5 p-6"
+              aria-live="polite"
+            >
               <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs ${OWNER_STYLES[selected.owner]}`}>
                 {t(`home.owner.${selected.owner}`)}
               </span>

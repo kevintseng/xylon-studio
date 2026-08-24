@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { CircuitBackground } from '@/components/circuit-bg'
 import { useI18n } from '@/lib/i18n'
 import { fetchOpenroadSnapshot, resolveOpenroadSnapshotUrl } from '@/lib/openroad-client'
@@ -224,6 +224,24 @@ export default function OpenroadPage() {
     ? `${snapshot.server.status} · MCP ${snapshot.server.openroadMcpVersion ?? t('common.unavailable')}`
     : t('openroad.state.disconnected')
 
+  const selectStageAt = (index: number) => {
+    const normalizedIndex = (index + stages.length) % stages.length
+    const nextStage = stages[normalizedIndex]
+    setSelectedStageKey(nextStage.key)
+    requestAnimationFrame(() => document.getElementById(`openroad-stage-tab-${nextStage.key}`)?.focus())
+  }
+
+  const handleStageKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const nextIndex = event.key === 'ArrowRight' ? index + 1
+      : event.key === 'ArrowLeft' ? index - 1
+        : event.key === 'Home' ? 0
+          : event.key === 'End' ? stages.length - 1
+            : null
+    if (nextIndex === null) return
+    event.preventDefault()
+    selectStageAt(nextIndex)
+  }
+
   return (
     <div className="relative overflow-hidden">
       <section className="relative border-b border-slate-800">
@@ -271,7 +289,7 @@ export default function OpenroadPage() {
                 </div>
               </div>
 
-              <ol className="mt-6 grid gap-3 sm:grid-cols-5" aria-label={t('openroad.flow.title')}>
+              <ol className="mt-6 grid gap-3 sm:grid-cols-5" role="tablist" aria-label={t('openroad.flow.title')}>
                 {stages.map((stage, index) => {
                   const active = stage.key === selectedStage.key
                   const stageTone =
@@ -287,9 +305,13 @@ export default function OpenroadPage() {
                     <li key={stage.key}>
                       <button
                         type="button"
-                        aria-pressed={active}
+                        id={`openroad-stage-tab-${stage.key}`}
+                        role="tab"
+                        aria-selected={active}
                         aria-controls="openroad-stage-detail"
                         onClick={() => setSelectedStageKey(stage.key)}
+                        onKeyDown={(event) => handleStageKeyDown(event, index)}
+                        tabIndex={active ? 0 : -1}
                         className={`h-full w-full rounded-2xl border p-4 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 ${stageTone} ${active ? 'shadow-lg shadow-cyan-950/30' : ''}`}
                       >
                         <span className="text-[11px] uppercase tracking-[0.16em] text-slate-400">0{index + 1}</span>
@@ -304,6 +326,8 @@ export default function OpenroadPage() {
 
             <aside
               id="openroad-stage-detail"
+              role="tabpanel"
+              aria-labelledby={`openroad-stage-tab-${selectedStage.key}`}
               aria-live="polite"
               className="rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4 sm:p-6"
             >
@@ -349,13 +373,13 @@ export default function OpenroadPage() {
           ) : null}
 
           {fetchError ? (
-            <div className="mt-6 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-4 text-sm text-red-100">
+            <div role="alert" className="mt-6 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-4 text-sm text-red-100">
               {t('openroad.fetchError')}: {fetchError}
             </div>
           ) : null}
 
           {snapshot.lastError ? (
-            <div className="mt-6 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-4 text-sm text-red-100">
+            <div role="alert" className="mt-6 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-4 text-sm text-red-100">
               {t('openroad.runtimeError')}: {snapshot.lastError}
             </div>
           ) : null}
