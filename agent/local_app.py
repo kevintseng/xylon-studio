@@ -22,6 +22,7 @@ from urllib.request import urlopen
 from agent.sandbox.runtime import runtime_project_name as runtime_project_name
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+PROC_ROOT = Path("/proc")
 MINIMUM_PYTHON_VERSION = (3, 11, 0)
 MINIMUM_NODE_VERSION = (20, 9, 0)
 
@@ -257,9 +258,22 @@ def _process_state(pid: int) -> str | None:
 
 
 def _process_command(pid: int) -> str | None:
+    if PROC_ROOT.is_dir():
+        try:
+            raw_command = (PROC_ROOT / str(pid) / "cmdline").read_bytes()
+        except OSError:
+            pass
+        else:
+            arguments = [
+                os.fsdecode(argument)
+                for argument in raw_command.split(b"\0")
+                if argument
+            ]
+            return " ".join(arguments) or None
+
     try:
         result = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "command="],
+            ["ps", "-ww", "-p", str(pid), "-o", "command="],
             capture_output=True,
             text=True,
             check=False,
