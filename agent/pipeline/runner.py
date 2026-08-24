@@ -6,6 +6,8 @@ import shutil
 import tempfile
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import asdict
+from pathlib import Path
 
 from agent.pipeline.artifacts import persist_pipeline_artifacts
 from agent.pipeline.limits import validate_pipeline_inputs
@@ -147,6 +149,51 @@ async def run_pipeline(
         cancelled = await cancel_if_requested()
         if cancelled is not None:
             return cancelled
+
+        if config.resource_check_enabled:
+            await emit_start("resource")
+            try:
+                from agent.local_app import (
+                    collect_resource_snapshot,
+                    evaluate_resource_preflight,
+                )
+
+                resource_snapshot = await asyncio.to_thread(
+                    collect_resource_snapshot,
+                    Path(config.artifact_root).expanduser().resolve(),
+                )
+                resource_blockers = evaluate_resource_preflight(resource_snapshot)
+                resource_output = {
+                    "resource": asdict(resource_snapshot),
+                    "blockers": resource_blockers,
+                }
+            except Exception as resource_error:
+                resource_blockers = [
+                    f"resource admission could not be measured safely: {resource_error}"
+                ]
+                resource_output = {
+                    "resource": None,
+                    "blockers": resource_blockers,
+                }
+            resource_step = StepResult(
+                step_name="resource",
+                status=(
+                    StepStatus.ERROR if resource_blockers else StepStatus.PASSED
+                ),
+                duration_seconds=0.0,
+                output=resource_output,
+                errors=resource_blockers,
+                failure_kind=(
+                    FailureKind.INFRASTRUCTURE if resource_blockers else None
+                ),
+                recovery_code=(
+                    "wait_for_resources" if resource_blockers else None
+                ),
+            )
+            steps.append(resource_step)
+            await emit(resource_step)
+            if resource_blockers:
+                return await finish()
 
         with open(rtl_file, "w", encoding="utf-8") as handle:
             handle.write(rtl_code)

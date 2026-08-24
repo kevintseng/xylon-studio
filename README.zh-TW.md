@@ -87,7 +87,9 @@ scripts/xylon-openroad config
 
 `scripts/xylon-openroad install` 會下載大型、固定版本的 `linux/amd64` OpenROAD
 映像檔。在 Apple Silicon 上會透過相容層執行；如果本機 CPU、記憶體或磁碟空間
-不足，啟動前的資源檢查會拒絕執行。
+不足，啟動前的資源檢查會拒絕執行。每次開始 RTL 驗證流程或建立 OpenROAD
+工作階段之前，Xylon 都會重新檢查；若資源不足，不會啟動 EDA 工具，畫面會說明
+需要釋出哪一項資源，待本機負載降低後即可重試。
 
 ## 目前邊界
 
@@ -106,7 +108,7 @@ scripts/xylon-openroad config
 - `/openroad`：查看獨立的 OpenROAD MCP 執行紀錄。
 - `POST /api/pipeline/run` 與 `WS /api/pipeline/ws`：標準驗證流程。
 - `GET /api/openroad/snapshot`：讀取範圍受限的 OpenROAD 執行紀錄。
-- `python -m agent.cli run ...` 與 `python -m agent.cli rerun ...`：CLI 與精確重跑。
+- `agent/venv/bin/python -m agent.cli run ...` 與 `agent/venv/bin/python -m agent.cli rerun ...`：CLI 與精確重跑。
 
 詳細規格請見 [API 說明](docs/API.md)、[安全邊界](SECURITY.md) 與
 [貢獻規範](CONTRIBUTING.md)。

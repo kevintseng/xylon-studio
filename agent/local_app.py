@@ -102,7 +102,7 @@ class ManagedProcess:
 @dataclass(frozen=True)
 class ResourceSnapshot:
     logical_cpus: int
-    load_one_minute: float
+    load_one_minute: float | None
     memory_free_percent: int | None
     disk_free_bytes: int
     memory_available_bytes: int | None = None
@@ -110,7 +110,11 @@ class ResourceSnapshot:
 
 def evaluate_resource_preflight(snapshot: ResourceSnapshot) -> list[str]:
     blockers: list[str] = []
-    if snapshot.load_one_minute >= snapshot.logical_cpus:
+    if snapshot.load_one_minute is None:
+        blockers.append(
+            "CPU load could not be measured safely; retry after restoring the host probe"
+        )
+    elif snapshot.load_one_minute >= snapshot.logical_cpus:
         blockers.append(
             f"CPU load {snapshot.load_one_minute:.2f} has reached "
             f"{snapshot.logical_cpus} logical CPUs"
@@ -226,7 +230,7 @@ def collect_resource_snapshot(repo_root: Path) -> ResourceSnapshot:
     try:
         load_one_minute = os.getloadavg()[0]
     except (AttributeError, OSError):
-        load_one_minute = 0.0
+        load_one_minute = None
 
     memory_total_bytes, memory_available_bytes = _read_linux_memory()
     memory_free_percent: int | None = None

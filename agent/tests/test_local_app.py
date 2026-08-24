@@ -148,7 +148,7 @@ def test_macos_memory_probe_returns_unknown_for_invalid_total_memory():
         assert local_app._read_macos_memory() == (None, None, None)
 
 
-def test_resource_snapshot_keeps_load_failures_visible_as_a_safe_zero(tmp_path: Path):
+def test_resource_snapshot_keeps_load_failures_visible_as_unknown(tmp_path: Path):
     with (
         patch("agent.local_app.os.getloadavg", side_effect=OSError("unavailable")),
         patch(
@@ -158,7 +158,10 @@ def test_resource_snapshot_keeps_load_failures_visible_as_a_safe_zero(tmp_path: 
     ):
         snapshot = local_app.collect_resource_snapshot(tmp_path)
 
-    assert snapshot.load_one_minute == 0.0
+    assert snapshot.load_one_minute is None
+    assert local_app.evaluate_resource_preflight(snapshot)[0].startswith(
+        "CPU load could not be measured safely"
+    )
     assert snapshot.memory_free_percent == 62
     assert snapshot.memory_available_bytes == 10 * 1024**3
 

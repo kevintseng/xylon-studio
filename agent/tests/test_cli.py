@@ -148,6 +148,7 @@ async def test_cli_config_assembly_provided_testbench(tmp_path):
     assert cfg.synthesis_enabled is True
     assert cfg.coverage_target == 0.75
     assert cfg.simulation_timeout == 45
+    assert cfg.resource_check_enabled is True
     assert captured_config["testbench_code"] == "int main() { return 0; }\n"
 
 @pytest.mark.asyncio

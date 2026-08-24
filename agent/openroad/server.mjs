@@ -25,6 +25,7 @@ import {
 } from './execution.mjs'
 import { acquireServerLease } from './lease.mjs'
 import { SESSION_ID_PATTERN } from './protocol.mjs'
+import { checkOpenROADResourceAdmission } from './resource-admission.mjs'
 import { createDockerRuntimeOwnership, terminateSessionWithProof } from './runtime.mjs'
 import {
   appendRecord,
@@ -211,6 +212,17 @@ mcp.registerTool('create_openroad_session', {
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 }, async ({ session_id: sessionId }) => {
   const requestedSessionId = sessionId ?? randomUUID().replaceAll('-', '').slice(0, 12)
+  const admission = await checkOpenROADResourceAdmission({ repoRoot })
+  if (!admission.ready) {
+    const message = `OpenROAD resource admission blocked: ${admission.blockers.join('; ')}`
+    await persistSnapshot(message)
+    return asText({
+      error: 'ResourceAdmissionBlocked',
+      blockers: admission.blockers,
+      resource: admission.resource,
+      recovery: 'Wait for local CPU, memory, and disk headroom, then rerun scripts/xylon-openroad doctor before creating a session.',
+    })
+  }
   const raw = await createTool.execute(
     requestedSessionId,
     ['openroad'],

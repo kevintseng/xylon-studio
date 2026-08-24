@@ -226,6 +226,7 @@ class PipelineConfig:
     lint_enabled: bool = True
     simulation_timeout: int = 300
     synthesis_enabled: bool = False
+    resource_check_enabled: bool = False
     runtime_check_enabled: bool = field(
         default_factory=lambda: os.environ.get(
             "XYLON_SKIP_RUNTIME_CHECK",

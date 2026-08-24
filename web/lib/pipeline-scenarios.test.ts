@@ -129,6 +129,21 @@ test('artifact rerun command uses the documented project environment', () => {
   assert.doesNotMatch(pipelinePage, /`python3 -m agent\.cli rerun/)
 })
 
+test('pipeline exposes resource admission before any EDA step', () => {
+  const pipelinePage = readFileSync(
+    new URL('../app/pipeline/page.tsx', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(
+    pipelinePage,
+    /const PIPELINE_STEP_ORDER = \[\s*'resource',\s*'runtime',/,
+  )
+  assert.match(pipelinePage, /step\.status === 'failed' \|\| step\.status === 'error'/)
+  assert.match(pipelinePage, /pipeline\.detail\.resource\.memory/)
+  assert.match(pipelinePage, /pipeline\.detail\.resource\.disk/)
+})
+
 test('Traditional Chinese dictionary covers the complete outcome and recovery summary', () => {
   const i18nSource = readFileSync(new URL('./i18n.tsx', import.meta.url), 'utf8')
   const requiredResultKeys = [

@@ -94,6 +94,9 @@ confirmer's identity.
 `scripts/xylon-openroad install` pulls a large pinned `linux/amd64` OpenROAD
 image. On Apple Silicon it runs through the compatibility layer. Resource
 preflight can refuse startup when local CPU, memory, or disk headroom is unsafe.
+Xylon repeats this check immediately before every RTL pipeline run and every
+OpenROAD session. A blocked run does not start EDA tools; the UI explains which
+resource needs attention and asks the user to retry after local load subsides.
 
 ## Current boundaries
 
@@ -113,7 +116,7 @@ completed stage.
 - `/openroad` — inspect the separate OpenROAD MCP activity foundation.
 - `POST /api/pipeline/run` and `WS /api/pipeline/ws` — canonical pipeline.
 - `GET /api/openroad/snapshot` — read-only bounded OpenROAD activity snapshot.
-- `python -m agent.cli run ...` and `python -m agent.cli rerun ...` — CLI and
+- `agent/venv/bin/python -m agent.cli run ...` and `agent/venv/bin/python -m agent.cli rerun ...` — CLI and
   exact replay.
 
 See [API contract](docs/API.md), [security boundary](SECURITY.md), and
