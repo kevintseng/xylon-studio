@@ -188,7 +188,7 @@ Unsupported fields return an error without starting EDA work:
 
 `GET /api/openroad/snapshot`
 
-This read-only endpoint returns bounded activity written by the separate MCP
+This read-only endpoint returns a bounded execution record written by the separate MCP
 server. When no snapshot exists, it truthfully reports a stopped server with no
 sessions:
 
@@ -207,7 +207,7 @@ history, completion/error evidence, and process metrics when available. The
 route rejects unsupported schemas, malformed JSON, symlinks, out-of-workspace
 paths, and snapshots larger than 1 MiB.
 
-This snapshot is activity evidence only. It does not contain a verified
+This snapshot is execution evidence only. It does not contain a verified
 RTL/SDC/PDK design identity, a worst timing path, a signed human-approval
 identity, report artifacts, signoff results, or a before/after improvement
 comparison. Clients must treat missing, stale, interrupted, failed, or
@@ -240,4 +240,4 @@ The following paths intentionally return 404 and will not be restored for compat
 Natural-language design, AI-generated testbenches, and the complete OpenROAD
 timing-improvement journey require new evidence-backed contracts before they
 can become public API surfaces. The existing OpenROAD endpoint is read-only
-activity evidence, not that journey.
+execution evidence, not that journey.

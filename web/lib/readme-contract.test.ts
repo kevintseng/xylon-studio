@@ -25,7 +25,7 @@ function assertExcludesPatterns(source: string, patterns: RegExp[], label: strin
   }
 }
 
-test('README documents OpenROAD as a bounded foundation instead of a full timing journey', () => {
+test('README documents a bounded OpenROAD execution record instead of a full timing journey', () => {
   assertIncludesAnchors(
     readme,
     [
