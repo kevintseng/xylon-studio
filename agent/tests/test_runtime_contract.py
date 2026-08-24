@@ -1,6 +1,7 @@
 """Pinned local EDA runtime contract tests."""
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -169,6 +170,51 @@ def test_openroad_smoke_stops_after_the_first_failed_doctor_probe(tmp_path: Path
     assert "docker image inspect" not in calls
     assert "npm " not in calls
     assert "smoke-client.mjs" not in calls
+
+
+def test_openroad_install_does_not_require_macos_spawn_helper_on_linux(tmp_path: Path):
+    fake_repo = tmp_path / "repo"
+    scripts_dir = fake_repo / "scripts"
+    package_dir = fake_repo / "agent" / "openroad"
+    python_dir = fake_repo / "agent" / "venv" / "bin"
+    fake_bin = tmp_path / "bin"
+    for directory in (scripts_dir, package_dir, python_dir, fake_bin):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    launcher = scripts_dir / "xylon-openroad"
+    shutil.copy2(REPO_ROOT / "scripts" / "xylon-openroad", launcher)
+    fake_python = python_dir / "python"
+    fake_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_python.chmod(0o755)
+
+    fake_node = fake_bin / "node"
+    fake_node.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"--version\" ]; then echo v22.0.0; exit 0; fi\n"
+        "if [ \"$1\" = \"-p\" ]; then echo linux; exit 0; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    for command in ("npm", "docker"):
+        executable = fake_bin / command
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o755)
+    fake_node.chmod(0o755)
+
+    environment = os.environ.copy()
+    environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+    result = subprocess.run(
+        [str(launcher), "install"],
+        cwd=fake_repo,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "READY: official OpenROAD-MCP" in result.stdout
+    assert "spawn-helper" not in result.stderr
 
 
 def test_importing_sandbox_package_does_not_preload_runtime_module():
