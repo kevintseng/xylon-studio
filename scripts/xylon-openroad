@@ -25,7 +25,14 @@ node_pty_spawn_helper() {
 }
 
 repair_node_pty_helper() {
-  local helper
+  local helper node_platform
+  node_platform="$(node -p 'process.platform')" || {
+    echo "BLOCKED: Node.js platform could not be read" >&2
+    return 1
+  }
+  if [[ "${node_platform}" != "darwin" ]]; then
+    return 0
+  fi
   helper="$(node_pty_spawn_helper)"
   if [[ ! -f "${helper}" ]]; then
     echo "BLOCKED: node-pty spawn-helper is missing; run scripts/xylon-openroad install" >&2
@@ -35,7 +42,7 @@ repair_node_pty_helper() {
 }
 
 doctor() {
-  local node_major
+  local node_major node_platform
   node_major="$(node --version | sed -E 's/^v([0-9]+).*/\1/')" || {
     echo "BLOCKED: Node.js version could not be read" >&2
     return 1
@@ -56,7 +63,11 @@ doctor() {
     echo "BLOCKED: OpenROAD MCP dependencies are incomplete; run scripts/xylon-openroad install" >&2
     return 1
   }
-  if [[ ! -x "$(node_pty_spawn_helper)" ]]; then
+  node_platform="$(node -p 'process.platform')" || {
+    echo "BLOCKED: Node.js platform could not be read" >&2
+    return 1
+  }
+  if [[ "${node_platform}" == "darwin" && ! -x "$(node_pty_spawn_helper)" ]]; then
     echo "BLOCKED: node-pty spawn-helper is not executable; run scripts/xylon-openroad install" >&2
     return 1
   fi
