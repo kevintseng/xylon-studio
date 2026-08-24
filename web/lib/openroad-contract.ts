@@ -2,6 +2,7 @@ export type OpenroadSessionStatus =
   | 'starting'
   | 'active'
   | 'terminated'
+  | 'interrupted'
   | 'error'
   | 'unknown'
 
@@ -26,6 +27,11 @@ export interface OpenroadSession {
   memoryMb: number | null
   cpuTimeSeconds: number | null
   openroadVersion: string | null
+  interruptionReason: string | null
+  cleanupError: string | null
+  cleanupSessionId: string | null
+  childPid: number | null
+  containerId: string | null
   history: OpenroadHistoryEntry[]
 }
 
@@ -44,6 +50,15 @@ export interface OpenroadServer {
   runtimeImage: string | null
   pendingPreparations: number
   activeSessions: number
+  resourceLimits: OpenroadResourceLimits
+}
+
+export interface OpenroadResourceLimits {
+  cpus: number | null
+  memoryGib: number | null
+  network: string | null
+  maxSessions: number | null
+  sessionIdleTimeoutSeconds: number | null
 }
 
 export interface OpenroadStage {
@@ -65,7 +80,7 @@ export interface OpenroadSnapshotFreshness {
 
 export const OPENROAD_SNAPSHOT_STALE_AFTER_MS = 15_000
 
-type SessionState = 'empty' | 'live' | 'stopped' | 'error'
+type SessionState = 'empty' | 'live' | 'stopped' | 'interrupted' | 'error'
 type Tone = 'emerald' | 'blue' | 'amber' | 'slate' | 'red'
 
 export interface OpenroadStatusPresentation {
@@ -81,6 +96,11 @@ function asString(value: unknown): string | null {
 
 function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function asPositiveInteger(value: unknown): number | null {
+  const number = asNumber(value)
+  return number !== null && Number.isInteger(number) && number > 0 ? number : null
 }
 
 function truncateText(value: string | null, maxLength: number): string | null {
@@ -102,6 +122,7 @@ function normalizeSessionStatus(value: unknown): OpenroadSessionStatus {
     value === 'starting' ||
     value === 'active' ||
     value === 'terminated' ||
+    value === 'interrupted' ||
     value === 'error'
   ) {
     return value
@@ -130,6 +151,11 @@ export function normalizeOpenroadSnapshot(input: Record<string, unknown>): Openr
         memoryMb: asNumber(sessionRecord.memory_mb),
         cpuTimeSeconds: asNumber(sessionRecord.cpu_time_seconds),
         openroadVersion: asString(sessionRecord.openroad_version),
+        interruptionReason: truncateText(asString(sessionRecord.interruption_reason), 500),
+        cleanupError: truncateText(asString(sessionRecord.cleanup_error), 500),
+        cleanupSessionId: truncateText(asString(sessionRecord.cleanup_session_id), 48),
+        childPid: asPositiveInteger(sessionRecord.child_pid),
+        containerId: truncateText(asString(sessionRecord.container_id), 128),
         history: historyInput
           .map((entry: unknown): OpenroadHistoryEntry | null => {
             if (entry === null || typeof entry !== 'object') {
@@ -154,16 +180,29 @@ export function normalizeOpenroadSnapshot(input: Record<string, unknown>): Openr
     .filter((session: OpenroadSession | null): session is OpenroadSession => session !== null)
 
   const serverInput = input.server
-  const server = serverInput !== null && typeof serverInput === 'object'
-    ? {
-        status: asString((serverInput as Record<string, unknown>).status) ?? 'unknown',
-        xylonVersion: asString((serverInput as Record<string, unknown>).xylon_version),
-        openroadMcpVersion: asString((serverInput as Record<string, unknown>).openroad_mcp_version),
-        runtimeImage: asString((serverInput as Record<string, unknown>).runtime_image),
-        pendingPreparations: asNumber((serverInput as Record<string, unknown>).pending_preparations) ?? 0,
-        activeSessions: asNumber((serverInput as Record<string, unknown>).active_sessions) ?? 0,
-      }
-    : null
+  let server: OpenroadServer | null = null
+  if (serverInput !== null && typeof serverInput === 'object') {
+    const serverRecord = serverInput as Record<string, unknown>
+    const limitsInput = serverRecord.resource_limits
+    const limitsRecord = limitsInput !== null && typeof limitsInput === 'object'
+      ? limitsInput as Record<string, unknown>
+      : {}
+    server = {
+      status: asString(serverRecord.status) ?? 'unknown',
+      xylonVersion: asString(serverRecord.xylon_version),
+      openroadMcpVersion: asString(serverRecord.openroad_mcp_version),
+      runtimeImage: asString(serverRecord.runtime_image),
+      pendingPreparations: asNumber(serverRecord.pending_preparations) ?? 0,
+      activeSessions: asNumber(serverRecord.active_sessions) ?? 0,
+      resourceLimits: {
+        cpus: asPositiveInteger(limitsRecord.cpus),
+        memoryGib: asNumber(limitsRecord.memory_gib),
+        network: asString(limitsRecord.network),
+        maxSessions: asPositiveInteger(limitsRecord.max_sessions),
+        sessionIdleTimeoutSeconds: asPositiveInteger(limitsRecord.session_idle_timeout_seconds),
+      },
+    }
+  }
 
   return {
     schemaVersion: asNumber(input.schema_version) ?? 0,
@@ -181,6 +220,9 @@ export function getOpenroadSessionState(snapshot: OpenroadSnapshot): SessionStat
     return 'live'
   }
   if (snapshot.sessions.some((session) => session.status === 'error')) return 'error'
+  if (snapshot.sessions.some((session) => session.status === 'interrupted' || session.cleanupError)) {
+    return 'interrupted'
+  }
   return 'stopped'
 }
 
@@ -211,6 +253,8 @@ export function getOpenroadStatusPresentation(
       return { label: 'Starting', icon: '…', tone: 'amber', isLive: true }
     case 'terminated':
       return { label: 'Stopped', icon: '■', tone: 'slate', isLive: false }
+    case 'interrupted':
+      return { label: 'Interrupted', icon: '!', tone: 'amber', isLive: false }
     case 'error':
       return { label: 'Error', icon: '×', tone: 'red', isLive: false }
     default:
@@ -252,7 +296,10 @@ export function buildOpenroadStages(
   ) ?? snapshot.sessions.at(-1) ?? null
   const sessionReady = primarySession?.status === 'active' || primarySession?.status === 'terminated'
   const sessionStarting = primarySession?.status === 'starting'
-  const sessionFailed = primarySession?.status === 'error' || primarySession?.status === 'unknown'
+  const sessionFailed = primarySession?.status === 'error'
+    || primarySession?.status === 'interrupted'
+    || primarySession?.status === 'unknown'
+    || Boolean(primarySession?.cleanupError)
   const confirmationPending = (snapshot.server?.pendingPreparations ?? 0) > 0
   const latestQuery = primarySession?.history.filter((entry) => entry.mode === 'query').at(-1) ?? null
   const latestChange = primarySession?.history
@@ -286,7 +333,7 @@ export function buildOpenroadStages(
     },
     {
       key: 'evidence',
-      status: eventStatus(latestHistory),
+      status: sessionFailed ? 'blocked' : eventStatus(latestHistory),
     },
   ]
 }

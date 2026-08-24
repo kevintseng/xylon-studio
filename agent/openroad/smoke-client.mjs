@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -46,6 +47,9 @@ try {
   sessionId = createdPayload.session_id
   assert.equal(sessionId, 'xylon-smoke')
   assert.match(createdPayload.openroad_version, /26Q|\d{4}/)
+
+  const snapshot = JSON.parse(await readFile(path.join(repoRoot, '.xylon', 'openroad', 'snapshot.json'), 'utf8'))
+  assert.equal(snapshot.server.resource_limits.cpus, Number(process.env.XYLON_OPENROAD_CPUS ?? '4'))
 
   const help = await client.callTool({
     name: 'query_openroad',
