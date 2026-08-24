@@ -11,6 +11,7 @@ from pathlib import Path
 from agent.local_app import ResourceSnapshot, collect_resource_snapshot
 
 DEFAULT_CPUS = 4
+MAXIMUM_CPUS = 4
 MINIMUM_MEMORY_FREE_PERCENT = 35
 MINIMUM_MEMORY_AVAILABLE_GIB = 8.0
 MINIMUM_DISK_FREE_GIB = 10.0
@@ -25,6 +26,8 @@ def evaluate_openroad_preflight(
     blockers: list[str] = []
     if requested_cpus < 1:
         blockers.append("requested CPUs must be at least 1")
+    elif requested_cpus > MAXIMUM_CPUS:
+        blockers.append(f"requested CPUs must not exceed {MAXIMUM_CPUS}")
     elif snapshot.load_one_minute is None:
         blockers.append(
             "CPU load could not be measured safely; OpenROAD admission is fail-closed"

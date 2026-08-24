@@ -6,6 +6,7 @@ repo_root="$(cd -- "${script_dir}/../../.." && pwd)"
 state_dir="${XYLON_OPENROAD_STATE_DIR:-${repo_root}/.xylon/openroad}"
 work_dir="${state_dir}/work"
 image="${XYLON_OPENROAD_IMAGE:-openroad/orfs@sha256:305f9bb42a714a37d287f9755e6f9eae1f82007a54f488a87cd663caf9900422}"
+openroad_cpus="${XYLON_OPENROAD_CPUS:-4}"
 session_id="${XYLON_OPENROAD_SESSION_ID:?XYLON_OPENROAD_SESSION_ID is required}"
 server_id="${XYLON_OPENROAD_SERVER_ID:?XYLON_OPENROAD_SERVER_ID is required}"
 repo_id="${XYLON_OPENROAD_REPO_ID:?XYLON_OPENROAD_REPO_ID is required}"
@@ -13,6 +14,7 @@ cid_dir="${XYLON_OPENROAD_CID_DIR:?XYLON_OPENROAD_CID_DIR is required}"
 [[ "${session_id}" =~ ^[A-Za-z0-9_-]{1,48}$ ]] || { echo "Invalid OpenROAD session identity" >&2; exit 2; }
 [[ "${server_id}" =~ ^[A-Za-z0-9_-]{8,128}$ ]] || { echo "Invalid OpenROAD server identity" >&2; exit 2; }
 [[ "${repo_id}" =~ ^[A-Za-z0-9_-]{8,128}$ ]] || { echo "Invalid OpenROAD repository identity" >&2; exit 2; }
+[[ "${openroad_cpus}" =~ ^[1-4]$ ]] || { echo "Invalid OpenROAD CPU budget; expected an integer from 1 to 4" >&2; exit 2; }
 cidfile="${cid_dir}/${session_id}.cid"
 tty_echo_disabled=false
 
@@ -39,7 +41,7 @@ docker run --rm -i \
   --label "io.xylon.server=${server_id}" \
   --label "io.xylon.repo=${repo_id}" \
   --platform linux/amd64 \
-  --cpus 4 \
+  --cpus "${openroad_cpus}" \
   --memory 8g \
   --memory-swap 8g \
   --pids-limit 256 \

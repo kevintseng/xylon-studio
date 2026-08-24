@@ -48,6 +48,8 @@ jobs:
     name: OpenROAD foundation
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      XYLON_OPENROAD_CPUS: "1"
     steps:
       - name: Check out exact revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

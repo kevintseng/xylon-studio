@@ -28,6 +28,12 @@ def test_openroad_preflight_admits_bounded_idle_host():
     assert evaluate_openroad_preflight(snapshot(), requested_cpus=4) == []
 
 
+def test_openroad_preflight_rejects_cpu_budget_above_runtime_cap():
+    assert evaluate_openroad_preflight(snapshot(), requested_cpus=5) == [
+        "requested CPUs must not exceed 4"
+    ]
+
+
 def test_openroad_preflight_blocks_cpu_memory_and_disk_pressure():
     blockers = evaluate_openroad_preflight(
         snapshot(load=9.0, memory=20, disk_gib=5.0),

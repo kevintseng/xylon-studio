@@ -18,6 +18,35 @@ test('resource admission accepts only a valid ready payload', async () => {
   assert.deepEqual(result.blockers, [])
 })
 
+test('resource admission forwards one bounded CPU budget to the Python probe', async () => {
+  const result = await checkOpenROADResourceAdmission({
+    repoRoot: '/repo',
+    requestedCpus: 1,
+    execute: async (_command, args) => {
+      assert.deepEqual(args, ['-m', 'agent.openroad.resource', '--repo', '/repo', '--cpus', '1'])
+      return { stdout: JSON.stringify({ status: 'ready', blockers: [], resource: {} }) }
+    },
+  })
+
+  assert.equal(result.ready, true)
+})
+
+test('resource admission rejects an out-of-range CPU budget before spawning Python', async () => {
+  let executed = false
+  const result = await checkOpenROADResourceAdmission({
+    repoRoot: '/repo',
+    requestedCpus: 5,
+    execute: async () => {
+      executed = true
+      return { stdout: '' }
+    },
+  })
+
+  assert.equal(executed, false)
+  assert.equal(result.ready, false)
+  assert.match(result.blockers[0], /integer from 1 to 4/)
+})
+
 test('resource admission preserves actionable blockers from a nonzero probe', async () => {
   const error = new Error('probe exited 1')
   error.stderr = JSON.stringify({
