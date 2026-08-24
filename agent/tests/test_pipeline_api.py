@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from agent.api import local_web_origins
 from agent.api.main import app, global_exception_handler
 from agent.api.routes import pipeline as pipeline_routes
 from agent.pipeline.models import (
@@ -19,6 +20,15 @@ from agent.pipeline.models import (
     StepResult,
     StepStatus,
 )
+
+
+def test_local_web_origins_allow_only_the_selected_loopback_port():
+    assert local_web_origins(3100) == (
+        "http://127.0.0.1:3100",
+        "http://localhost:3100",
+    )
+    with pytest.raises(ValueError, match="between 1 and 65535"):
+        local_web_origins(0)
 
 
 def test_websocket_final_result_uses_canonical_pipeline_contract():
@@ -202,6 +212,43 @@ def test_rest_rejects_invalid_pipeline_values_before_starting_eda(payload, field
     runner.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    "field_name,payload",
+    [
+        ("rtl_code", {"rtl_code": "m" * (1024 * 1024 + 1)}),
+        (
+            "testbench_code",
+            {
+                "rtl_code": "module m; endmodule",
+                "testbench_code": "x" * (1024 * 1024 + 1),
+            },
+        ),
+    ],
+)
+def test_rest_rejects_oversized_source_before_starting_eda(field_name, payload):
+    runner = AsyncMock()
+
+    with patch("agent.api.routes.pipeline.run_pipeline", new=runner):
+        with TestClient(app) as client:
+            response = client.post("/api/pipeline/run", json=payload)
+
+    assert response.status_code == 422
+    assert field_name in response.text
+    runner.assert_not_awaited()
+
+
+def test_rest_rejects_an_oversized_http_body_before_json_parsing():
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/pipeline/run",
+            content=b"x" * (2 * 1024 * 1024 + 64 * 1024 + 1),
+            headers={"content-type": "application/json"},
+        )
+
+    assert response.status_code == 413
+    assert response.json() == {"detail": "Pipeline request body is too large"}
+
+
 def test_websocket_rejects_removed_generated_testbench_configuration():
     runner = AsyncMock()
 
@@ -237,6 +284,22 @@ def test_websocket_uses_the_same_bounded_request_validation_as_rest():
     assert message["message"].startswith("Invalid pipeline request:")
     assert "simulation_timeout" in message["message"]
     runner.assert_not_awaited()
+
+
+def test_websocket_does_not_expose_unhandled_exception_details():
+    with patch(
+        "agent.api.routes.pipeline.run_pipeline",
+        new=AsyncMock(side_effect=RuntimeError("secret /private/tool/path")),
+    ):
+        with TestClient(app) as client:
+            with client.websocket_connect("/api/pipeline/ws") as websocket:
+                websocket.send_json({"rtl_code": "module m; endmodule"})
+                message = websocket.receive_json()
+
+    assert message == {
+        "type": "error",
+        "message": "Pipeline execution failed",
+    }
 
 
 def test_cors_allows_only_the_local_web_application_without_credentials():

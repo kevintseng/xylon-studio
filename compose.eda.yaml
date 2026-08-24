@@ -37,8 +37,6 @@ x-eda-service: &eda-service
 services:
   verilator:
     <<: *eda-service
-    container_name: xylon-verilator
 
   yosys:
     <<: *eda-service
-    container_name: xylon-yosys

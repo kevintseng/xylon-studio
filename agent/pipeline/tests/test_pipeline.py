@@ -81,11 +81,6 @@ async def test_pipeline_lint_fail():
     invalid_rtl = "module broken ( input x, invalid syntax"
     config = PipelineConfig(lint_enabled=True, runtime_check_enabled=True)
 
-    # Note: This requires Docker containers to be running
-    # Skip if containers not available
-    if not _check_docker_available():
-        pytest.skip("Docker containers not available")
-
     result = await run_pipeline(
         rtl_code=invalid_rtl,
         testbench_code=None,
@@ -104,9 +99,6 @@ async def test_pipeline_lint_fail():
 @pytest.mark.slow
 async def test_pipeline_full_flow():
     """Full pipeline: lint -> simulate -> coverage."""
-    if not _check_docker_available():
-        pytest.skip("Docker containers not available")
-
     config = PipelineConfig(
         lint_enabled=True,
         simulation_timeout=300,
@@ -148,27 +140,3 @@ async def test_pipeline_full_flow():
         "toggle_coverage": "verilator_summary",
         "score": "computed_verilator_point_counts",
     }
-
-
-def _check_docker_available() -> bool:
-    """Check that both pinned EDA containers are running and healthy."""
-    import subprocess
-
-    try:
-        result = subprocess.run(
-            [
-                'docker', 'inspect', '--format',
-                '{{.State.Running}}|{{.State.Health.Status}}',
-                'xylon-verilator', 'xylon-yosys',
-            ],
-            capture_output=True,
-            timeout=5,
-            check=False,
-        )
-        return (
-            result.returncode == 0
-            and result.stdout.decode().splitlines()
-            == ['true|healthy', 'true|healthy']
-        )
-    except Exception:
-        return False

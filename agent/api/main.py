@@ -4,17 +4,18 @@ XylonStudio FastAPI Application.
 Main API server for the reproducible RTL verification pipeline.
 
 Run:
-    uvicorn agent.api.main:app --host 0.0.0.0 --port 5000 --reload
+    uvicorn agent.api.main:app --host 127.0.0.1 --port 5000
 """
 
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from agent.api import LOCAL_WEB_ORIGINS
 from agent.api.routes import pipeline
+from agent.pipeline.limits import MAX_PIPELINE_BODY_BYTES
 
 # Configure logging
 logging.basicConfig(
@@ -43,6 +44,38 @@ app.add_middleware(
 
 # Include routers
 app.include_router(pipeline.router, prefix="/api", tags=["pipeline"])
+
+
+def _payload_too_large() -> JSONResponse:
+    return JSONResponse(
+        status_code=413,
+        content={"detail": "Pipeline request body is too large"},
+    )
+
+
+@app.middleware("http")
+async def bound_pipeline_request_body(request: Request, call_next):
+    """Bound the live REST body before FastAPI allocates or validates JSON."""
+    if request.method == "POST" and request.url.path == "/api/pipeline/run":
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > MAX_PIPELINE_BODY_BYTES:
+                    return _payload_too_large()
+            except ValueError:
+                return JSONResponse(
+                    status_code=400,
+                    content={"detail": "Invalid Content-Length header"},
+                )
+
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > MAX_PIPELINE_BODY_BYTES:
+                return _payload_too_large()
+        request._body = bytes(body)
+
+    return await call_next(request)
 
 
 @app.get("/")
@@ -78,4 +111,4 @@ async def global_exception_handler(request, exc):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=5000)
+    uvicorn.run(app, host="127.0.0.1", port=5000)

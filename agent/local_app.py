@@ -3,27 +3,41 @@
 from __future__ import annotations
 
 import argparse
-from collections import deque
-from dataclasses import dataclass
 import json
 import os
-from pathlib import Path
 import re
-import signal
 import shutil
+import signal
 import socket
 import subprocess
 import time
-from typing import Callable, Protocol
+from collections import deque
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
+from agent.sandbox.runtime import runtime_project_name as runtime_project_name
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-API_URL = "http://127.0.0.1:5001"
-WEB_URL = "http://127.0.0.1:3000"
 MINIMUM_PYTHON_VERSION = (3, 11, 0)
 MINIMUM_NODE_VERSION = (20, 9, 0)
+
+
+def _is_valid_port(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 65_535
+
+
+def _parse_port(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("port must be an integer") from exc
+    if not _is_valid_port(port):
+        raise argparse.ArgumentTypeError("port must be between 1 and 65535")
+    return port
 
 
 def _parse_runtime_version(output: str) -> tuple[int, int, int] | None:
@@ -146,24 +160,34 @@ def collect_resource_snapshot(repo_root: Path) -> ResourceSnapshot:
 class LocalState:
     schema_version: int
     runtime_owned: bool
+    api_port: int
+    web_port: int
     api: ManagedProcess
     web: ManagedProcess
 
     @classmethod
-    def from_dict(cls, payload: object) -> "LocalState":
-        if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+    def from_dict(cls, payload: object) -> LocalState:
+        if not isinstance(payload, dict) or payload.get("schema_version") != 2:
             raise ValueError("unsupported or invalid local state")
         try:
             api = ManagedProcess(**payload["api"])
             web = ManagedProcess(**payload["web"])
             runtime_owned = payload["runtime_owned"]
+            api_port = payload["api_port"]
+            web_port = payload["web_port"]
         except (KeyError, TypeError) as exc:
             raise ValueError("incomplete local state") from exc
         if not isinstance(runtime_owned, bool):
             raise ValueError("runtime_owned must be boolean")
+        if not _is_valid_port(api_port) or not _is_valid_port(web_port):
+            raise ValueError("local ports must be between 1 and 65535")
+        if api_port == web_port:
+            raise ValueError("API and Web ports must be different")
         return cls(
-            schema_version=1,
+            schema_version=2,
             runtime_owned=runtime_owned,
+            api_port=api_port,
+            web_port=web_port,
             api=api,
             web=web,
         )
@@ -172,6 +196,8 @@ class LocalState:
         return {
             "schema_version": self.schema_version,
             "runtime_owned": self.runtime_owned,
+            "api_port": self.api_port,
+            "web_port": self.web_port,
             "api": self.api.__dict__,
             "web": self.web.__dict__,
         }
@@ -188,21 +214,18 @@ class EdaRuntime:
         self.repo_root = repo_root
 
     def is_running(self) -> bool:
-        result = subprocess.run(
-            [
-                "docker",
-                "inspect",
-                "--format",
-                "{{.State.Running}}",
-                "xylon-verilator",
-                "xylon-yosys",
-            ],
-            cwd=self.repo_root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        return result.returncode == 0 and result.stdout.splitlines() == ["true", "true"]
+        try:
+            result = subprocess.run(
+                [str(self.repo_root / "scripts" / "eda-runtime"), "verify"],
+                cwd=self.repo_root,
+                check=False,
+                timeout=30,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return result.returncode == 0
 
     def run(self, action: str, *, timeout: float) -> bool:
         try:
@@ -317,6 +340,10 @@ class LocalApplication:
         runtime: RuntimeController | None = None,
         resource_probe: Callable[[], ResourceSnapshot] | None = None,
     ) -> None:
+        if not _is_valid_port(api_port) or not _is_valid_port(web_port):
+            raise ValueError("local ports must be between 1 and 65535")
+        if api_port == web_port:
+            raise ValueError("API and Web ports must be different")
         self.repo_root = repo_root.resolve()
         self.state_dir = state_dir or self.repo_root / ".xylon" / "local"
         self.state_path = self.state_dir / "state.json"
@@ -439,7 +466,10 @@ class LocalApplication:
             return 1
         if existing is not None:
             if self.status() == 0:
-                print(f"ALREADY RUNNING: XylonStudio {self.web_url}/pipeline")
+                print(
+                    "ALREADY RUNNING: XylonStudio "
+                    f"http://127.0.0.1:{existing.web_port}/pipeline"
+                )
                 return 0
             print(f"ERROR: launcher state already exists at {self.state_path}")
             print("RECOVERY: run scripts/xylon status, then scripts/xylon stop")
@@ -470,7 +500,14 @@ class LocalApplication:
         web_process: subprocess.Popen[bytes] | None = None
         state: LocalState | None = None
         try:
-            api_process = self._spawn(self.api_command, api_log, cwd=self.api_cwd)
+            api_environment = os.environ.copy()
+            api_environment["XYLON_WEB_PORT"] = str(self.web_port)
+            api_process = self._spawn(
+                self.api_command,
+                api_log,
+                cwd=self.api_cwd,
+                environment=api_environment,
+            )
             if not self._wait_for_health(
                 api_process,
                 f"{self.api_url}/health",
@@ -489,8 +526,10 @@ class LocalApplication:
                 environment=web_environment,
             )
             state = LocalState(
-                schema_version=1,
+                schema_version=2,
                 runtime_owned=runtime_owned,
+                api_port=self.api_port,
+                web_port=self.web_port,
                 api=ManagedProcess("api", api_process.pid, self.api_command_marker, str(api_log)),
                 web=ManagedProcess("web", web_process.pid, self.web_command_marker, str(web_log)),
             )
@@ -506,8 +545,10 @@ class LocalApplication:
             print(f"ERROR: local start failed: {exc}")
             if state is None:
                 state = LocalState(
-                    schema_version=1,
+                    schema_version=2,
                     runtime_owned=runtime_owned,
+                    api_port=self.api_port,
+                    web_port=self.web_port,
                     api=ManagedProcess("api", api_process.pid if api_process else -1, self.api_command_marker, str(api_log)),
                     web=ManagedProcess("web", web_process.pid if web_process else -1, self.web_command_marker, str(web_log)),
                 )
@@ -531,16 +572,19 @@ class LocalApplication:
 
         api_owned = self.api_command_marker in (_process_command(state.api.pid) or "")
         web_owned = self.web_command_marker in (_process_command(state.web.pid) or "")
+        api_url = f"http://127.0.0.1:{state.api_port}"
+        web_url = f"http://127.0.0.1:{state.web_port}"
         api_healthy = api_owned and self._http_matches(
-            f"{self.api_url}/health", b"healthy", json_status=True
+            f"{api_url}/health", b"healthy", json_status=True
         )
         web_healthy = web_owned and self._http_matches(
-            f"{self.web_url}/pipeline", b"XylonStudio"
+            f"{web_url}/pipeline", b"XylonStudio"
         )
-        print(f"{'HEALTHY' if api_healthy else 'UNHEALTHY'}: API {self.api_url}")
-        print(f"{'HEALTHY' if web_healthy else 'UNHEALTHY'}: Web {self.web_url}")
-        print(f"{'HEALTHY' if self.runtime.is_running() else 'UNHEALTHY'}: pinned EDA runtime")
-        return 0 if api_healthy and web_healthy and self.runtime.is_running() else 1
+        print(f"{'HEALTHY' if api_healthy else 'UNHEALTHY'}: API {api_url}")
+        print(f"{'HEALTHY' if web_healthy else 'UNHEALTHY'}: Web {web_url}")
+        runtime_healthy = self.runtime.is_running()
+        print(f"{'HEALTHY' if runtime_healthy else 'UNHEALTHY'}: pinned EDA runtime")
+        return 0 if api_healthy and web_healthy and runtime_healthy else 1
 
     def logs(self, *, tail: int = 80) -> int:
         if tail < 1 or tail > 1_000:
@@ -607,7 +651,7 @@ def _port_is_open(port: int) -> bool:
         return False
 
 
-def doctor() -> int:
+def doctor(*, api_port: int = 5001, web_port: int = 3000) -> int:
     required_paths = {
         "Python API environment": REPO_ROOT / "agent" / "venv" / "bin" / "python",
         "Uvicorn": REPO_ROOT / "agent" / "venv" / "bin" / "uvicorn",
@@ -662,10 +706,12 @@ def doctor() -> int:
             f"memory_free={memory} "
             f"disk_free={resources.disk_free_bytes / 1024**3:.1f} GiB"
         )
-    api_state = "LISTENING" if _port_is_open(5001) else "STOPPED"
-    web_state = "LISTENING" if _port_is_open(3000) else "STOPPED"
-    print(f"{api_state}: API {API_URL}")
-    print(f"{web_state}: Web {WEB_URL}")
+    api_url = f"http://127.0.0.1:{api_port}"
+    web_url = f"http://127.0.0.1:{web_port}"
+    api_state = "LISTENING" if _port_is_open(api_port) else "STOPPED"
+    web_state = "LISTENING" if _port_is_open(web_port) else "STOPPED"
+    print(f"{api_state}: API {api_url}")
+    print(f"{web_state}: Web {web_url}")
     return 0
 
 
@@ -673,13 +719,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Manage the local XylonStudio application")
     parser.add_argument("command", choices=("doctor", "start", "status", "logs", "stop"))
     parser.add_argument("--tail", type=int, default=80, help="lines per service for logs")
+    parser.add_argument(
+        "--web-port",
+        type=_parse_port,
+        default=3000,
+        help="localhost Web port (default: 3000)",
+    )
     args = parser.parse_args()
 
     if args.command == "doctor":
-        return doctor()
-    app = LocalApplication()
+        return doctor(web_port=args.web_port)
+    app = LocalApplication(web_port=args.web_port)
     if args.command == "start":
-        if doctor() != 0:
+        if doctor(web_port=args.web_port) != 0:
             return 1
         return app.start()
     if args.command == "status":

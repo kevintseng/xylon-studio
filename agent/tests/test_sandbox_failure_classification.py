@@ -1,5 +1,6 @@
 """Failure classification tests at the sandbox execution boundary."""
 
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 from agent.sandbox.executor import ExecutionResult, SandboxExecutor
@@ -41,6 +42,14 @@ def test_executor_does_not_call_rtl_error_an_infrastructure_failure():
 
     assert result.success is False
     assert result.failure_kind is None
+
+
+def test_execution_result_timestamp_is_explicit_utc():
+    result = ExecutionResult(True, "", "", 0, 0.1)
+
+    parsed = datetime.fromisoformat(result.timestamp)
+    assert parsed.tzinfo is not None
+    assert parsed.utcoffset() == UTC.utcoffset(parsed)
 
 
 def test_container_source_write_adds_one_posix_trailing_newline():
@@ -120,6 +129,37 @@ def test_simulation_duration_includes_build_run_and_coverage_collection():
 
     assert result["success"] is True
     assert result["duration_seconds"] == 8.5
+
+
+def test_simulation_subprocesses_share_one_wall_clock_deadline():
+    manager = object.__new__(SandboxManager)
+    manager.verilator = MagicMock()
+    manager.verilator.execute.side_effect = [
+        ExecutionResult(True, "", "", 0, 5.0),
+        ExecutionResult(True, "PASS", "", 0, 2.0),
+        ExecutionResult(True, "Coverage Summary", "", 0, 1.0),
+        ExecutionResult(True, "annotated", "", 0, 0.5),
+    ]
+
+    with patch(
+        "agent.sandbox.manager.time.monotonic",
+        side_effect=[0.0, 10.0, 40.0, 70.0, 90.0],
+    ):
+        result = manager.run_verilator_sim(
+            "/results/job/adder.v",
+            "/results/job/testbench.cpp",
+            timeout=100,
+            coverage=True,
+            workdir="/results/job",
+        )
+
+    assert result["success"] is True
+    assert [call.kwargs["timeout"] for call in manager.verilator.execute.call_args_list] == [
+        90.0,
+        60.0,
+        30.0,
+        10.0,
+    ]
 
 
 def test_synthesis_manager_propagates_infrastructure_failure():

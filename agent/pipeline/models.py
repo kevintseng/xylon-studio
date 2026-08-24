@@ -12,10 +12,10 @@ Defines the data structures for the verification pipeline:
 - PipelineResult: Final pipeline execution summary
 """
 
-from dataclasses import dataclass, field
-from datetime import datetime
-from enum import StrEnum
 import os
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from enum import StrEnum
 
 # ==================== Enums ====================
 
@@ -130,7 +130,7 @@ class StepResult:
     failure_kind: FailureKind | None = None
     recovery_code: str | None = None
     required: bool = True
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def to_dict(self) -> dict:
         """Serialize the canonical live and persisted step contract."""
@@ -271,7 +271,7 @@ class PipelineResult:
     mode: RunMode = RunMode.LINT_ONLY
     outcome: PipelineOutcome = PipelineOutcome.LINT_ONLY
     artifacts: ArtifactBundle | None = None
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def get_step(self, step_name: str) -> StepResult | None:
         """

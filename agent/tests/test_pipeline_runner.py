@@ -44,6 +44,30 @@ int main(int argc, char** argv) {
 """
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rtl_code,testbench_code",
+    [
+        ("m" * (1024 * 1024 + 1), None),
+        ("module m; endmodule", "x" * (1024 * 1024 + 1)),
+    ],
+    ids=["rtl", "testbench"],
+)
+async def test_pipeline_rejects_oversized_inputs_before_temp_or_artifact_writes(
+    rtl_code,
+    testbench_code,
+):
+    with (
+        patch("agent.pipeline.runner.tempfile.mkdtemp") as make_temp,
+        patch("agent.pipeline.runner.persist_pipeline_artifacts") as persist,
+    ):
+        with pytest.raises(ValueError, match="exceeds the 1048576-byte limit"):
+            await run_pipeline(rtl_code, testbench_code=testbench_code)
+
+    make_temp.assert_not_called()
+    persist.assert_not_called()
+
+
 @pytest.fixture
 def mock_sandbox_manager():
     """Mock SandboxManager for pipeline tests."""

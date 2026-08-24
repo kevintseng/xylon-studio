@@ -86,6 +86,24 @@ def test_cli_missing_testbench_file_exits_1(tmp_path):
     assert "not found" in result.stdout.lower()
 
 
+@pytest.mark.parametrize("flag,suffix", [(None, ".v"), ("--testbench", ".cpp")])
+def test_cli_rejects_oversized_source_before_running_pipeline(tmp_path, flag, suffix):
+    rtl = tmp_path / "design.v"
+    rtl.write_text("module m; endmodule\n")
+    oversized = tmp_path / f"oversized{suffix}"
+    oversized.write_bytes(b"x" * (1024 * 1024 + 1))
+    command = [sys.executable, "-m", "agent.cli", "run"]
+    if flag is None:
+        command.append(str(oversized))
+    else:
+        command.extend([str(rtl), flag, str(oversized)])
+
+    result = subprocess.run(command, capture_output=True, text=True)
+
+    assert result.returncode == 1
+    assert "exceeds the 1048576-byte limit" in result.stdout
+
+
 # ── Config assembly tests (mocked pipeline) ──
 
 
