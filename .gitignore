@@ -308,6 +308,7 @@ htmlcov/
 # lifecycle entry points below.
 scripts/*
 !scripts/xylon
+!scripts/xylon-openroad
 !scripts/eda-runtime
 !scripts/deploy-vpc2.sh
 requirements-test.txt

@@ -1,5 +1,5 @@
-"""Canonical pipeline API route."""
+"""Canonical API routes."""
 
-from agent.api.routes import pipeline
+from agent.api.routes import openroad, pipeline
 
-__all__ = ["pipeline"]
+__all__ = ["openroad", "pipeline"]

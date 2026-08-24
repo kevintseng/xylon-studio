@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd -- "${script_dir}/../../.." && pwd)"
+state_dir="${XYLON_OPENROAD_STATE_DIR:-${repo_root}/.xylon/openroad}"
+work_dir="${state_dir}/work"
+image="${XYLON_OPENROAD_IMAGE:-openroad/orfs@sha256:305f9bb42a714a37d287f9755e6f9eae1f82007a54f488a87cd663caf9900422}"
+container_name="xylon-openroad-${PPID}-$$"
+tty_echo_disabled=false
+
+mkdir -p "${work_dir}"
+
+cleanup() {
+  docker stop --time 2 "${container_name}" >/dev/null 2>&1 || true
+  if [[ "${tty_echo_disabled}" == "true" ]]; then
+    stty echo 2>/dev/null || true
+    tty_echo_disabled=false
+  fi
+}
+trap cleanup EXIT INT TERM HUP
+
+if [[ -t 0 ]]; then
+  stty -echo
+  tty_echo_disabled=true
+fi
+
+set +e
+docker run --rm -i \
+  --name "${container_name}" \
+  --label "io.xylon.owner=openroad-mcp" \
+  --platform linux/amd64 \
+  --cpus 4 \
+  --memory 8g \
+  --memory-swap 8g \
+  --pids-limit 256 \
+  --ulimit nofile=1024:1024 \
+  --network none \
+  --read-only \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --tmpfs /tmp:rw,noexec,nosuid,size=512m \
+  --user "$(id -u):$(id -g)" \
+  --env HOME=/tmp \
+  --env XDG_CACHE_HOME=/tmp \
+  --mount "type=bind,src=${work_dir},dst=/work" \
+  --workdir /work \
+  "${image}" \
+  /bin/bash -lc 'source /OpenROAD-flow-scripts/env.sh && exec openroad "$@"' bash "$@"
+status=$?
+set -e
+
+trap - EXIT INT TERM HUP
+cleanup
+exit "${status}"
