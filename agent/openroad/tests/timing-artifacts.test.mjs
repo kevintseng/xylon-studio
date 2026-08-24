@@ -33,6 +33,11 @@ test('stages private immutable timing inputs and a deterministic ORFS config', a
   assert.match(config, /DESIGN_NAME = demo/)
   assert.match(config, /PLATFORM = sky130hd/)
   assert.match(config, /VERILOG_FILES = \/work\/inputs\/design.v/)
+  assert.match(config, /NUM_CORES = 1/)
+  assert.match(config, /CORE_UTILIZATION = 35/)
+  assert.match(config, /CORE_ASPECT_RATIO = 1\.0/)
+  assert.match(config, /CORE_MARGIN = 10/)
+  assert.doesNotMatch(config, /DIE_AREA|CORE_AREA/)
   const manifest = JSON.parse(await readFile(path.join(workspace.runDir, 'manifest.json'), 'utf8'))
   assert.equal(manifest.state, 'input_staged')
 })
@@ -43,6 +48,19 @@ test('rejects duplicate run identities instead of reusing stale artifacts', asyn
   const options = { repoRoot, validatedInput: INPUT, runId: '2'.repeat(32) }
   await createTimingRunWorkspace(options)
   await assert.rejects(createTimingRunWorkspace(options), /EEXIST/)
+})
+
+test('rejects staging without the same bounded CPU budget used by the runtime', async (context) => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'xylon-timing-artifacts-'))
+  context.after(() => rm(repoRoot, { recursive: true, force: true }))
+  await assert.rejects(
+    createTimingRunWorkspace({
+      repoRoot,
+      validatedInput: { ...INPUT, resource_limits: { ...INPUT.resource_limits, cpus: 8 } },
+      runId: '8'.repeat(32),
+    }),
+    /CPU budget must be an integer from 1 to 4/,
+  )
 })
 
 test('reads checksummed ORFS baseline artifacts and parses metrics', async (context) => {

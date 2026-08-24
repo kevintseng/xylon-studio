@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { analyzeTimingDesign, executeTimingBatch } from '../timing-runner.mjs'
+import { analyzeTimingDesign, classifyTimingFailure, executeTimingBatch } from '../timing-runner.mjs'
 
 const VALIDATED = {
   rtl: 'module demo(input clk, input d, output reg q); always @(posedge clk) q <= d; endmodule\n',
@@ -132,4 +132,13 @@ test('real batch execution returns an actionable log-limit state instead of losi
 
   assert.equal(result.log_limit_exceeded, true)
   assert.ok(result.stdout_bytes > 16)
+})
+
+test('classifies the exact ORFS global-placement over-capacity error as an actionable floorplan failure', () => {
+  const failure = classifyTimingFailure({
+    stderr_tail: 'Error: global_place_skip_io.tcl, 19 GPL-0301',
+    stdout_tail: '[ERROR GPL-0301] Utilization 106.093 % exceeds 100%.',
+  })
+  assert.equal(failure.code, 'TimingFloorplanCapacityExceeded')
+  assert.match(failure.recovery, /smaller timing block|reduce duplicated logic/)
 })

@@ -95,15 +95,20 @@ export async function sha256File(filePath) {
   return digest.digest('hex')
 }
 
-function renderConfig(topModule) {
+function renderConfig(topModule, cpus) {
+  if (!Number.isInteger(cpus) || cpus < 1 || cpus > 4) {
+    throw new Error('TimingInputInvalid: staged CPU budget must be an integer from 1 to 4')
+  }
   return [
     `export DESIGN_NAME = ${topModule}`,
     `export DESIGN_NICKNAME = ${topModule}`,
     'export PLATFORM = sky130hd',
     'export VERILOG_FILES = /work/inputs/design.v',
     'export SDC_FILE = /work/inputs/effective.sdc',
-    'export DIE_AREA = 0 0 100 100',
-    'export CORE_AREA = 10 10 90 90',
+    `export NUM_CORES = ${cpus}`,
+    'export CORE_UTILIZATION = 35',
+    'export CORE_ASPECT_RATIO = 1.0',
+    'export CORE_MARGIN = 10',
     'export PLACE_DENSITY = 0.60',
     'export TNS_END_PERCENT = 100',
     'export FLOW_VARIANT = base',
@@ -127,7 +132,11 @@ export async function createTimingRunWorkspace({ repoRoot, validatedInput, runId
   await writePrivateFile(path.join(runDir, 'inputs', 'design.v'), validatedInput.rtl, INPUT_RTL_LIMIT)
   await writePrivateFile(path.join(runDir, 'inputs', 'constraints.sdc.txt'), validatedInput.sdc, INPUT_SDC_LIMIT)
   await writePrivateFile(path.join(runDir, 'inputs', 'effective.sdc'), validatedInput.effective_sdc, INPUT_SDC_LIMIT)
-  await writePrivateFile(path.join(runDir, 'design', 'config.mk'), renderConfig(validatedInput.top_module), 64 * 1024)
+  await writePrivateFile(
+    path.join(runDir, 'design', 'config.mk'),
+    renderConfig(validatedInput.top_module, validatedInput.resource_limits?.cpus),
+    64 * 1024,
+  )
   const identity = {
     schema_version: 1,
     run_id: runId,
