@@ -7,6 +7,14 @@ Xylon 是在本機執行的 OpenROAD 時序助理。提供真實 RTL、SDC、頂
 
 ![Xylon OpenROAD 時序工作台](web/public/screenshots/openroad-timing-workflow-v2.jpg)
 
+## 公開網站與本機程式
+
+`xylonstud.io` 目前只提供 landing page，用來說明支援的 OpenROAD 時序流程與展示產品畫面；
+它不提供工作台、OpenROAD 執行環境或 timing API。
+
+真正可操作的本機程式仍然來自這個 checkout。執行 `scripts/xylon start` 後，操作入口
+會出現在 `/openroad` 與 `/pipeline`。
+
 ## 第一個實用流程
 
 1. 匯入大小受限的 RTL、SDC，或載入內建 `sky130hd` 時序範例。

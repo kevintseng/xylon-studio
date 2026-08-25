@@ -8,6 +8,15 @@ and SDC, reads back measured evidence, and tells you the next action.
 
 ![Xylon OpenROAD timing workbench](web/public/screenshots/openroad-timing-workflow-v2-en.jpg)
 
+## Public site vs local app
+
+`xylonstud.io` is a landing page only. It explains the supported OpenROAD timing
+journey and shows product screenshots, but it does not expose the workbench,
+OpenROAD runtime, or the timing APIs.
+
+The actual local app is what you run from this checkout. Its operator surfaces
+live at `/openroad` and `/pipeline` after `scripts/xylon start`.
+
 ## The first useful journey
 
 1. Import bounded RTL and SDC or load the included `sky130hd` timing example.
