@@ -28,13 +28,29 @@ class FakeProvider:
 
 def _supported_intent(**extra) -> dict:
     return {
-        "schema_version": "xylon-timing-intent/v1",
+        "schema_version": "xylon-timing-intent/v2",
         "supported": True,
         "intent": "setup_timing_analysis",
         "normalized_goal": "Measure setup timing and prepare one bounded improvement.",
         "needs": [],
         **extra,
     }
+
+
+def _inspect_intent(**extra) -> dict:
+    return _supported_intent(
+        intent="inspect_timing_status",
+        normalized_goal="Inspect the existing timing evidence without changing state.",
+        **extra,
+    )
+
+
+def _execute_intent(**extra) -> dict:
+    return _supported_intent(
+        intent="execute_confirmed_timing_change",
+        normalized_goal="Execute the already confirmed bounded timing change.",
+        **extra,
+    )
 
 
 def _state(phase: str, **extra) -> dict:
@@ -63,7 +79,7 @@ def test_versioned_skill_pack_is_bounded_and_source_attributed():
     pack = TimingSkillPack.load()
 
     assert pack.skill_id == "openroad-setup-timing"
-    assert pack.version == "1"
+    assert pack.version == "2"
     assert len(pack.digest) == 64
     assert len(pack.facts) >= 8
     assert all(fact["source_url"].startswith("https://github.com/The-OpenROAD-Project/") for fact in pack.facts)
@@ -156,7 +172,7 @@ def test_existing_human_confirmation_allows_exact_candidate_execution():
     tools = _tools(status=status, execute=execute)
 
     result = asyncio.run(run_timing_assistant(
-        provider=FakeProvider(_supported_intent()),
+        provider=FakeProvider(_execute_intent()),
         message="執行我剛才確認的改善並比較結果",
         locale="zh-TW",
         design=None,
@@ -167,6 +183,37 @@ def test_existing_human_confirmation_allows_exact_candidate_execution():
     execute.assert_awaited_once_with("a" * 32, "b" * 64, "c" * 32)
     assert result["state"] == "comparison_ready"
     assert result["observed"]["comparison"]["timing_clean"] is False
+
+
+def test_setup_or_status_request_cannot_execute_an_existing_confirmation():
+    import asyncio
+
+    confirmed = _state(
+        "confirmed",
+        proposal={"proposal_id": "b" * 64},
+        confirmation={"confirmation_id": "c" * 32, "actor": "local_human_user"},
+    )
+    for intent, message in (
+        (_supported_intent(), "Continue the timing task"),
+        (_inspect_intent(), "Explain the current timing status"),
+    ):
+        status = AsyncMock(return_value=confirmed)
+        execute = AsyncMock()
+        tools = _tools(status=status, execute=execute)
+
+        result = asyncio.run(run_timing_assistant(
+            provider=FakeProvider(intent),
+            message=message,
+            locale="en",
+            design=None,
+            run_id="a" * 32,
+            tools=tools,
+        ))
+
+        status.assert_awaited_once_with("a" * 32)
+        execute.assert_not_awaited()
+        assert result["state"] == "confirmed_awaiting_execution"
+        assert result["human_handoff"]["action"] == "explicitly_request_execution_of_confirmed_change"
 
 
 def test_expired_proposal_never_tells_user_to_confirm():

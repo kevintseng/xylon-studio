@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { normalizeTimingAgentResult, TimingAgentContractError } from './timing-agent-contract.ts'
+import {
+  isTimingAgentConnectionProbe,
+  normalizeTimingAgentResult,
+  TimingAgentContractError,
+} from './timing-agent-contract.ts'
 
 function timingState() {
   return {
@@ -45,13 +49,13 @@ function response() {
     schema_version: 'xylon-timing-assistant/v1',
     state: 'awaiting_human_confirmation',
     intent: {
-      schema_version: 'xylon-timing-intent/v1',
+      schema_version: 'xylon-timing-intent/v2',
       supported: true,
       intent: 'setup_timing_analysis',
       normalized_goal: 'Analyze setup timing and prepare one bounded improvement.',
       needs: [],
     },
-    skill: { id: 'openroad-setup-timing', version: '1', sha256: 'f'.repeat(64) },
+    skill: { id: 'openroad-setup-timing', version: '2', sha256: 'f'.repeat(64) },
     egress: {
       sent: ['user_message', 'locale', 'versioned_timing_skill_and_knowledge'],
       excluded: ['rtl', 'sdc', 'credentials', 'raw_logs', 'timing_metrics'],
@@ -66,9 +70,22 @@ test('timing agent contract keeps model interpretation separate from measured ti
   const result = normalizeTimingAgentResult(response())
 
   assert.equal(result.normalizedGoal, 'Analyze setup timing and prepare one bounded improvement.')
+  assert.deepEqual(result.intent, { supported: true, name: 'setup_timing_analysis' })
   assert.equal(result.timing?.metrics?.wns, -0.4)
   assert.equal(result.humanHandoff.required, true)
   assert.equal(result.skill.sha256, 'f'.repeat(64))
+})
+
+test('connection probe is ready only for the supported setup intent without EDA state', () => {
+  const waiting = { ...response(), state: 'waiting_for_input', timing: null }
+  const result = normalizeTimingAgentResult(waiting)
+
+  assert.equal(isTimingAgentConnectionProbe(result), true)
+  assert.equal(isTimingAgentConnectionProbe({ ...result, state: 'unsupported' }), false)
+  assert.equal(isTimingAgentConnectionProbe({
+    ...result,
+    intent: { supported: true, name: 'inspect_timing_status' },
+  }), false)
 })
 
 test('timing agent contract rejects a response without the exact egress receipt', () => {

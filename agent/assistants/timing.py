@@ -15,8 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from agent.assistants.providers import OpenAICompatibleProvider, ProviderError
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SKILL_ROOT = REPO_ROOT / "agent" / "skills" / "openroad_timing" / "v1"
-KNOWLEDGE_ROOT = REPO_ROOT / "agent" / "knowledge" / "openroad_timing" / "v1"
+SKILL_ROOT = REPO_ROOT / "agent" / "skills" / "openroad_timing" / "v2"
+KNOWLEDGE_ROOT = REPO_ROOT / "agent" / "knowledge" / "openroad_timing" / "v2"
 MAX_SKILL_BYTES = 32 * 1024
 MAX_KNOWLEDGE_BYTES = 128 * 1024
 
@@ -26,9 +26,14 @@ class TimingIntent(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["xylon-timing-intent/v1"]
+    schema_version: Literal["xylon-timing-intent/v2"]
     supported: bool
-    intent: Literal["setup_timing_analysis", "unsupported"]
+    intent: Literal[
+        "setup_timing_analysis",
+        "inspect_timing_status",
+        "execute_confirmed_timing_change",
+        "unsupported",
+    ]
     normalized_goal: str = Field(min_length=1, max_length=500)
     needs: list[Literal["rtl", "sdc", "top_module", "timing_run"]] = Field(max_length=4)
 
@@ -60,7 +65,7 @@ class TimingSkillPack:
         if manifest != {
             "schema_version": "xylon-product-skill/v1",
             "id": "openroad-setup-timing",
-            "version": "1",
+            "version": "2",
             "entrypoint": "SKILL.md",
             "knowledge": "facts.jsonl",
         }:
@@ -88,7 +93,10 @@ class TimingSkillPack:
             f"Reply locale: {locale}. Return only a JSON object with exactly: "
             "schema_version, supported, intent, normalized_goal, needs. "
             "Never output tool names, tool arguments, commands, Tcl, approval, WNS, TNS, slack, "
-            "or any result. The only supported intent is setup_timing_analysis."
+            "or any result. Classify setup or proposal work as setup_timing_analysis; "
+            "status, explanation, or evidence review as inspect_timing_status; and only an "
+            "explicit request to run or apply an already confirmed change as "
+            "execute_confirmed_timing_change. Otherwise return unsupported."
         )
 
 
@@ -145,6 +153,11 @@ def _assistant_state(state: dict | None) -> tuple[str, dict]:
             "required": True,
             "action": "confirm_existing_timing_proposal_in_local_workbench",
         }
+    if phase == "confirmed":
+        return "confirmed_awaiting_execution", {
+            "required": False,
+            "action": "explicitly_request_execution_of_confirmed_change",
+        }
     if phase == "comparison_ready":
         return "comparison_ready", {"required": False, "action": "review_before_after_evidence"}
     if phase == "diagnosis_ready" and metrics.get("violations") is False:
@@ -181,7 +194,7 @@ async def run_timing_assistant(
             "The model attempted an unsupported or malformed timing action.",
             "Rephrase the request as setup timing analysis; no EDA action was started.",
         ) from exc
-    if intent.supported != (intent.intent == "setup_timing_analysis"):
+    if intent.supported != (intent.intent != "unsupported"):
         raise ProviderError(
             "TimingAgentIntentInvalid",
             "The model returned a contradictory timing intent.",
@@ -190,7 +203,7 @@ async def run_timing_assistant(
 
     timing_state: dict | None = None
     if intent.supported:
-        if design is not None:
+        if intent.intent == "setup_timing_analysis" and design is not None:
             timing_state = await tools.analyze(design)
             run_id = timing_state.get("run_id")
         elif run_id is not None:
@@ -199,9 +212,13 @@ async def run_timing_assistant(
         if timing_state is not None:
             phase = timing_state.get("phase")
             metrics = timing_state.get("metrics") if isinstance(timing_state.get("metrics"), dict) else {}
-            if phase == "diagnosis_ready" and metrics.get("violations") is True:
+            if (
+                intent.intent == "setup_timing_analysis"
+                and phase == "diagnosis_ready"
+                and metrics.get("violations") is True
+            ):
                 timing_state = await tools.propose(str(run_id))
-            elif phase == "confirmed":
+            elif intent.intent == "execute_confirmed_timing_change" and phase == "confirmed":
                 proposal = timing_state.get("proposal")
                 confirmation = timing_state.get("confirmation")
                 if not isinstance(proposal, dict) or not isinstance(confirmation, dict):

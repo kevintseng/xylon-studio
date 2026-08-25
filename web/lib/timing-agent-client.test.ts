@@ -16,10 +16,10 @@ test('timing agent client sends either an existing run or new design, never both
       schema_version: 'xylon-timing-assistant/v1',
       state: 'waiting_for_input',
       intent: {
-        schema_version: 'xylon-timing-intent/v1', supported: true,
+        schema_version: 'xylon-timing-intent/v2', supported: true,
         intent: 'setup_timing_analysis', normalized_goal: 'Analyze setup timing.', needs: ['timing_run'],
       },
-      skill: { id: 'openroad-setup-timing', version: '1', sha256: 'f'.repeat(64) },
+      skill: { id: 'openroad-setup-timing', version: '2', sha256: 'f'.repeat(64) },
       egress: {
         sent: ['user_message', 'locale', 'versioned_timing_skill_and_knowledge'],
         excluded: ['rtl', 'sdc', 'credentials', 'raw_logs', 'timing_metrics'],
@@ -56,10 +56,10 @@ test('local model connection check sends no design and no timing run identity', 
       schema_version: 'xylon-timing-assistant/v1',
       state: 'waiting_for_input',
       intent: {
-        schema_version: 'xylon-timing-intent/v1', supported: true,
+        schema_version: 'xylon-timing-intent/v2', supported: true,
         intent: 'setup_timing_analysis', normalized_goal: 'Analyze setup timing.', needs: ['timing_run'],
       },
-      skill: { id: 'openroad-setup-timing', version: '1', sha256: 'f'.repeat(64) },
+      skill: { id: 'openroad-setup-timing', version: '2', sha256: 'f'.repeat(64) },
       egress: {
         sent: ['user_message', 'locale', 'versioned_timing_skill_and_knowledge'],
         excluded: ['rtl', 'sdc', 'credentials', 'raw_logs', 'timing_metrics'],

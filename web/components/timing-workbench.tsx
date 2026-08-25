@@ -358,6 +358,7 @@ export function TimingWorkbench() {
             <TimingAgentPanel
               design={inputReady ? { rtl, sdc, topModule } : null}
               timingRunId={runId}
+              timingPhase={timing?.phase ?? null}
               disabled={locked}
               onBusyChange={(agentBusy) => setBusy(agentBusy ? 'assistant' : null)}
               onResult={applyAgentResult}

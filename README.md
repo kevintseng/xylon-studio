@@ -16,8 +16,8 @@ not treat this branch as a released product yet.
   recipe, read WNS, TNS, and the worst setup path, then prepare one bounded
   `PLACE_DENSITY 0.60 → 0.65` candidate when violations exist.
 - **Human-controlled improvement:** Xylon shows the exact expiring proposal. A
-  person must type its code in the local page before Xylon can run the candidate
-  and compare the same metrics before and after.
+  person must type its code in the local page, then explicitly request execution,
+  before Xylon can run the candidate and compare the same metrics before and after.
 - **RTL verification:** pinned Verilator lint, optional independent C++
   self-check, measured coverage, optional Yosys structure, and a checksummed
   exact-rerun bundle.
@@ -73,10 +73,14 @@ OpenROAD. Xylon does not download or silently select a model.
    improvement step.”
 5. Review measured WNS/TNS and the exact proposal. Confirm only if you want one
    candidate run.
+6. Explicitly ask the assistant to execute the confirmed change, or use the
+   dedicated candidate button. Status and explanation requests never start EDA.
 
-Heavy EDA work is serialized and resource-gated. The default runtime uses one
-CPU, an 8 GiB memory cap, no container network, and exact-owner cleanup. If
-capacity is below the safety floor, Xylon does not start OpenROAD.
+Timing runs started through one Xylon API process are serialized and resource-gated.
+Direct CLI timing and the separate MCP runtime are independent entry points; do not
+run them concurrently until Xylon reports a shared host-wide lease. Each timing run
+uses one CPU by default, an 8 GiB memory cap, no container network, and exact-owner
+cleanup. If capacity is below the safety floor, Xylon does not start OpenROAD.
 
 Manage only the stack owned by this checkout:
 

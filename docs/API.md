@@ -224,7 +224,9 @@ signoff claim.
 ## Local timing assistant
 
 `POST /api/assistant/timing` asks one loopback OpenAI-compatible model to map a
-natural-language sentence to the supported setup-timing intent. The model never
+natural-language sentence to one supported setup-timing intent: start or prepare
+analysis, inspect existing evidence without changing state, or explicitly execute
+an already confirmed change. The model never
 receives RTL, SDC, timing metrics, raw logs, credentials, or tool names. Xylon's
 deterministic state machine chooses `analyze`, `status`, `propose`, or `execute`.
 There is deliberately no confirmation tool.
@@ -255,8 +257,10 @@ the request before EDA starts.
 The response uses `xylon-timing-assistant/v1`. It separates the model's
 `intent`, versioned skill identity and SHA-256 digest, egress receipt, real
 `timing` state, and `human_handoff`. Typical states include
-`awaiting_human_confirmation`, `proposal_expired`, `comparison_ready`,
-`flow_failed`, and `unsupported`.
+`awaiting_human_confirmation`, `proposal_expired`, `confirmed_awaiting_execution`,
+`comparison_ready`, `flow_failed`, and `unsupported`. A status, explanation,
+review, continuation, or ambiguous request never consumes a confirmation or starts
+the candidate run.
 
 ## OpenROAD snapshot
 

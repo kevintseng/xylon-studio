@@ -8,13 +8,18 @@ import {
   runTimingAgent,
   TimingAgentApiError,
 } from '@/lib/timing-agent-client'
-import type { TimingAgentResult } from '@/lib/timing-agent-contract'
+import {
+  isTimingAgentConnectionProbe,
+  type TimingAgentResult,
+} from '@/lib/timing-agent-contract'
+import type { TimingPhase } from '@/lib/timing-contract'
 
 const ASSISTANT_API_URL = resolveTimingAssistantApiUrl(process.env.NEXT_PUBLIC_API_URL)
 
 interface TimingAgentPanelProps {
   design: { rtl: string; sdc: string; topModule: string } | null
   timingRunId: string | null
+  timingPhase: TimingPhase | null
   disabled: boolean
   onBusyChange: (busy: boolean) => void
   onResult: (result: TimingAgentResult) => void
@@ -38,6 +43,7 @@ function localizedAgentError(
     'TimingAgentProviderRateLimited',
     'TimingAgentProviderResponseInvalid',
     'TimingAgentIntentInvalid',
+    'TimingAgentCapabilityMismatch',
   ])
   const key = known.has(error.code) ? error.code : 'generic'
   return {
@@ -50,6 +56,7 @@ function localizedAgentError(
 export function TimingAgentPanel({
   design,
   timingRunId,
+  timingPhase,
   disabled,
   onBusyChange,
   onResult,
@@ -85,11 +92,19 @@ export function TimingAgentPanel({
     setError(null)
     onBusyChange(true)
     try {
-      await runTimingAgent(ASSISTANT_API_URL, {
+      const probe = await runTimingAgent(ASSISTANT_API_URL, {
         message: t('timing.agent.requestPlaceholder'),
         locale,
         provider: { baseUrl: baseUrl.trim(), model: model.trim() },
       })
+      if (!isTimingAgentConnectionProbe(probe)) {
+        throw new TimingAgentApiError(
+          'TimingAgentCapabilityMismatch',
+          'The selected model did not classify the supported setup-timing request.',
+          'Choose a local model that follows Xylon timing intent schema v2.',
+          422,
+        )
+      }
       setConnectionReady(true)
     } catch (caught) {
       captureError(caught)
@@ -131,7 +146,7 @@ export function TimingAgentPanel({
           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">{t('timing.agent.subtitle')}</p>
           <label className="mt-5 block text-sm text-slate-200" htmlFor="timing-agent-message">{t('timing.agent.request')}</label>
           <textarea id="timing-agent-message" value={message} onChange={(event) => setMessage(event.target.value)} disabled={disabled || running || checking} rows={3} placeholder={t('timing.agent.requestPlaceholder')} className="mt-2 w-full resize-y rounded-2xl border border-violet-500/30 bg-slate-950 p-4 text-sm leading-6 text-slate-100 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-500/20 disabled:opacity-60" />
-          <button type="button" onClick={() => void run()} disabled={!ready || disabled || running || checking} className="mt-4 w-full rounded-2xl bg-violet-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-violet-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">{running ? t('timing.agent.running') : t('timing.agent.run')}</button>
+          <button type="button" onClick={() => void run()} disabled={!ready || disabled || running || checking} className="mt-4 w-full rounded-2xl bg-violet-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-violet-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">{running ? t('timing.agent.running') : timingPhase === 'confirmed' ? t('timing.agent.executeConfirmed') : t('timing.agent.run')}</button>
           {!timingRunId && !design ? <p className="mt-3 text-xs leading-5 text-amber-200">{t('timing.agent.needsDesign')}</p> : null}
         </div>
         <div className="rounded-2xl border border-slate-700 bg-slate-950/80 p-4">
