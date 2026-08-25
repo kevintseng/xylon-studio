@@ -11,12 +11,14 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent.openroad.project_manifest import preflight_project_manifest
+from agent.openroad.project_store import ProjectStoreError, store_project_bundle
 
 router = APIRouter(tags=["openroad"])
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SNAPSHOT_PATH = Path(".xylon/openroad/snapshot.json")
 MAX_SNAPSHOT_BYTES = 1024 * 1024
+MAX_PROJECT_IMPORT_BODY_BYTES = 5 * 1024 * 1024
 SUPPORTED_SCHEMA_VERSION = 1
 EMPTY_SNAPSHOT = {
     "schema_version": SUPPORTED_SCHEMA_VERSION,
@@ -46,6 +48,27 @@ class ProjectPreflightRequest(BaseModel):
     sdc: str = Field(min_length=1, max_length=512)
     clocks: list[ProjectClockRequest] = Field(min_length=1)
     macros: list[str] = Field(default_factory=list)
+
+
+class ProjectFileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1, max_length=512)
+    content: str = Field(min_length=1, max_length=MAX_PROJECT_IMPORT_BODY_BYTES)
+
+
+class ProjectImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,63}$")
+    top: str = Field(min_length=1, max_length=128)
+    platform: str = Field(min_length=1, max_length=32)
+    rtl: list[str] = Field(min_length=1)
+    include_dirs: list[str] = Field(default_factory=list)
+    sdc: str = Field(min_length=1, max_length=512)
+    clocks: list[ProjectClockRequest] = Field(min_length=1)
+    macros: list[str] = Field(default_factory=list)
+    files: list[ProjectFileRequest] = Field(min_length=1, max_length=32)
 
 
 def _path_within_repo(candidate: Path) -> bool:
@@ -188,3 +211,49 @@ async def post_openroad_project_preflight(
 ) -> dict[str, Any]:
     """Validate an imported multi-file project manifest before any heavy EDA work."""
     return preflight_project_manifest(REPO_ROOT, request.model_dump())
+
+
+@router.post("/openroad/projects", status_code=201)
+async def post_openroad_project_import(request: ProjectImportRequest) -> dict[str, Any]:
+    """Store a bounded local bundle, then run the same preflight before EDA."""
+    try:
+        root = store_project_bundle(
+            REPO_ROOT,
+            project_id=request.project_id,
+            files=((item.path, item.content) for item in request.files),
+        )
+    except ProjectStoreError as error:
+        raise HTTPException(status_code=422, detail={
+            "error": "ProjectImportInvalid",
+            "message": str(error),
+            "recovery": "Correct the project files or choose a new local project identifier, then import again.",
+        }) from error
+    manifest_payload = {
+        **request.model_dump(exclude={"project_id", "files"}),
+        "root": root,
+    }
+    preflight = preflight_project_manifest(REPO_ROOT, manifest_payload)
+    project_manifest_path = REPO_ROOT / root / "manifest.json"
+    try:
+        with project_manifest_path.open("x", encoding="utf-8") as handle:
+            json.dump({
+                "schema_version": "xylon-project-import/v1",
+                "project_id": request.project_id,
+                "state": preflight["state"],
+                "manifest": preflight["manifest"],
+                "failure": preflight["failure"],
+            }, handle, sort_keys=True)
+            handle.write("\n")
+        project_manifest_path.chmod(0o600)
+    except OSError as error:
+        raise HTTPException(status_code=500, detail={
+            "error": "ProjectImportPersistenceFailed",
+            "message": "Xylon could not persist the imported project manifest.",
+            "recovery": "Remove only this failed project import from the local workspace, then import it again.",
+        }) from error
+    return {
+        "schema_version": "xylon-project-import/v1",
+        "project_id": request.project_id,
+        "root": root,
+        "preflight": preflight,
+    }

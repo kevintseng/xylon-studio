@@ -80,10 +80,17 @@ async def bound_pipeline_request_body(request: Request, call_next):
         request.url.path.startswith("/api/timing/")
         or request.url.path == "/api/assistant/timing"
     )
+    project_import_request = request.method == "POST" and request.url.path == "/api/openroad/projects"
     pipeline_request = request.method == "POST" and request.url.path == "/api/pipeline/run"
-    if pipeline_request or timing_request:
-        body_limit = MAX_TIMING_BODY_BYTES if timing_request else MAX_PIPELINE_BODY_BYTES
-        label = "Timing" if timing_request else "Pipeline"
+    if pipeline_request or timing_request or project_import_request:
+        body_limit = (
+            openroad.MAX_PROJECT_IMPORT_BODY_BYTES
+            if project_import_request
+            else MAX_TIMING_BODY_BYTES
+            if timing_request
+            else MAX_PIPELINE_BODY_BYTES
+        )
+        label = "Project import" if project_import_request else "Timing" if timing_request else "Pipeline"
         content_length = request.headers.get("content-length")
         if content_length is not None:
             try:

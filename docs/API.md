@@ -196,8 +196,14 @@ missing clocks, invalid SDC units, and undeclared macros. It returns `ready`,
 `needs_correction`, or `cannot_run` with one plain-language action. This endpoint
 does not acquire the OpenROAD resource lease or start a container.
 
-This is the first v0.6 import boundary; it does not yet replace the existing
-inline timing request or claim a complete LibreLane flow.
+`POST /api/openroad/projects` is the user-facing import boundary. It accepts a
+bounded list of project text files, stores them under the Xylon-owned local
+workspace, persists the preflight result, and never accepts an arbitrary host
+path. A ready import can be sent to `POST /api/timing/project-runs` with only a
+project ID and run ID. Xylon reopens the saved manifest, expands only declared
+local includes into the existing timing input contract, and then uses the same
+resource admission and pinned ORFS baseline path as an inline run. This is still
+the bounded `sky130hd` timing slice, not a general LibreLane flow.
 
 ## Setup-timing journey
 
@@ -207,6 +213,8 @@ OpenROAD commands, PDK paths, or model parameters.
 
 | Endpoint | Purpose |
 | --- | --- |
+| `POST /api/openroad/projects` | Store a bounded multi-file project and return its preflight state |
+| `POST /api/timing/project-runs` | Start a pinned baseline from a previously imported ready project |
 | `POST /api/timing/runs` | Validate inputs, pass resource admission, run one pinned baseline, and read back WNS/TNS/worst max path or an actionable failure |
 | `GET /api/timing/runs/{run_id}` | Read the persisted public timing state |
 | `POST /api/timing/runs/{run_id}/proposal` | Prepare the single supported evidence-bound candidate after a measured setup violation |

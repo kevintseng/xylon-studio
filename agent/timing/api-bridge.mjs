@@ -207,10 +207,15 @@ function requireRunId(value) {
 export async function runTimingApiCommand(command, rawPayload, { repoRoot, signal }) {
   const payload = requireObject(rawPayload, 'request')
   if (command === 'analyze') {
-    requireExactKeys(payload, ['run_id', 'rtl', 'sdc', 'top_module', 'platform'], 'analysis')
+    requireExactKeys(payload, ['run_id', 'rtl', 'sdc', 'top_module', 'platform', 'source_revision'], 'analysis')
     const runId = requireRunId(payload.run_id)
-    const { run_id: _runId, ...timingInput } = payload
-    const result = await runTimingDesign(timingInput, { repoRoot, runId, signal })
+    const { run_id: _runId, source_revision: sourceRevision, ...timingInput } = payload
+    const result = await runTimingDesign(timingInput, {
+      repoRoot,
+      runId,
+      signal,
+      ...(sourceRevision !== undefined && { sourceRevision }),
+    })
     return loadPublicState(repoRoot, result.run_id)
   }
   const runId = requireRunId(payload.run_id)
