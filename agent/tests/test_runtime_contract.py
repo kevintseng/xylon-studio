@@ -86,12 +86,20 @@ def test_openroad_ci_prepares_repo_python_before_calling_public_launcher():
     )
     job = workflow.split("  openroad-foundation:", 1)[1].split("\n  frontend:", 1)[0]
 
+    checkout_revision = job.index("Check out exact revision")
     setup_python = job.index("actions/setup-python@")
+    verify_source_identity = job.index(
+        'test "$(git rev-parse HEAD)" = "${XYLON_SOURCE_REVISION}"'
+    )
     create_environment = job.index("python -m venv agent/venv")
     install_runtime = job.index("scripts/xylon-openroad install")
 
+    assert checkout_revision < verify_source_identity < setup_python
     assert setup_python < create_environment < install_runtime
     assert 'XYLON_OPENROAD_CPUS: "1"' in job
+    assert 'XYLON_SOURCE_REVISION: ${{ github.sha }}' in job
+    assert 'test "$(git rev-parse HEAD)" = "${XYLON_SOURCE_REVISION}"' in job
+    assert "github.event.pull_request.head.sha" not in job
 
 
 def test_runtime_up_reuses_an_existing_image_instead_of_forcing_a_rebuild(tmp_path: Path):
