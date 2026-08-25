@@ -14,7 +14,7 @@ def request(**overrides):
         "stage": "grt",
         "run_id": "run-12345678",
         "repo_id": "repo-12345678",
-        "config_hash": "sha256-config",
+        "config_sha256": "a" * 64,
     }
     values.update(overrides)
     return AdapterRequest(**values)
@@ -24,12 +24,14 @@ def test_builds_pinned_runtime_plan_with_stage_evidence_descriptors():
     plan = build_adapter_plan(request())
     assert plan.identity.image == PINNED_ORFS_IMAGE
     assert plan.identity.profile == SUPPORTED_PROFILE
-    assert plan.stage.report_names == ("5_global_route.rpt",)
-    assert len(plan.identity_hash) == 64
+    assert plan.identity.recipe_version == "xylon-orfs-sky130hd-grt/v2"
+    assert plan.stage.reports[0].relative_path.endswith("5_global_route.rpt")
+    assert plan.stage.artifacts[0].relative_path.endswith("5_1_grt.odb")
+    assert len(plan.plan_identity_sha256) == 64
 
 
 def test_identity_hash_is_stable_for_same_request():
-    assert build_adapter_plan(request()).identity_hash == build_adapter_plan(request()).identity_hash
+    assert build_adapter_plan(request()).plan_identity_sha256 == build_adapter_plan(request()).plan_identity_sha256
 
 
 def test_rejects_unknown_profile_platform_or_stage():
