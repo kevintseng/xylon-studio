@@ -265,8 +265,12 @@ export async function runTimingDesign(rawInput, {
   const canonicalRepoRoot = await realpath(path.resolve(repoRoot))
   const cpus = parseOpenROADCpuBudget(requestedCpus)
   if (cpus === null) throw new TimingRunError('InvalidCpuBudget', 'OpenROAD CPU budget must be an integer from 1 to 4', 'Set XYLON_OPENROAD_CPUS to 1, 2, 3, or 4.')
-  if (sourceRevision !== null && !/^[a-f0-9]{40}$/.test(sourceRevision)) {
-    throw new TimingRunError('InvalidSourceRevision', 'Source revision must be an exact 40-character Git SHA', 'Use the exact checked-out source revision or omit it for an unbound local run.')
+  if (sourceRevision !== null && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sourceRevision)) {
+    throw new TimingRunError(
+      'InvalidSourceRevision',
+      'Source revision must be an exact 40-character Git SHA or 64-character project content SHA-256',
+      'Use the checked-out Git SHA for a repository run, or the imported project content SHA-256 for a bundle run.',
+    )
   }
   const validated = { ...validateInput(rawInput), source_revision: sourceRevision }
   const admission = await checkAdmission({ repoRoot: canonicalRepoRoot, requestedCpus: String(cpus) })

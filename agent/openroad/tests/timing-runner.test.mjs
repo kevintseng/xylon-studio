@@ -68,6 +68,25 @@ test('real boundary candidate becomes baseline_ready only after artifact and cle
   assert.equal(manifest.cleanup.verified, true)
 })
 
+test('imported project content revisions are accepted as provenance bindings', async (context) => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'xylon-timing-runner-'))
+  context.after(() => rm(repoRoot, { recursive: true, force: true }))
+  const projectRevision = 'a'.repeat(64)
+  const result = await runTimingDesign({}, {
+    repoRoot,
+    runId: '4'.repeat(32),
+    sourceRevision: projectRevision,
+    ...dependencies({
+      executeBatch: async ({ runDir }) => {
+        await writeFakeBaseline(runDir)
+        return { code: 0, timed_out: false, log_limit_exceeded: false, stderr_tail: '', stdout_tail: 'ok' }
+      },
+    }),
+  })
+  assert.equal(result.timing_result.state, 'baseline_ready')
+  assert.equal(result.timing_result.source_revision, projectRevision)
+})
+
 test('successful tool exit remains blocked when exact cleanup is unverified', async (context) => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'xylon-timing-runner-'))
   context.after(() => rm(repoRoot, { recursive: true, force: true }))
