@@ -171,10 +171,10 @@ control remains available through `scripts/eda-runtime`, but it is not the
 normal product path.
 
 Python direct and transitive dependencies are hash-locked and audited in the
-verification gate. The runtime base image and EDA source commits are pinned, and
-the gate retains a runtime SBOM. Debian packages and Git sources are still
-fetched from upstream during image build, so fully snapshot-pinned image
-provenance remains an explicit security gap.
+verification gate. The runtime base image and EDA source commits are pinned.
+Debian packages and Git sources are still fetched from upstream during image
+build, so fully snapshot-pinned image provenance remains an explicit security
+gap.
 
 Tests marked for Docker integration can be run separately after the pinned runtime is healthy. Offline tests do not count as real EDA runtime evidence.
 
