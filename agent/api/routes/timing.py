@@ -711,6 +711,11 @@ async def get_timing_run(run_id: str) -> dict:
             if exc.status_code != 404:
                 raise
             state = active.public_state
+        if (
+            active.command == "execute"
+            and state.get("phase") in {"diagnosis_ready", "proposal_ready", "confirmed"}
+        ):
+            state = active.public_state
         if active.cancel_requested.is_set():
             return {**state, "phase": "cancelling", "failure": None}
         return state

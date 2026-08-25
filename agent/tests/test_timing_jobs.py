@@ -271,6 +271,30 @@ def test_resource_wait_can_cancel_without_starting_bridge(tmp_path, monkeypatch)
     asyncio.run(_resource_wait_cancel_scenario(tmp_path, monkeypatch))
 
 
+async def _candidate_poll_never_regresses_to_confirmed_scenario(monkeypatch) -> None:
+    confirmed = {**_cancelled_state(), "phase": "confirmed", "failure": None}
+    job = timing_routes.ActiveTimingJob(
+        run_id=RUN_ID,
+        command="execute",
+        payload=_payload(),
+        public_state={**confirmed, "phase": "candidate_queued"},
+    )
+    timing_routes._active_timing_jobs()[RUN_ID] = job
+    bridge = AsyncMock(return_value=confirmed)
+    monkeypatch.setattr(timing_routes, "_invoke_timing_bridge", bridge)
+    try:
+        state = await timing_routes.get_timing_run(RUN_ID)
+    finally:
+        timing_routes._active_timing_jobs().pop(RUN_ID, None)
+
+    assert state["phase"] == "candidate_queued"
+    bridge.assert_awaited_once_with("status", {"run_id": RUN_ID})
+
+
+def test_candidate_poll_never_regresses_to_confirmed(monkeypatch):
+    asyncio.run(_candidate_poll_never_regresses_to_confirmed_scenario(monkeypatch))
+
+
 async def _shutdown_scenario(tmp_path, monkeypatch) -> None:
     process = _FakeProcess()
     bridge_started = asyncio.Event()
