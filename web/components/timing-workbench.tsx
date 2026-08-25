@@ -455,7 +455,7 @@ export function TimingWorkbench() {
               design={inputReady ? { rtl, sdc, topModule } : null}
               timingRunId={runId}
               timingPhase={timing?.phase ?? null}
-              edaCanStart={edaCanStart}
+              edaActionAvailable={edaActionAvailable}
               disabled={locked}
               onBusyChange={(agentBusy) => setBusy(agentBusy ? 'assistant' : null)}
               onResult={applyAgentResult}

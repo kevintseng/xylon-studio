@@ -21,7 +21,7 @@ interface TimingAgentPanelProps {
   design: { rtl: string; sdc: string; topModule: string } | null
   timingRunId: string | null
   timingPhase: TimingPhase | null
-  edaCanStart: boolean
+  edaActionAvailable: boolean
   disabled: boolean
   onBusyChange: (busy: boolean) => void
   onResult: (result: TimingAgentResult) => void
@@ -66,7 +66,7 @@ export function TimingAgentPanel({
   design,
   timingRunId,
   timingPhase,
-  edaCanStart,
+  edaActionAvailable,
   disabled,
   onBusyChange,
   onResult,
@@ -83,7 +83,7 @@ export function TimingAgentPanel({
   const modelConfigured = baseUrl.trim().length > 0 && model.trim().length > 0
   const ready = message.trim().length >= 3 && modelConfigured && Boolean(timingRunId || design)
   const actionNeedsEda = timingAgentActionNeedsEda(timingRunId, timingPhase)
-  const runDisabled = disabled || (actionNeedsEda && !edaCanStart)
+  const runDisabled = disabled || (actionNeedsEda && !edaActionAvailable)
 
   const captureError = (caught: unknown) => {
     if (caught instanceof TimingAgentApiError) {
@@ -159,7 +159,7 @@ export function TimingAgentPanel({
           <label className="mt-5 block text-sm text-slate-200" htmlFor="timing-agent-message">{t('timing.agent.request')}</label>
           <textarea id="timing-agent-message" value={message} onChange={(event) => setMessage(event.target.value)} disabled={disabled || running || checking} rows={3} placeholder={t('timing.agent.requestPlaceholder')} className="mt-2 w-full resize-y rounded-2xl border border-violet-500/30 bg-slate-950 p-4 text-sm leading-6 text-slate-100 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-500/20 disabled:opacity-60" />
           <button type="button" onClick={() => void run()} disabled={!ready || runDisabled || running || checking} className="mt-4 w-full rounded-2xl bg-violet-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-violet-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">{running ? t('timing.agent.running') : timingPhase === 'confirmed' ? t('timing.agent.executeConfirmed') : t('timing.agent.run')}</button>
-          {actionNeedsEda && !edaCanStart ? <p className="mt-3 text-xs leading-5 text-amber-200">{t('timing.resource.statusBlocked')}</p> : null}
+          {actionNeedsEda && !edaActionAvailable ? <p className="mt-3 text-xs leading-5 text-amber-200">{t('timing.resource.statusBlocked')}</p> : null}
           {!timingRunId && !design ? <p className="mt-3 text-xs leading-5 text-amber-200">{t('timing.agent.needsDesign')}</p> : null}
         </div>
         <div className="rounded-2xl border border-slate-700 bg-slate-950/80 p-4">
