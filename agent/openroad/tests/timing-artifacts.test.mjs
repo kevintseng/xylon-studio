@@ -13,6 +13,7 @@ import {
   writeJsonAtomic,
 } from '../timing-artifacts.mjs'
 import { TIMING_CANDIDATE_FLOW_RECIPE } from '../timing-recipe.mjs'
+import { buildTimingStageEvidence } from '../stage-evidence.mjs'
 
 const RTL = 'module demo(input clk, input d, output reg q); always @(posedge clk) q <= d; endmodule\n'
 const SDC = 'create_clock -name core_clock -period 2.0 [get_ports {clk}]\n'
@@ -144,6 +145,13 @@ test('reads checksummed ORFS baseline artifacts and parses metrics', async (cont
   assert.equal(result.stage_evidence.completed_stage, 'grt')
   assert.equal(result.stage_evidence.stages[0].state, 'verified')
   assert.equal(result.stage_evidence.stages[0].outputs.report.sha256, result.artifacts.report.sha256)
+})
+
+test('stage evidence fails closed when metrics are absent', () => {
+  assert.throws(
+    () => buildTimingStageEvidence({ metrics: null }),
+    /timing metrics are required/,
+  )
 })
 
 test('revalidates baseline inputs, metrics, report, checkpoint, and reported SDC before reuse', async (context) => {
