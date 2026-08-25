@@ -6,9 +6,7 @@ import { usePathname } from 'next/navigation'
 import { I18nProvider, useI18n } from '@/lib/i18n'
 import { LanguageSwitcher } from '@/components/language-switcher'
 
-const SHOW_FEATURES = process.env.NEXT_PUBLIC_SHOW_FEATURES !== 'false'
-
-function Header() {
+function Header({ showFeatures }: { showFeatures: boolean }) {
   const { t } = useI18n()
   const pathname = usePathname()
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -43,7 +41,7 @@ function Header() {
           <Link href="/" aria-current={pathname === '/' ? 'page' : undefined} className={linkClass('/')}>
             {t('nav.home')}
           </Link>
-          {SHOW_FEATURES ? <>
+          {showFeatures ? <>
             <Link href="/pipeline" aria-current={pathname === '/pipeline' ? 'page' : undefined} className={linkClass('/pipeline')}>
               {t('nav.pipeline')}
             </Link>
@@ -84,7 +82,7 @@ function Header() {
         <nav id="mobile-navigation" className="border-t border-slate-800 bg-slate-950/95 px-4 py-3 md:hidden" aria-label={t('nav.primary')}>
           <div className="grid grid-cols-1 gap-1">
             <Link href="/" aria-current={pathname === '/' ? 'page' : undefined} onClick={() => setMobileOpen(false)} className={linkClass('/', true)}>{t('nav.home')}</Link>
-            {SHOW_FEATURES ? <>
+            {showFeatures ? <>
               <Link href="/pipeline" aria-current={pathname === '/pipeline' ? 'page' : undefined} onClick={() => setMobileOpen(false)} className={linkClass('/pipeline', true)}>{t('nav.pipeline')}</Link>
               <Link href="/openroad" aria-current={pathname === '/openroad' ? 'page' : undefined} onClick={() => setMobileOpen(false)} className={linkClass('/openroad', true)}>{t('nav.openroad')}</Link>
             </> : <>
@@ -132,14 +130,16 @@ function Footer({ extra }: { extra?: ReactNode }) {
 export function ClientShell({
   children,
   footer,
+  showFeatures,
 }: {
   children: ReactNode
   footer?: ReactNode
+  showFeatures: boolean
 }) {
   return (
     <I18nProvider>
       <div className="min-h-screen flex flex-col">
-        <Header />
+        <Header showFeatures={showFeatures} />
         <main className="flex-1">{children}</main>
         <Footer extra={footer} />
       </div>

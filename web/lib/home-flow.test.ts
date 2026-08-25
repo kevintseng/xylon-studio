@@ -45,6 +45,7 @@ test('home hero exposes current scope without linking the public landing page in
 
 test('home presents real, legible product images with a full-size escape hatch', () => {
   const source = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8')
+  const layout = readFileSync(new URL('../app/layout.tsx', import.meta.url), 'utf8')
   const shell = readFileSync(new URL('../components/client-shell.tsx', import.meta.url), 'utf8')
   const proxy = readFileSync(new URL('../proxy.ts', import.meta.url), 'utf8')
 
@@ -53,8 +54,9 @@ test('home presents real, legible product images with a full-size escape hatch',
   assert.match(source, /min-w-\[760px\]/)
   assert.match(source, /home\.visual\.fullSize/)
   assert.match(source, /openroad-timing-workflow-v2(?:-en)?\.jpg/)
-  assert.match(shell, /NEXT_PUBLIC_SHOW_FEATURES/)
-  assert.match(proxy, /NEXT_PUBLIC_SHOW_FEATURES === 'false'/)
+  assert.match(shell, /showFeatures/)
+  assert.match(proxy, /XYLON_SHOW_FEATURES === 'false'/)
+  assert.match(layout, /XYLON_SHOW_FEATURES/)
   assert.match(proxy, /matcher: \['\/openroad\/:path\*', '\/pipeline\/:path\*'\]/)
   assert.match(shell, /mobileOpen &&/)
   assert.match(shell, /href="\/#product-view"/)
@@ -71,6 +73,6 @@ test('landing-only Docker build keeps the public feature flag consistent at runt
   const dockerfile = readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8')
   const runner = dockerfile.slice(dockerfile.indexOf('FROM base AS runner'))
 
-  assert.match(runner, /ARG NEXT_PUBLIC_SHOW_FEATURES=true/)
-  assert.match(runner, /ENV NEXT_PUBLIC_SHOW_FEATURES=\$NEXT_PUBLIC_SHOW_FEATURES/)
+  assert.match(runner, /ARG XYLON_SHOW_FEATURES=true/)
+  assert.match(runner, /ENV XYLON_SHOW_FEATURES=\$XYLON_SHOW_FEATURES/)
 })

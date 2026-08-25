@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from 'next/server'
 
 export function proxy(request: NextRequest) {
-  if (process.env.NEXT_PUBLIC_SHOW_FEATURES === 'false') {
+  if (process.env.XYLON_SHOW_FEATURES === 'false') {
     return NextResponse.redirect(new URL('/', request.url))
   }
 

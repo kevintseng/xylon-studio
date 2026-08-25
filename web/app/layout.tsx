@@ -4,6 +4,8 @@ import { ConsoleInit } from '@/components/console-init'
 import { BugReportButton } from '@/components/bug-report'
 import { ClientShell } from '@/components/client-shell'
 
+export const dynamic = 'force-dynamic'
+
 export const metadata: Metadata = {
   title: 'XylonStudio - Local OpenROAD Timing Assistant',
   description: 'Analyze bounded RTL and SDC with local OpenROAD timing evidence, human-confirmed changes, and reproducible RTL verification.',
@@ -16,6 +18,8 @@ export default function RootLayout({
 }: {
   children: React.ReactNode
 }) {
+  const showFeatures = process.env.XYLON_SHOW_FEATURES !== 'false'
+
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
       <head>
@@ -23,7 +27,7 @@ export default function RootLayout({
       </head>
       <body>
         <ConsoleInit />
-        <ClientShell footer={<BugReportButton />}>
+        <ClientShell footer={<BugReportButton />} showFeatures={showFeatures}>
           {children}
         </ClientShell>
       </body>
