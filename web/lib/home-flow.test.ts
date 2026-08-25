@@ -32,16 +32,45 @@ test('home scope separates implemented behavior from roadmap claims', () => {
   )
 })
 
-test('home hero exposes current scope and makes the timing assistant primary', () => {
+test('home hero exposes current scope without linking the public landing page into the workbench', () => {
   const source = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8')
   const hero = source.slice(0, source.indexOf('</section>'))
-  const rtlAction = hero.indexOf('href="/pipeline"')
-  const openroadAction = hero.indexOf('href="/openroad"')
 
   assert.match(hero, /PRODUCT_SCOPE\.implemented/)
   assert.match(hero, /PRODUCT_SCOPE\.notYet/)
-  assert.equal(rtlAction >= 0, true)
-  assert.equal(openroadAction >= 0, true)
-  assert.equal(rtlAction > openroadAction, true)
-  assert.equal(/home\.preview|agent-flow/.test(hero), false)
+  assert.match(hero, /href="#product-view"/)
+  assert.match(hero, /href="#workflow"/)
+  assert.doesNotMatch(hero, /href="\/(?:pipeline|openroad)"/)
+})
+
+test('home presents real, legible product images with a full-size escape hatch', () => {
+  const source = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8')
+  const shell = readFileSync(new URL('../components/client-shell.tsx', import.meta.url), 'utf8')
+  const proxy = readFileSync(new URL('../proxy.ts', import.meta.url), 'utf8')
+
+  assert.match(source, /width=\{4992\}/)
+  assert.match(source, /height=\{2880\}/)
+  assert.match(source, /min-w-\[760px\]/)
+  assert.match(source, /home\.visual\.fullSize/)
+  assert.match(source, /openroad-timing-workflow-v2(?:-en)?\.jpg/)
+  assert.match(shell, /NEXT_PUBLIC_SHOW_FEATURES/)
+  assert.match(proxy, /NEXT_PUBLIC_SHOW_FEATURES === 'false'/)
+  assert.match(proxy, /matcher: \['\/openroad\/:path\*', '\/pipeline\/:path\*'\]/)
+  assert.match(shell, /mobileOpen &&/)
+  assert.match(shell, /href="\/#product-view"/)
+  assert.match(shell, /href="\/#workflow"/)
+
+  for (const file of ['openroad-timing-workflow-v2.jpg', 'openroad-timing-workflow-v2-en.jpg']) {
+    const screenshot = readFileSync(new URL(`../public/screenshots/${file}`, import.meta.url))
+    assert.deepEqual([...screenshot.subarray(0, 2)], [0xff, 0xd8])
+    assert.equal(screenshot.byteLength > 400_000, true)
+  }
+})
+
+test('landing-only Docker build keeps the public feature flag consistent at runtime', () => {
+  const dockerfile = readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8')
+  const runner = dockerfile.slice(dockerfile.indexOf('FROM base AS runner'))
+
+  assert.match(runner, /ARG NEXT_PUBLIC_SHOW_FEATURES=true/)
+  assert.match(runner, /ENV NEXT_PUBLIC_SHOW_FEATURES=\$NEXT_PUBLIC_SHOW_FEATURES/)
 })

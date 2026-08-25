@@ -1,5 +1,6 @@
 'use client'
 
+import Image from 'next/image'
 import { useState, type KeyboardEvent } from 'react'
 import { CircuitBackground } from '@/components/circuit-bg'
 import { useI18n } from '@/lib/i18n'
@@ -18,7 +19,7 @@ const OWNER_STYLES: Record<HomeAgentOwner, string> = {
 }
 
 export default function Home() {
-  const { t } = useI18n()
+  const { locale, t } = useI18n()
   const [selectedKey, setSelectedKey] = useState<(typeof HOME_AGENT_STAGES)[number]['key']>('execute')
   const selected = HOME_AGENT_STAGES.find((stage) => stage.key === selectedKey) ?? HOME_AGENT_STAGES[0]
 
@@ -58,13 +59,13 @@ export default function Home() {
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <a
-                href="/openroad"
+                href="#product-view"
                 className="inline-flex min-h-11 items-center justify-center rounded-lg bg-blue-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
               >
                 {t('home.cta.primary')} <span className="ml-2" aria-hidden="true">→</span>
               </a>
               <a
-                href="/pipeline"
+                href="#workflow"
                 className="inline-flex min-h-11 items-center justify-center rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-6 py-3 text-sm font-semibold text-cyan-100 transition hover:border-cyan-400 hover:bg-cyan-500/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
               >
                 {t('home.cta.secondary')} <span className="ml-2" aria-hidden="true">→</span>
@@ -100,7 +101,36 @@ export default function Home() {
         </div>
       </section>
 
-      <section id="verification-flow" className="py-16 sm:py-20">
+      <section id="product-view" className="border-b border-slate-800 py-16 sm:py-20">
+        <div className="container mx-auto px-4 lg:px-8">
+          <div className="max-w-3xl">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">{t('home.visual.eyebrow')}</p>
+            <h2 className="mt-3 text-3xl font-bold sm:text-4xl">{t('home.visual.title')}</h2>
+            <p className="mt-4 leading-7 text-slate-400">{t('home.visual.subtitle')}</p>
+          </div>
+
+          <figure className="mt-8 overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 shadow-2xl shadow-black/30">
+            <div className="overflow-x-auto" tabIndex={0} aria-label={t('home.visual.scrollLabel')}>
+              <Image
+                src={locale === 'zh-TW' ? '/screenshots/openroad-timing-workflow-v2.jpg' : '/screenshots/openroad-timing-workflow-v2-en.jpg'}
+                width={4992}
+                height={2880}
+                sizes="(min-width: 1024px) 1216px, 100vw"
+                alt={t('home.visual.alt')}
+                className="h-auto min-w-[760px] sm:min-w-full"
+              />
+            </div>
+            <figcaption className="flex flex-col gap-3 border-t border-slate-800 px-4 py-4 text-sm leading-6 text-slate-400 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+              <span>{t('home.visual.caption')}</span>
+              <a href={locale === 'zh-TW' ? '/screenshots/openroad-timing-workflow-v2.jpg' : '/screenshots/openroad-timing-workflow-v2-en.jpg'} target="_blank" rel="noreferrer" className="shrink-0 font-semibold text-cyan-300 underline decoration-cyan-500/40 underline-offset-4 hover:text-cyan-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300">
+                {t('home.visual.fullSize')}
+              </a>
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section id="workflow" className="py-16 sm:py-20">
         <div className="container mx-auto px-4 lg:px-8">
           <div className="max-w-3xl">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-400">{t('home.flow.eyebrow')}</p>
