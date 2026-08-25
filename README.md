@@ -1,15 +1,24 @@
 # XylonStudio
 
-Tell Xylon what setup-timing job you need. It runs a bounded local OpenROAD flow
-on real RTL and SDC, reads back measured evidence, and tells you the next action.
+Xylon is a local OpenROAD timing assistant. Give it real RTL and SDC, a top module, and
+one plain-language setup-timing request. It runs a bounded local OpenROAD flow on real RTL
+and SDC, reads back measured evidence, and tells you the next action.
 
-[繁體中文](README.zh-TW.md)
+[繁體中文](README.zh-TW.md) · [Product site](https://xylonstud.io)
 
-## Implemented in this build
+![Xylon OpenROAD timing workbench](web/public/screenshots/openroad-timing-workflow-v2-en.jpg)
 
-The source paths below are implemented and covered by automated checks. Final
-exact-revision OpenROAD and browser journey verification is still pending; do
-not treat this branch as a released product yet.
+## The first useful journey
+
+1. Import bounded RTL and SDC or load the included `sky130hd` timing example.
+2. Ask: “Check setup timing, identify the worst path, and tell me how to improve it.”
+3. Xylon validates the input and local resources before starting OpenROAD.
+4. Review measured WNS, TNS, and the worst setup path.
+5. If a violation exists, review one exact `PLACE_DENSITY 0.60 → 0.65` proposal.
+6. Confirm it only if you want a candidate run, then compare the same metrics
+   before and after.
+
+The supported paths behind that journey are:
 
 - **Setup-timing assistant:** a local OpenAI-compatible model interprets one
   sentence. Deterministic tools validate RTL/SDC, run the built-in `sky130hd`
@@ -76,11 +85,21 @@ OpenROAD. Xylon does not download or silently select a model.
 6. Explicitly ask the assistant to execute the confirmed change, or use the
    dedicated candidate button. Status and explanation requests never start EDA.
 
+## When OpenROAD cannot start
+
 Timing runs started through one Xylon API process are serialized and resource-gated.
 Direct CLI timing and the separate MCP runtime are independent entry points; do not
 run them concurrently until Xylon reports a shared host-wide lease. Each timing run
 uses one CPU by default, an 8 GiB memory cap, no container network, and exact-owner
-cleanup. If capacity is below the safety floor, Xylon does not start OpenROAD.
+cleanup. If capacity is below the safety floor, the workbench remains available but
+Xylon does not start OpenROAD. Close or wait for other heavy work, then run:
+
+```bash
+scripts/xylon doctor
+scripts/xylon-openroad doctor
+```
+
+Your design input and saved results remain intact.
 
 Manage only the stack owned by this checkout:
 
@@ -90,7 +109,7 @@ scripts/xylon logs --tail 100
 scripts/xylon stop
 ```
 
-## Honest boundaries
+## Current boundary
 
 | Implemented in this build | Not available |
 | --- | --- |

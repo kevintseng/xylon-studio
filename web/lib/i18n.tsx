@@ -23,7 +23,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'home.title1': 'Describe the timing problem.',
     'home.title2': 'Get measured evidence and one safe next step.',
     'home.description':
-      'Xylon turns a plain-language setup-timing request into a controlled local flow: import RTL and SDC, run a pinned OpenROAD recipe, find the worst path, review one bounded change, then compare measured results.',
+      'Xylon turns a plain-language setup-timing request into a controlled local flow: import RTL and SDC, run a pinned OpenROAD recipe, find the worst path, review one bounded change, then compare measured results. Results come from OpenROAD readback, not model claims.',
     'home.cta.primary': 'See the product screen',
     'home.cta.secondary': 'See how it works',
     'home.capabilities.title': 'Available in the local build',
@@ -606,7 +606,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'home.title1': '用一句話描述時序問題，',
     'home.title2': '取得實測證據與一個安全的改善步驟。',
     'home.description':
-      'Xylon 把 setup 時序需求轉成受控的本機流程：匯入 RTL 與 SDC、執行固定的 OpenROAD 流程、找出最差路徑、審閱一個範圍受限的改善，再比較實測結果。',
+      'Xylon 把 setup 時序需求轉成受控的本機流程：匯入 RTL 與 SDC、執行固定的 OpenROAD 流程、找出最差路徑、審閱一個範圍受限的改善，再比較實測結果。所有結果都來自 OpenROAD 讀回，不是模型宣稱。',
     'home.cta.primary': '查看產品畫面',
     'home.cta.secondary': '了解運作方式',
     'home.capabilities.title': '本機版本目前能做',
