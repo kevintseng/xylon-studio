@@ -8,7 +8,9 @@ LibreLane installation, PDK root, and output readback contract are available.
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import os
 import re
@@ -20,11 +22,16 @@ from pathlib import Path
 LIBRELANE_VERSION = "3.0.10"
 ADAPTER_SCHEMA_VERSION = "xylon-librelane-runtime-adapter/v1"
 SUPPORTED_PLATFORM = "sky130hd"
+LIBRELANE_IMAGE = "ghcr.io/librelane/librelane@sha256:322b81f76d22053e5b92f9eaa6e4fb0440084fd02d77a4de0caa4ba7644c88c3"
+LIBRELANE_CONTAINER_PLATFORM = "linux/arm64"
+LIBRELANE_PDK = "sky130A"
+LIBRELANE_SCL = "sky130_fd_sc_hd"
 ALLOWED_REQUEST_FIELDS = frozenset({"platform", "run_id", "config_path"})
 FORBIDDEN_EXECUTION_FIELDS = frozenset(
     {"argv", "command", "docker_args", "model", "prompt", "script", "shell", "tcl"}
 )
 IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$")
+VERILOG_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,127}$")
 
 
 class LibreLaneAdapterError(ValueError):
@@ -47,6 +54,10 @@ class LibreLaneIdentity:
     version: str
     platform: str
     invocation: str
+    image: str
+    container_platform: str
+    pdk: str
+    standard_cell_library: str
     temporary: bool
 
 
@@ -127,6 +138,10 @@ def build_identity(probe: LibreLaneProbe, platform: str = SUPPORTED_PLATFORM) ->
         version=LIBRELANE_VERSION,
         platform=platform,
         invocation="python -m librelane --dockerized <validated-config>",
+        image=LIBRELANE_IMAGE,
+        container_platform=LIBRELANE_CONTAINER_PLATFORM,
+        pdk=LIBRELANE_PDK,
+        standard_cell_library=LIBRELANE_SCL,
         temporary=True,
     )
 
@@ -149,3 +164,128 @@ def validate_config_path(config_path: str, run_dir: Path) -> Path:
     if candidate.suffix not in {".json", ".yaml", ".yml"}:
         raise LibreLaneAdapterError("LibreLane config must be JSON or YAML")
     return candidate
+
+
+def _relative_file(value: str, field: str) -> str:
+    candidate = Path(value)
+    if not value or candidate.is_absolute() or ".." in candidate.parts:
+        raise LibreLaneAdapterError(f"{field} must be a relative path inside the run directory")
+    if candidate.name in {"", "."}:
+        raise LibreLaneAdapterError(f"{field} must name a file")
+    return candidate.as_posix()
+
+
+def build_config(
+    *,
+    top: str,
+    rtl_paths: list[str],
+    sdc_path: str,
+    clock_port: str,
+    clock_period_ns: float | int,
+    include_dirs: list[str] | None = None,
+) -> dict[str, object]:
+    """Build a deterministic LibreLane config without accepting tool commands."""
+
+    if not VERILOG_IDENTIFIER_RE.fullmatch(top):
+        raise LibreLaneAdapterError("top must be a valid Verilog identifier")
+    if not rtl_paths:
+        raise LibreLaneAdapterError("at least one RTL path is required")
+    if not VERILOG_IDENTIFIER_RE.fullmatch(clock_port):
+        raise LibreLaneAdapterError("clock_port must be a valid Verilog identifier")
+    try:
+        period = float(clock_period_ns)
+    except (TypeError, ValueError) as error:
+        raise LibreLaneAdapterError("clock_period_ns must be a positive number") from error
+    if period <= 0:
+        raise LibreLaneAdapterError("clock_period_ns must be a positive number")
+    config: dict[str, object] = {
+        "DESIGN_NAME": top,
+        "VERILOG_FILES": [f"dir::{_relative_file(path, 'rtl_paths')}" for path in rtl_paths],
+        "CLOCK_PERIOD": int(period) if period.is_integer() else period,
+        "CLOCK_PORT": clock_port,
+        "PNR_SDC_FILE": f"dir::{_relative_file(sdc_path, 'sdc_path')}",
+        "SIGNOFF_SDC_FILE": f"dir::{_relative_file(sdc_path, 'sdc_path')}",
+        "PDK": LIBRELANE_PDK,
+        "STD_CELL_LIBRARY": LIBRELANE_SCL,
+    }
+    if include_dirs:
+        config["VERILOG_INCLUDE_DIRS"] = [
+            f"dir::{_relative_file(directory, 'include_dirs')}" for directory in include_dirs
+        ]
+    return config
+
+
+def _read_regular(path: Path, label: str) -> bytes:
+    if path.is_symlink() or not path.is_file():
+        raise LibreLaneAdapterError(f"LibreLane {label} is missing")
+    try:
+        content = path.read_bytes()
+    except OSError as error:
+        raise LibreLaneAdapterError(f"LibreLane {label} cannot be read") from error
+    if len(content) > 4 * 1024 * 1024:
+        raise LibreLaneAdapterError(f"LibreLane {label} exceeds the bounded readback limit")
+    return content
+
+
+def _metrics_csv(content: bytes) -> dict[str, object]:
+    metrics: dict[str, object] = {}
+    for row in csv.reader(io.StringIO(content.decode("utf-8"))):
+        if len(row) != 2 or row[0] == "Metric":
+            continue
+        key, value = row
+        try:
+            metrics[key] = float(value)
+        except ValueError:
+            metrics[key] = value
+    if not metrics:
+        raise LibreLaneAdapterError("LibreLane metrics.csv contains no measured metrics")
+    return metrics
+
+
+def readback_artifacts(
+    run_dir: Path,
+    design_name: str | None = None,
+    identity: LibreLaneIdentity | None = None,
+) -> dict[str, object]:
+    """Read LibreLane's native resolved config and signoff/final metrics artifacts."""
+
+    root = run_dir.resolve()
+    candidates: list[tuple[Path, Path, str, str]] = []
+    if design_name is not None:
+        if not VERILOG_IDENTIFIER_RE.fullmatch(design_name):
+            raise LibreLaneAdapterError("design_name must be a valid Verilog identifier")
+        candidates.append(
+            (
+                root / "signoff" / design_name / "openlane-signoff" / "resolved.json",
+                root / "signoff" / design_name / "metrics.csv",
+                f"signoff/{design_name}/openlane-signoff/resolved.json",
+                f"signoff/{design_name}/metrics.csv",
+            )
+        )
+    candidates.append(
+        (root / "final" / "resolved.json", root / "final" / "metrics.json", "final/resolved.json", "final/metrics.json")
+    )
+    for resolved, metrics, resolved_rel, metrics_rel in candidates:
+        if not resolved.is_file() or not metrics.is_file():
+            continue
+        try:
+            resolved_payload = json.loads(_read_regular(resolved, resolved_rel).decode("utf-8"))
+            metrics_content = _read_regular(metrics, metrics_rel)
+            if metrics.suffix == ".csv":
+                metrics_payload = _metrics_csv(metrics_content)
+            else:
+                metrics_payload = json.loads(metrics_content.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, csv.Error) as error:
+            raise LibreLaneAdapterError("LibreLane output readback is malformed") from error
+        if not isinstance(resolved_payload, dict) or not isinstance(metrics_payload, dict) or not metrics_payload:
+            raise LibreLaneAdapterError("LibreLane output readback must contain objects")
+        expected_pdk = identity.pdk if identity else LIBRELANE_PDK
+        expected_scl = identity.standard_cell_library if identity else LIBRELANE_SCL
+        if resolved_payload.get("PDK") != expected_pdk or resolved_payload.get("STD_CELL_LIBRARY") != expected_scl:
+            raise LibreLaneAdapterError("LibreLane output identity does not match the pinned PDK and standard-cell library")
+        return {
+            "resolved": resolved_payload,
+            "metrics": metrics_payload,
+            "paths": {"resolved": resolved_rel, "metrics": metrics_rel},
+        }
+    raise LibreLaneAdapterError("LibreLane resolved config and native metrics artifacts are missing")
