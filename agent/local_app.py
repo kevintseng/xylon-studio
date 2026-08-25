@@ -452,6 +452,7 @@ def collect_local_readiness(
 class LocalState:
     schema_version: int
     runtime_owned: bool
+    runtime_mode: str
     api_port: int
     web_port: int
     api: ManagedProcess
@@ -459,25 +460,31 @@ class LocalState:
 
     @classmethod
     def from_dict(cls, payload: object) -> LocalState:
-        if not isinstance(payload, dict) or payload.get("schema_version") != 2:
+        if not isinstance(payload, dict) or payload.get("schema_version") != 3:
             raise ValueError("unsupported or invalid local state")
         try:
             api = ManagedProcess(**payload["api"])
             web = ManagedProcess(**payload["web"])
             runtime_owned = payload["runtime_owned"]
+            runtime_mode = payload["runtime_mode"]
             api_port = payload["api_port"]
             web_port = payload["web_port"]
         except (KeyError, TypeError) as exc:
             raise ValueError("incomplete local state") from exc
         if not isinstance(runtime_owned, bool):
             raise ValueError("runtime_owned must be boolean")
+        if runtime_mode not in {"managed", "deferred"}:
+            raise ValueError("runtime_mode must be managed or deferred")
+        if runtime_mode == "deferred" and runtime_owned:
+            raise ValueError("a deferred runtime cannot be launcher-owned")
         if not _is_valid_port(api_port) or not _is_valid_port(web_port):
             raise ValueError("local ports must be between 1 and 65535")
         if api_port == web_port:
             raise ValueError("API and Web ports must be different")
         return cls(
-            schema_version=2,
+            schema_version=3,
             runtime_owned=runtime_owned,
+            runtime_mode=runtime_mode,
             api_port=api_port,
             web_port=web_port,
             api=api,
@@ -488,6 +495,7 @@ class LocalState:
         return {
             "schema_version": self.schema_version,
             "runtime_owned": self.runtime_owned,
+            "runtime_mode": self.runtime_mode,
             "api_port": self.api_port,
             "web_port": self.web_port,
             "api": self.api.__dict__,
@@ -815,7 +823,7 @@ class LocalApplication:
             if self.status() == 0:
                 print(
                     "ALREADY RUNNING: XylonStudio "
-                    f"http://127.0.0.1:{existing.web_port}/pipeline"
+                    f"http://127.0.0.1:{existing.web_port}/openroad"
                 )
                 return 0
             print(f"ERROR: launcher state already exists at {self.state_path}")
@@ -830,16 +838,21 @@ class LocalApplication:
         if resource_blockers:
             for blocker in resource_blockers:
                 print(f"RESOURCE BLOCKED: {blocker}")
-            print("RECOVERY: wait for load to fall or free local capacity, then rerun start")
-            return 1
-
-        runtime_owned = not self.runtime.is_running()
-        if runtime_owned and not self.runtime.run("up", timeout=900):
-            return 1
-        if not self.runtime.run("verify", timeout=60):
-            if runtime_owned:
-                self.runtime.run("down", timeout=60)
-            return 1
+            print(
+                "SAFE MODE: starting the UI and API without the EDA runtime; "
+                "heavy EDA work remains blocked until capacity recovers"
+            )
+            runtime_owned = False
+            runtime_mode = "deferred"
+        else:
+            runtime_owned = not self.runtime.is_running()
+            if runtime_owned and not self.runtime.run("up", timeout=900):
+                return 1
+            if not self.runtime.run("verify", timeout=60):
+                if runtime_owned:
+                    self.runtime.run("down", timeout=60)
+                return 1
+            runtime_mode = "managed"
 
         api_log = self.state_dir / "api.log"
         web_log = self.state_dir / "web.log"
@@ -873,8 +886,9 @@ class LocalApplication:
                 environment=web_environment,
             )
             state = LocalState(
-                schema_version=2,
+                schema_version=3,
                 runtime_owned=runtime_owned,
+                runtime_mode=runtime_mode,
                 api_port=self.api_port,
                 web_port=self.web_port,
                 api=ManagedProcess("api", api_process.pid, self.api_command_marker, str(api_log)),
@@ -892,8 +906,9 @@ class LocalApplication:
             print(f"ERROR: local start failed: {exc}")
             if state is None:
                 state = LocalState(
-                    schema_version=2,
+                    schema_version=3,
                     runtime_owned=runtime_owned,
+                    runtime_mode=runtime_mode,
                     api_port=self.api_port,
                     web_port=self.web_port,
                     api=ManagedProcess("api", api_process.pid if api_process else -1, self.api_command_marker, str(api_log)),
@@ -902,7 +917,7 @@ class LocalApplication:
             self._rollback(state)
             return 1
 
-        print(f"READY: XylonStudio {self.web_url}/pipeline")
+        print(f"READY: XylonStudio {self.web_url}/openroad")
         print(f"HEALTHY: API {self.api_url}/health")
         print(f"LOGS: {self.state_dir}")
         return 0
@@ -930,6 +945,9 @@ class LocalApplication:
         print(f"{'HEALTHY' if api_healthy else 'UNHEALTHY'}: API {api_url}")
         print(f"{'HEALTHY' if web_healthy else 'UNHEALTHY'}: Web {web_url}")
         runtime_healthy = self.runtime.is_running()
+        if state.runtime_mode == "deferred" and not runtime_healthy:
+            print("DEFERRED: pinned EDA runtime was not started in safe mode")
+            return 0 if api_healthy and web_healthy else 1
         print(f"{'HEALTHY' if runtime_healthy else 'UNHEALTHY'}: pinned EDA runtime")
         return 0 if api_healthy and web_healthy and runtime_healthy else 1
 
@@ -1002,7 +1020,12 @@ def _port_is_open(port: int) -> bool:
         return False
 
 
-def doctor(*, api_port: int = 5001, web_port: int = 3000) -> int:
+def doctor(
+    *,
+    api_port: int = 5001,
+    web_port: int = 3000,
+    check_eda_capacity: bool = True,
+) -> int:
     required_paths = {
         "Python API environment": REPO_ROOT / "agent" / "venv" / "bin" / "python",
         "Uvicorn": REPO_ROOT / "agent" / "venv" / "bin" / "uvicorn",
@@ -1040,29 +1063,31 @@ def doctor(*, api_port: int = 5001, web_port: int = 3000) -> int:
         return 1
 
     print("READY: local prerequisites are available")
-    resources = collect_resource_snapshot(REPO_ROOT)
-    resource_blockers = evaluate_resource_preflight(resources)
-    if resource_blockers:
-        for blocker in resource_blockers:
-            print(f"RESOURCE BLOCKED: {blocker}")
-        print(
-            "RECOVERY: wait for load to fall or free local capacity, "
-            "then rerun scripts/xylon start"
-        )
-    else:
-        memory = (
-            f"{resources.memory_free_percent}%/"
-            f"{resources.memory_available_bytes / 1024**3:.1f}GiB"
-            if resources.memory_free_percent is not None
-            and resources.memory_available_bytes is not None
-            else "Unavailable"
-        )
-        print(
-            "RESOURCE READY: "
-            f"load={resources.load_one_minute:.2f}/{resources.logical_cpus} CPUs "
-            f"memory_free={memory} "
-            f"disk_free={resources.disk_free_bytes / 1024**3:.1f} GiB"
-        )
+    resource_blockers: list[str] = []
+    if check_eda_capacity:
+        resources = collect_resource_snapshot(REPO_ROOT)
+        resource_blockers = evaluate_resource_preflight(resources)
+        if resource_blockers:
+            for blocker in resource_blockers:
+                print(f"RESOURCE BLOCKED: {blocker}")
+            print(
+                "RECOVERY: wait for load to fall or free local capacity, "
+                "then rerun this check; scripts/xylon start can still open the UI in safe mode"
+            )
+        else:
+            memory = (
+                f"{resources.memory_free_percent}%/"
+                f"{resources.memory_available_bytes / 1024**3:.1f}GiB"
+                if resources.memory_free_percent is not None
+                and resources.memory_available_bytes is not None
+                else "Unavailable"
+            )
+            print(
+                "RESOURCE READY: "
+                f"load={resources.load_one_minute:.2f}/{resources.logical_cpus} CPUs "
+                f"memory_free={memory} "
+                f"disk_free={resources.disk_free_bytes / 1024**3:.1f} GiB"
+            )
     api_url = f"http://127.0.0.1:{api_port}"
     web_url = f"http://127.0.0.1:{web_port}"
     api_in_use = _port_is_open(api_port)
@@ -1093,7 +1118,7 @@ def main() -> int:
         return doctor(web_port=args.web_port)
     app = LocalApplication(web_port=args.web_port)
     if args.command == "start":
-        if doctor(web_port=args.web_port) != 0:
+        if doctor(web_port=args.web_port, check_eda_capacity=False) != 0:
             return 1
         return app.start()
     if args.command == "status":

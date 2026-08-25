@@ -10,6 +10,7 @@ import {
 } from '@/lib/timing-agent-client'
 import {
   isTimingAgentConnectionProbe,
+  timingAgentActionNeedsEda,
   type TimingAgentResult,
 } from '@/lib/timing-agent-contract'
 import type { TimingPhase } from '@/lib/timing-contract'
@@ -20,6 +21,7 @@ interface TimingAgentPanelProps {
   design: { rtl: string; sdc: string; topModule: string } | null
   timingRunId: string | null
   timingPhase: TimingPhase | null
+  edaCanStart: boolean
   disabled: boolean
   onBusyChange: (busy: boolean) => void
   onResult: (result: TimingAgentResult) => void
@@ -37,6 +39,13 @@ function localizedAgentError(
   t: (key: string) => string,
 ): AgentError {
   if (locale === 'en') return { code: error.code, message: error.message, recovery: error.recovery }
+  if (error.code === 'ResourceAdmissionBlocked') {
+    return {
+      code: error.code,
+      message: t('timing.error.ResourceAdmissionBlocked.message'),
+      recovery: t('timing.error.ResourceAdmissionBlocked.recovery'),
+    }
+  }
   const known = new Set([
     'TimingAgentProviderUnavailable',
     'TimingAgentProviderRedirectRejected',
@@ -57,6 +66,7 @@ export function TimingAgentPanel({
   design,
   timingRunId,
   timingPhase,
+  edaCanStart,
   disabled,
   onBusyChange,
   onResult,
@@ -72,6 +82,8 @@ export function TimingAgentPanel({
   const [connectionReady, setConnectionReady] = useState(false)
   const modelConfigured = baseUrl.trim().length > 0 && model.trim().length > 0
   const ready = message.trim().length >= 3 && modelConfigured && Boolean(timingRunId || design)
+  const actionNeedsEda = timingAgentActionNeedsEda(timingRunId, timingPhase)
+  const runDisabled = disabled || (actionNeedsEda && !edaCanStart)
 
   const captureError = (caught: unknown) => {
     if (caught instanceof TimingAgentApiError) {
@@ -115,7 +127,7 @@ export function TimingAgentPanel({
   }
 
   const run = async () => {
-    if (!ready || disabled || running || checking) return
+    if (!ready || runDisabled || running || checking) return
     setRunning(true)
     setError(null)
     onBusyChange(true)
@@ -146,7 +158,8 @@ export function TimingAgentPanel({
           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">{t('timing.agent.subtitle')}</p>
           <label className="mt-5 block text-sm text-slate-200" htmlFor="timing-agent-message">{t('timing.agent.request')}</label>
           <textarea id="timing-agent-message" value={message} onChange={(event) => setMessage(event.target.value)} disabled={disabled || running || checking} rows={3} placeholder={t('timing.agent.requestPlaceholder')} className="mt-2 w-full resize-y rounded-2xl border border-violet-500/30 bg-slate-950 p-4 text-sm leading-6 text-slate-100 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-500/20 disabled:opacity-60" />
-          <button type="button" onClick={() => void run()} disabled={!ready || disabled || running || checking} className="mt-4 w-full rounded-2xl bg-violet-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-violet-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">{running ? t('timing.agent.running') : timingPhase === 'confirmed' ? t('timing.agent.executeConfirmed') : t('timing.agent.run')}</button>
+          <button type="button" onClick={() => void run()} disabled={!ready || runDisabled || running || checking} className="mt-4 w-full rounded-2xl bg-violet-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-violet-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">{running ? t('timing.agent.running') : timingPhase === 'confirmed' ? t('timing.agent.executeConfirmed') : t('timing.agent.run')}</button>
+          {actionNeedsEda && !edaCanStart ? <p className="mt-3 text-xs leading-5 text-amber-200">{t('timing.resource.statusBlocked')}</p> : null}
           {!timingRunId && !design ? <p className="mt-3 text-xs leading-5 text-amber-200">{t('timing.agent.needsDesign')}</p> : null}
         </div>
         <div className="rounded-2xl border border-slate-700 bg-slate-950/80 p-4">

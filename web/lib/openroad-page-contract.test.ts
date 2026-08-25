@@ -79,6 +79,9 @@ test('natural-language timing assistant stays local and separates model interpre
     assert.match(agentSource, new RegExp(required.replaceAll('.', '\\.')))
   }
   assert.doesNotMatch(agentSource, /localStorage|sessionStorage|Authorization|api[_-]?key/i)
+  assert.match(timingSource, /edaCanStart=\{edaCanStart\}/)
+  assert.match(agentSource, /timingAgentActionNeedsEda/)
+  assert.match(agentSource, /actionNeedsEda && !edaCanStart/)
 })
 
 test('timing failures keep internal codes behind user-controlled technical details', () => {

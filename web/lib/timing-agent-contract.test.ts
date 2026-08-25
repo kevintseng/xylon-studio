@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   isTimingAgentConnectionProbe,
   normalizeTimingAgentResult,
+  timingAgentActionNeedsEda,
   TimingAgentContractError,
 } from './timing-agent-contract.ts'
 
@@ -86,6 +87,14 @@ test('connection probe is ready only for the supported setup intent without EDA 
     ...result,
     intent: { supported: true, name: 'inspect_timing_status' },
   }), false)
+})
+
+test('assistant resource gate blocks only actions that can start OpenROAD', () => {
+  assert.equal(timingAgentActionNeedsEda(null, null), true)
+  assert.equal(timingAgentActionNeedsEda('a'.repeat(32), 'confirmed'), true)
+  assert.equal(timingAgentActionNeedsEda('a'.repeat(32), 'diagnosis_ready'), false)
+  assert.equal(timingAgentActionNeedsEda('a'.repeat(32), 'proposal_ready'), false)
+  assert.equal(timingAgentActionNeedsEda('a'.repeat(32), 'blocked'), false)
 })
 
 test('timing agent contract rejects a response without the exact egress receipt', () => {

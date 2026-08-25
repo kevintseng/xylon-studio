@@ -1,4 +1,4 @@
-import { normalizeTimingState, type TimingState } from './timing-contract.ts'
+import { normalizeTimingState, type TimingPhase, type TimingState } from './timing-contract.ts'
 
 export type TimingAgentIntent =
   | 'setup_timing_analysis'
@@ -111,4 +111,11 @@ export function isTimingAgentConnectionProbe(result: TimingAgentResult): boolean
     && result.intent.name === 'setup_timing_analysis'
     && result.state === 'waiting_for_input'
     && result.timing === null
+}
+
+export function timingAgentActionNeedsEda(
+  timingRunId: string | null,
+  timingPhase: TimingPhase | null,
+): boolean {
+  return timingRunId === null || timingPhase === 'confirmed'
 }

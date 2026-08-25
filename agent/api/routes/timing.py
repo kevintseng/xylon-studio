@@ -14,6 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from agent.api import LOCAL_WEB_ORIGINS
 from agent.api.execution import run_in_local_eda_slot
+from agent.local_app import collect_resource_snapshot
+from agent.openroad.resource import evaluate_openroad_preflight
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["timing"])
@@ -173,7 +175,64 @@ async def _invoke_timing_bridge(command: str, payload: dict) -> dict:
 
 
 async def _run_heavy_timing(command: str, payload: dict) -> dict:
-    return await run_in_local_eda_slot(lambda: _invoke_timing_bridge(command, payload))
+    async def admitted_operation() -> dict:
+        await _require_timing_admission()
+        return await _invoke_timing_bridge(command, payload)
+
+    return await run_in_local_eda_slot(admitted_operation)
+
+
+def _configured_timing_cpus() -> int | None:
+    configured = os.environ.get("XYLON_OPENROAD_CPUS", "1")
+    return int(configured) if configured in {"1", "2", "3", "4"} else None
+
+
+def _timing_readiness(snapshot) -> dict:
+    requested_cpus = _configured_timing_cpus()
+    blockers = (
+        evaluate_openroad_preflight(snapshot, requested_cpus=requested_cpus)
+        if requested_cpus is not None
+        else ["OpenROAD CPU budget must be an integer from 1 to 4"]
+    )
+    return {
+        "schema_version": "xylon-timing-readiness/v1",
+        "state": "blocked" if blockers else "ready",
+        "can_start_eda": not blockers,
+        "requested_cpus": requested_cpus,
+        "resource": {
+            "logical_cpus": snapshot.logical_cpus,
+            "load_one_minute": snapshot.load_one_minute,
+            "memory_available_bytes": snapshot.memory_available_bytes,
+            "memory_free_percent": snapshot.memory_free_percent,
+            "disk_free_bytes": snapshot.disk_free_bytes,
+        },
+        "blockers": blockers,
+    }
+
+
+async def _current_timing_readiness() -> dict:
+    snapshot = await asyncio.to_thread(collect_resource_snapshot, REPO_ROOT)
+    return _timing_readiness(snapshot)
+
+
+async def _require_timing_admission() -> None:
+    readiness = await _current_timing_readiness()
+    if readiness["can_start_eda"]:
+        return
+    blockers = readiness["blockers"]
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "error": "ResourceAdmissionBlocked",
+            "message": f"OpenROAD capacity is below the safety floor: {'; '.join(blockers)}",
+            "recovery": "Wait for CPU, memory, and disk headroom, then refresh the timing workbench.",
+        },
+    )
+
+
+@router.get("/timing/readiness")
+async def get_timing_readiness() -> dict:
+    return await _current_timing_readiness()
 
 
 @router.post("/timing/runs")

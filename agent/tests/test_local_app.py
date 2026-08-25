@@ -540,8 +540,9 @@ def _write_state(state_dir: Path, *, api_pid: int, api_marker: str, web_pid: int
     state_path.write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "runtime_owned": False,
+                "runtime_mode": "deferred",
                 "api_port": 5001,
                 "web_port": 3000,
                 "api": {
@@ -643,10 +644,15 @@ def _safe_resource_probe() -> local_app.ResourceSnapshot:
     )
 
 
-def _managed_state(*, runtime_owned: bool = True) -> local_app.LocalState:
+def _managed_state(
+    *,
+    runtime_owned: bool = True,
+    runtime_mode: str = "managed",
+) -> local_app.LocalState:
     return local_app.LocalState(
-        schema_version=2,
+        schema_version=3,
         runtime_owned=runtime_owned,
+        runtime_mode=runtime_mode,
         api_port=5001,
         web_port=3000,
         api=local_app.ManagedProcess("api", 1001, "xylon-test-api", "api.log"),
@@ -871,7 +877,7 @@ def test_start_injects_the_selected_web_port_into_the_api_origin_policy(tmp_path
         app.stop(grace_seconds=0.1)
 
 
-def test_start_blocks_before_runtime_or_services_when_host_resources_are_unsafe(tmp_path: Path):
+def test_start_opens_safe_mode_without_runtime_when_host_resources_are_unsafe(tmp_path: Path):
     api_port = _unused_port()
     web_port = _unused_port()
     runtime = _TestRuntime()
@@ -895,11 +901,18 @@ def test_start_blocks_before_runtime_or_services_when_host_resources_are_unsafe(
         resource_probe=lambda: unsafe,
     )
 
-    assert app.start(health_timeout=0.5) == 1
-    assert runtime.running is False
-    assert local_app._port_is_open(api_port) is False
-    assert local_app._port_is_open(web_port) is False
-    assert app.state_path.exists() is False
+    try:
+        assert app.start(health_timeout=2) == 0
+        assert runtime.running is False
+        assert runtime.actions == []
+        assert local_app._port_is_open(api_port) is True
+        assert local_app._port_is_open(web_port) is True
+        state = json.loads(app.state_path.read_text(encoding="utf-8"))
+        assert state["runtime_owned"] is False
+        assert state["runtime_mode"] == "deferred"
+        assert app.status() == 0
+    finally:
+        app.stop(grace_seconds=0.1)
 
 
 def test_web_health_requires_starting_the_process_from_its_configured_workspace(tmp_path: Path):

@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -352,3 +353,25 @@ def test_assistant_request_is_bounded_before_provider_or_eda(monkeypatch):
     assert response.status_code == 413
     provider.assert_not_awaited()
     tools.analyze.assert_not_awaited()
+
+
+def test_assistant_execute_rechecks_resource_admission_before_bridge(monkeypatch):
+    import asyncio
+
+    bridge = AsyncMock()
+    monkeypatch.setattr(assistant_routes.timing_routes, "_invoke_timing_bridge", bridge)
+    monkeypatch.setattr(
+        assistant_routes.timing_routes,
+        "_current_timing_readiness",
+        AsyncMock(return_value={
+            "can_start_eda": False,
+            "blockers": ["memory below OpenROAD safety floor"],
+        }),
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(assistant_routes._execute("a" * 32, "b" * 64, "c" * 32))
+
+    assert getattr(caught.value, "status_code", None) == 503
+    assert caught.value.detail["error"] == "ResourceAdmissionBlocked"
+    bridge.assert_not_awaited()

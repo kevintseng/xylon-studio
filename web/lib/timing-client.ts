@@ -4,6 +4,20 @@ import { normalizeTimingState, type TimingState } from './timing-contract.ts'
 export const MAX_TIMING_RTL_BYTES = 1024 * 1024
 export const MAX_TIMING_SDC_BYTES = 16 * 1024
 
+export interface TimingReadiness {
+  state: 'ready' | 'blocked'
+  canStartEda: boolean
+  requestedCpus: number | null
+  resource: {
+    logicalCpus: number
+    loadOneMinute: number | null
+    memoryAvailableBytes: number | null
+    memoryFreePercent: number | null
+    diskFreeBytes: number
+  }
+  blockers: string[]
+}
+
 export class TimingApiError extends Error {
   readonly code: string
   readonly recovery: string
@@ -50,7 +64,7 @@ function boundedInput(name: string, value: string, maximumBytes: number): string
   return value
 }
 
-async function timingRequest(url: string, init?: RequestInit): Promise<TimingState> {
+async function timingJsonRequest(url: string, init?: RequestInit): Promise<unknown> {
   const response = await fetch(url, {
     ...init,
     headers: {
@@ -84,7 +98,66 @@ async function timingRequest(url: string, init?: RequestInit): Promise<TimingSta
       typeof detail.run_id === 'string' ? detail.run_id : null,
     )
   }
-  return normalizeTimingState(payload)
+  return payload
+}
+
+async function timingRequest(url: string, init?: RequestInit): Promise<TimingState> {
+  return normalizeTimingState(await timingJsonRequest(url, init))
+}
+
+export function normalizeTimingReadiness(input: unknown): TimingReadiness {
+  if (!input || typeof input !== 'object') throw new Error('timing readiness must be an object')
+  const value = input as Record<string, unknown>
+  const resource = value.resource
+  if (
+    value.schema_version !== 'xylon-timing-readiness/v1'
+    || (value.state !== 'ready' && value.state !== 'blocked')
+    || typeof value.can_start_eda !== 'boolean'
+    || value.can_start_eda !== (value.state === 'ready')
+    || (value.requested_cpus !== null && (!Number.isInteger(value.requested_cpus) || (value.requested_cpus as number) < 1 || (value.requested_cpus as number) > 4))
+    || !resource
+    || typeof resource !== 'object'
+    || !Array.isArray(value.blockers)
+    || !value.blockers.every((blocker) => typeof blocker === 'string')
+  ) {
+    throw new Error('timing readiness contract is invalid')
+  }
+  const snapshot = resource as Record<string, unknown>
+  const requiredNumber = (field: string): number => {
+    const observed = snapshot[field]
+    if (typeof observed !== 'number' || !Number.isFinite(observed) || observed < 0) {
+      throw new Error(`timing readiness ${field} is invalid`)
+    }
+    return observed
+  }
+  const optionalNumber = (field: string): number | null => {
+    const observed = snapshot[field]
+    if (observed === null) return null
+    if (typeof observed !== 'number' || !Number.isFinite(observed) || observed < 0) {
+      throw new Error(`timing readiness ${field} is invalid`)
+    }
+    return observed
+  }
+  return {
+    state: value.state,
+    canStartEda: value.can_start_eda,
+    requestedCpus: value.requested_cpus as number | null,
+    resource: {
+      logicalCpus: requiredNumber('logical_cpus'),
+      loadOneMinute: optionalNumber('load_one_minute'),
+      memoryAvailableBytes: optionalNumber('memory_available_bytes'),
+      memoryFreePercent: optionalNumber('memory_free_percent'),
+      diskFreeBytes: requiredNumber('disk_free_bytes'),
+    },
+    blockers: [...value.blockers],
+  }
+}
+
+export async function readTimingReadiness(apiUrl: string, signal?: AbortSignal): Promise<TimingReadiness> {
+  return normalizeTimingReadiness(await timingJsonRequest(`${apiUrl}/readiness`, {
+    method: 'GET',
+    signal,
+  }))
 }
 
 export function analyzeTiming(

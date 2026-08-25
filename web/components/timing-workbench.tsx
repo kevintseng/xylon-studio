@@ -14,9 +14,11 @@ import {
   executeTimingCandidate,
   MAX_TIMING_RTL_BYTES,
   MAX_TIMING_SDC_BYTES,
+  readTimingReadiness,
   readTimingRun,
   resolveTimingApiUrl,
   TimingApiError,
+  type TimingReadiness,
 } from '@/lib/timing-client'
 import { TIMING_SAMPLE_RTL, TIMING_SAMPLE_SDC, TIMING_SAMPLE_TOP } from '@/lib/timing-sample'
 import { isTimingProposalExpired, type TimingState } from '@/lib/timing-contract'
@@ -64,6 +66,10 @@ function formatNs(value: number): string {
   return `${value > 0 ? '+' : ''}${value.toFixed(3)} ns`
 }
 
+function formatGiB(value: number | null): string {
+  return value === null ? '—' : `${(value / 1024 ** 3).toFixed(1)} GiB`
+}
+
 function formatDate(value: string, locale: 'en' | 'zh-TW'): string {
   return new Intl.DateTimeFormat(locale, {
     year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
@@ -82,12 +88,33 @@ export function TimingWorkbench() {
   const [typedToken, setTypedToken] = useState('')
   const [proposalClock, setProposalClock] = useState(() => Date.now())
   const [selectedStageKey, setSelectedStageKey] = useState<StageKey>('input')
+  const [readiness, setReadiness] = useState<TimingReadiness | null>(null)
+  const [readinessLoading, setReadinessLoading] = useState(true)
+  const [readinessUnavailable, setReadinessUnavailable] = useState(false)
+  const [readinessRefresh, setReadinessRefresh] = useState(0)
   const restored = useRef(false)
 
   const inputReady = rtl.trim().length > 0 && sdc.trim().length > 0 && /^[A-Za-z_][A-Za-z0-9_$]*$/.test(topModule)
   const locked = busy !== null
   const proposalExpiresAt = timing?.proposal?.expiresAt ?? null
   const proposalExpired = proposalExpiresAt ? isTimingProposalExpired(proposalExpiresAt, proposalClock) : false
+  const edaCanStart = readiness?.canStartEda === true
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void readTimingReadiness(API_URL, controller.signal).then(
+      (result) => setReadiness(result),
+      () => {
+        if (!controller.signal.aborted) {
+          setReadiness(null)
+          setReadinessUnavailable(true)
+        }
+      },
+    ).finally(() => {
+      if (!controller.signal.aborted) setReadinessLoading(false)
+    })
+    return () => controller.abort()
+  }, [readinessRefresh])
 
   useEffect(() => {
     if (!proposalExpiresAt) return
@@ -303,9 +330,24 @@ export function TimingWorkbench() {
             <h2 className="mt-3 text-3xl font-semibold text-slate-50">{t('timing.workbench.title')}</h2>
             <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">{t('timing.workbench.subtitle')}</p>
           </div>
-          <div className="rounded-2xl border border-slate-700 bg-slate-950/70 p-4 text-sm text-slate-300">
+          <div className={`rounded-2xl border p-4 text-sm ${readiness?.state === 'ready' ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-100' : readiness?.state === 'blocked' ? 'border-amber-500/40 bg-amber-500/10 text-amber-100' : 'border-slate-700 bg-slate-950/70 text-slate-300'}`} aria-live="polite">
             <p className="font-semibold text-slate-100">{t('timing.resource.title')}</p>
             <p className="mt-2 leading-6">{t('timing.resource.detail')}</p>
+            <p className="mt-3 font-semibold">
+              {readinessLoading
+                ? t('timing.resource.statusChecking')
+                : readinessUnavailable
+                  ? t('timing.resource.statusUnavailable')
+                  : readiness?.state === 'ready'
+                    ? `✓ ${t('timing.resource.statusReady')}`
+                    : t('timing.resource.statusBlocked')}
+            </p>
+            {readiness ? <dl className="mt-3 grid grid-cols-2 gap-3 text-xs">
+              <div><dt className="opacity-70">{t('timing.resource.availableMemory')}</dt><dd className="mt-1 font-mono">{formatGiB(readiness.resource.memoryAvailableBytes)}</dd></div>
+              <div><dt className="opacity-70">{t('timing.resource.freeDisk')}</dt><dd className="mt-1 font-mono">{formatGiB(readiness.resource.diskFreeBytes)}</dd></div>
+            </dl> : null}
+            {readiness?.state === 'blocked' ? <p className="mt-3 leading-6">{t('timing.resource.recovery')}</p> : null}
+            <button type="button" onClick={() => { setReadinessLoading(true); setReadinessUnavailable(false); setReadinessRefresh((value) => value + 1) }} disabled={readinessLoading} className="mt-3 rounded-lg border border-current/30 px-3 py-2 text-xs font-semibold hover:bg-white/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 disabled:cursor-wait disabled:opacity-50">{t('timing.resource.refresh')}</button>
           </div>
         </div>
 
@@ -352,13 +394,14 @@ export function TimingWorkbench() {
             <input id="timing-sdc-file" type="file" accept=".sdc,text/plain" disabled={locked} onChange={(event) => void importFile(event, MAX_TIMING_SDC_BYTES, setSdc)} className="mt-2 block max-w-full text-xs text-slate-400 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-xs file:text-slate-100" aria-label={t('timing.input.sdcFile')} />
             <textarea id="timing-sdc" value={sdc} onChange={(event) => changeInput(setSdc)(event.target.value)} disabled={locked} rows={5} placeholder={t('timing.input.sdcPlaceholder')} className="mt-3 w-full resize-y rounded-2xl border border-slate-700 bg-slate-900 p-4 font-mono text-xs leading-6 text-slate-100 outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-500/20 disabled:opacity-60" />
 
-              {!timing?.metrics ? <button type="button" onClick={() => void analyze()} disabled={!inputReady || locked} className="mt-6 w-full rounded-2xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">{busy === 'analyze' ? t('timing.action.analyzing') : t('timing.action.analyze')}</button> : null}
+              {!timing?.metrics ? <button type="button" onClick={() => void analyze()} disabled={!inputReady || locked || !edaCanStart} className="mt-6 w-full rounded-2xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">{busy === 'analyze' ? t('timing.action.analyzing') : t('timing.action.analyze')}</button> : null}
             </section>
 
             <TimingAgentPanel
               design={inputReady ? { rtl, sdc, topModule } : null}
               timingRunId={runId}
               timingPhase={timing?.phase ?? null}
+              edaCanStart={edaCanStart}
               disabled={locked}
               onBusyChange={(agentBusy) => setBusy(agentBusy ? 'assistant' : null)}
               onResult={applyAgentResult}
@@ -401,7 +444,7 @@ export function TimingWorkbench() {
                 <input id="timing-confirmation-token" value={typedToken} onChange={(event) => setTypedToken(event.target.value.trim().toLowerCase())} maxLength={12} autoComplete="off" spellCheck={false} className="mt-3 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 font-mono text-sm tracking-[0.18em] text-slate-100 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-500/20" />
                 <p className="mt-3 text-xs leading-5 text-slate-500">{t('timing.confirm.identity')}</p>
                 <button type="button" onClick={() => void confirm()} disabled={typedToken !== timing.proposal.confirmationToken || locked} className="mt-4 w-full rounded-xl bg-amber-400 px-4 py-3 text-sm font-semibold text-slate-950 hover:bg-amber-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">{busy === 'confirm' ? t('timing.action.confirming') : t('timing.action.confirm')}</button>
-              </div> : <button type="button" onClick={() => void execute()} disabled={locked || timing.phase === 'comparison_ready'} className="mt-5 w-full rounded-2xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-slate-950 hover:bg-cyan-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">{busy === 'candidate' ? t('timing.action.executing') : t('timing.action.execute')}</button>}
+              </div> : <button type="button" onClick={() => void execute()} disabled={locked || !edaCanStart || timing.phase === 'comparison_ready'} className="mt-5 w-full rounded-2xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-slate-950 hover:bg-cyan-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">{busy === 'candidate' ? t('timing.action.executing') : t('timing.action.execute')}</button>}
             </section> : null}
 
             {timing?.comparison ? <section className="rounded-3xl border border-cyan-500/30 bg-cyan-500/5 p-5 sm:p-6">

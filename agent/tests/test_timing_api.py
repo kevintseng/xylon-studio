@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
+from agent import local_app
 from agent.api.main import app
 from agent.api.routes import pipeline as pipeline_routes
 from agent.api.routes import timing as timing_routes
@@ -68,6 +69,117 @@ def test_timing_api_wires_analysis_proposal_confirmation_and_candidate(monkeypat
     assert confirmation.json()["phase"] == "confirmed"
     assert candidate.json()["phase"] == "comparison_ready"
     assert [command for command, _payload in calls] == ["analyze", "propose", "confirm", "execute"]
+
+
+def test_timing_readiness_exposes_safe_mode_before_heavy_work(monkeypatch):
+    snapshot = local_app.ResourceSnapshot(
+        logical_cpus=12,
+        load_one_minute=4.0,
+        memory_free_percent=30,
+        disk_free_bytes=40 * 1024**3,
+        memory_available_bytes=4 * 1024**3,
+    )
+    monkeypatch.setattr(
+        timing_routes,
+        "collect_resource_snapshot",
+        lambda _repo_root: snapshot,
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/timing/readiness")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "schema_version": "xylon-timing-readiness/v1",
+        "state": "blocked",
+        "can_start_eda": False,
+        "requested_cpus": 1,
+        "resource": {
+            "logical_cpus": 12,
+            "load_one_minute": 4.0,
+            "memory_available_bytes": 4 * 1024**3,
+            "memory_free_percent": 30,
+            "disk_free_bytes": 40 * 1024**3,
+        },
+        "blockers": [
+            "memory available 4.0 GiB is below the 8.0 GiB OpenROAD safety floor",
+            "memory free 30% is below the 35% OpenROAD safety floor",
+        ],
+    }
+
+
+def test_timing_readiness_uses_the_same_memory_ratio_as_openroad(monkeypatch):
+    snapshot = local_app.ResourceSnapshot(
+        logical_cpus=12,
+        load_one_minute=4.0,
+        memory_free_percent=30,
+        disk_free_bytes=40 * 1024**3,
+        memory_available_bytes=12 * 1024**3,
+    )
+    monkeypatch.setattr(timing_routes, "collect_resource_snapshot", lambda _repo_root: snapshot)
+
+    with TestClient(app) as client:
+        response = client.get("/api/timing/readiness")
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "blocked"
+    assert response.json()["blockers"] == [
+        "memory free 30% is below the 35% OpenROAD safety floor",
+    ]
+
+
+def test_timing_readiness_fails_closed_for_an_invalid_cpu_budget(monkeypatch):
+    monkeypatch.setenv("XYLON_OPENROAD_CPUS", "8")
+    monkeypatch.setattr(
+        timing_routes,
+        "collect_resource_snapshot",
+        lambda _repo_root: local_app.ResourceSnapshot(
+            logical_cpus=12,
+            load_one_minute=1.0,
+            memory_free_percent=60,
+            disk_free_bytes=40 * 1024**3,
+            memory_available_bytes=12 * 1024**3,
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/timing/readiness")
+
+    assert response.status_code == 200
+    assert response.json()["can_start_eda"] is False
+    assert response.json()["requested_cpus"] is None
+    assert response.json()["blockers"] == [
+        "OpenROAD CPU budget must be an integer from 1 to 4",
+    ]
+
+
+def test_heavy_timing_route_rechecks_admission_before_the_bridge(monkeypatch):
+    bridge = AsyncMock()
+    monkeypatch.setattr(timing_routes, "_invoke_timing_bridge", bridge)
+    monkeypatch.setattr(
+        timing_routes,
+        "collect_resource_snapshot",
+        lambda _repo_root: local_app.ResourceSnapshot(
+            logical_cpus=12,
+            load_one_minute=2.0,
+            memory_free_percent=60,
+            disk_free_bytes=40 * 1024**3,
+            memory_available_bytes=4 * 1024**3,
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/api/timing/runs", json={
+            "run_id": "a" * 32,
+            "rtl": "module demo(input wire clk); endmodule",
+            "sdc": "create_clock -name core -period 1.2 [get_ports {clk}]",
+            "top_module": "demo",
+            "platform": "sky130hd",
+        })
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["error"] == "ResourceAdmissionBlocked"
+    bridge.assert_not_awaited()
 
 
 def test_timing_api_rejects_unsupported_platform_and_extra_fields():
@@ -164,6 +276,7 @@ async def _measure_peak_shared_eda_work() -> int:
     with (
         patch("agent.api.routes.pipeline.run_pipeline", new=fake_pipeline),
         patch("agent.api.routes.timing._invoke_timing_bridge", new=fake_bridge),
+        patch("agent.api.routes.timing._require_timing_admission", new=AsyncMock()),
     ):
         results = await asyncio.gather(
             pipeline_routes._run_pipeline_in_local_slot(rtl_code="demo"),
