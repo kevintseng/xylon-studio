@@ -194,6 +194,29 @@ def test_executor_cancellation_before_launch_starts_no_sandbox_process():
     cleanup.assert_not_called()
 
 
+def test_executor_cancellation_probe_failure_starts_no_sandbox_process():
+    executor = SandboxExecutor("xylon-verilator")
+
+    def broken_probe():
+        raise RuntimeError("cancellation source unavailable")
+
+    with (
+        patch("agent.sandbox.executor.subprocess.Popen") as popen,
+        patch.object(executor, "_cleanup_after_interruption") as cleanup,
+    ):
+        with pytest.raises(ExecutionError) as caught:
+            executor.execute(
+                ["tool"],
+                timeout=60,
+                cancel_requested=broken_probe,
+            )
+
+    assert caught.value.failure_kind == "infrastructure"
+    assert "Cancellation check failed before launch" in str(caught.value)
+    popen.assert_not_called()
+    cleanup.assert_not_called()
+
+
 def test_executor_cancellation_fails_closed_when_cleanup_is_unverified():
     executor = SandboxExecutor("xylon-verilator")
     process = _FakePopen(times_out=True)

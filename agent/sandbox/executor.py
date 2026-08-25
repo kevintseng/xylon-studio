@@ -470,7 +470,20 @@ echo "process group $pid terminated"
         if timeout is None:
             timeout = self.DEFAULT_TIMEOUT
 
-        if cancel_requested is not None and cancel_requested():
+        try:
+            cancelled_before_launch = (
+                cancel_requested is not None and cancel_requested()
+            )
+        except Exception as error:
+            raise ExecutionError(
+                message=f"Cancellation check failed before launch: {error}",
+                stdout="",
+                stderr=str(error),
+                exit_code=-1,
+                failure_kind="infrastructure",
+            ) from error
+
+        if cancelled_before_launch:
             raise ExecutionError(
                 message=(
                     "Execution cancelled before launch; "
