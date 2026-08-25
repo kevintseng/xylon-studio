@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+real_docker="${XYLON_LIBRELANE_DOCKER_REAL:?XYLON_LIBRELANE_DOCKER_REAL is required}"
+[[ -x "${real_docker}" ]] || { echo "LibreLane Docker engine is not executable" >&2; exit 2; }
+
+if [[ "${1:-}" != "run" ]]; then
+  exec "${real_docker}" "$@"
+fi
+shift
+
+for argument in "$@"; do
+  case "${argument}" in
+    --privileged|--privileged=*|--network|--network=*|--cpus|--cpus=*|--memory|--memory=*|--memory-swap|--memory-swap=*|--pids-limit|--pids-limit=*|--platform|--platform=*|--read-only|--read-only=*|--cap-add|--cap-add=*|--security-opt|--security-opt=*|--tmpfs|--tmpfs=*)
+      echo "LibreLane Docker resource/security override is not allowed: ${argument}" >&2
+      exit 2
+      ;;
+  esac
+done
+
+exec "${real_docker}" run \
+  --platform linux/arm64 \
+  --cpus 1 \
+  --memory 8g \
+  --memory-swap 8g \
+  --pids-limit 256 \
+  --network none \
+  --read-only \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --tmpfs /tmp:rw,noexec,nosuid,size=512m \
+  "$@"

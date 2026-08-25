@@ -1,0 +1,53 @@
+import assert from 'node:assert/strict'
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import test from 'node:test'
+
+const execFileAsync = promisify(execFile)
+const repoRoot = path.resolve(import.meta.dirname, '../..', '..')
+const sandbox = path.join(repoRoot, 'runtime/librelane/bin/docker-sandbox')
+const dockerShim = path.join(repoRoot, 'runtime/librelane/bin/docker')
+const launcher = path.join(repoRoot, 'scripts/xylon-librelane')
+
+test('LibreLane Docker shim injects fixed resource and network limits', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'xylon-librelane-docker-'))
+  const fakeDocker = path.join(temp, 'docker')
+  const log = path.join(temp, 'args')
+  await writeFile(fakeDocker, `#!/usr/bin/env bash\nprintf '%s\\n' "$*" > ${JSON.stringify(log)}\n`)
+  await chmod(fakeDocker, 0o700)
+  try {
+    await execFileAsync('bash', [dockerShim, 'run', '--name', 'test', 'image', 'command'], {
+      env: { ...process.env, XYLON_LIBRELANE_DOCKER_REAL: fakeDocker },
+    })
+    const args = await readFile(log, 'utf8')
+    assert.match(args, /--platform linux\/arm64/)
+    assert.match(args, /--cpus 1/)
+    assert.match(args, /--memory 8g/)
+    assert.match(args, /--network none/)
+    for (const override of ['--network', '--network=host', '--cpus=2', '--memory=16g', '--platform=linux/amd64', '--tmpfs=/tmp:rw']) {
+      await assert.rejects(
+        execFileAsync('bash', [dockerShim, 'run', override, 'image', 'command'], {
+          env: { ...process.env, XYLON_LIBRELANE_DOCKER_REAL: fakeDocker },
+        }),
+        /resource\/security override is not allowed/,
+      )
+    }
+  } finally {
+    await rm(temp, { recursive: true, force: true })
+  }
+})
+
+test('LibreLane launcher documents a bounded run and fails before missing resources', async () => {
+  const source = await readFile(launcher, 'utf8')
+  assert.match(source, /LIBRELANE_IMAGE_OVERRIDE/)
+  assert.match(source, /XYLON_LIBRELANE_PDK_ROOT/)
+  assert.match(source, /local resource admission blocked LibreLane/)
+  assert.match(source, /--docker-no-tty --pdk-root/)
+  assert.match(source, /run directory must stay inside \.xylon\/timing\/runs/)
+  assert.match(source, /runtime_bin.*PATH/)
+  await readFile(dockerShim, 'utf8')
+  assert.doesNotMatch(source, /realpath -e/)
+})
