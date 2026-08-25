@@ -7,6 +7,33 @@ from pathlib import Path
 import pytest
 
 from agent.openroad import librelane_adapter as adapter
+from agent.openroad.project_manifest import build_project_manifest
+from agent.openroad.project_store import store_project_bundle
+
+
+def _project_files() -> list[tuple[str, str]]:
+    return [
+        ("rtl/helper.sv", "module helper(input logic a, output logic y); assign y = a; endmodule\n"),
+        (
+            "rtl/counter.sv",
+            '`include "defs.svh"\nmodule counter(input logic clk, output logic q); always_ff @(posedge clk) q <= `RESET_VALUE; endmodule\n',
+        ),
+        ("rtl/defs.svh", "`define RESET_VALUE 1'b0\n"),
+        ("constraints/counter.sdc", "create_clock -name clk -period 10 [get_ports clk]\n"),
+    ]
+
+
+def _project_manifest(root: str) -> dict[str, object]:
+    return {
+        "root": root,
+        "top": "counter",
+        "platform": "sky130hd",
+        "rtl": ["rtl/counter.sv", "rtl/helper.sv"],
+        "include_dirs": [],
+        "sdc": "constraints/counter.sdc",
+        "clocks": [{"name": "clk", "port": "clk", "period_ns": 10}],
+        "macros": [],
+    }
 
 
 def test_parse_request_is_strict_and_allowlisted() -> None:
@@ -127,6 +154,114 @@ def test_build_config_rejects_escape_and_invalid_period() -> None:
         )
 
 
+def test_materialize_project_writes_owned_inputs_and_strict_request(tmp_path: Path) -> None:
+    relative_root = store_project_bundle(tmp_path, project_id="counter-librelane", files=_project_files())
+    manifest = build_project_manifest(tmp_path, _project_manifest(relative_root))
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    project = adapter.materialize_project(
+        tmp_path,
+        manifest,
+        run_dir=run_dir,
+        run_id="abcd1234",
+    )
+
+    assert project.request == {
+        "platform": "sky130hd",
+        "run_id": "abcd1234",
+        "config_path": "inputs/librelane/config.json",
+    }
+    assert project.top == "counter"
+    assert project.source_revision == manifest["source_revision"]
+    assert "`include" not in (run_dir / project.design_path).read_text(encoding="utf-8")
+    assert "`define RESET_VALUE" in (run_dir / project.design_path).read_text(encoding="utf-8")
+    assert (run_dir / project.sdc_path).read_text(encoding="utf-8").startswith("create_clock")
+    config = json.loads((run_dir / project.config_path).read_text(encoding="utf-8"))
+    assert config["DESIGN_NAME"] == "counter"
+    assert config["VERILOG_FILES"] == ["dir::inputs/design.v"]
+    assert config["PNR_SDC_FILE"] == "dir::inputs/design.sdc"
+    assert "VERILOG_INCLUDE_DIRS" not in config
+
+
+def test_materialize_project_rejects_missing_clock_or_invalid_source_revision(tmp_path: Path) -> None:
+    relative_root = store_project_bundle(tmp_path, project_id="counter-bad", files=_project_files())
+    manifest = build_project_manifest(tmp_path, _project_manifest(relative_root))
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    with pytest.raises(adapter.LibreLaneAdapterError, match="at least one clock"):
+        adapter.materialize_project(
+            tmp_path,
+            {**manifest, "clocks": []},
+            run_dir=run_dir,
+            run_id="abcd1234",
+        )
+    with pytest.raises(adapter.LibreLaneAdapterError, match="source_revision"):
+        adapter.materialize_project(
+            tmp_path,
+            {**manifest, "source_revision": "not-a-revision"},
+            run_dir=run_dir,
+            run_id="abcd1234",
+        )
+
+
+def test_materialize_project_rejects_symlink_run_dir(tmp_path: Path) -> None:
+    relative_root = store_project_bundle(tmp_path, project_id="counter-symlink", files=_project_files())
+    manifest = build_project_manifest(tmp_path, _project_manifest(relative_root))
+    target_dir = tmp_path / "target-run"
+    target_dir.mkdir()
+    run_link = tmp_path / "run-link"
+    run_link.symlink_to(target_dir, target_is_directory=True)
+
+    with pytest.raises(adapter.LibreLaneAdapterError, match="run directory must not be a symbolic link"):
+        adapter.materialize_project(
+            tmp_path,
+            manifest,
+            run_dir=run_link,
+            run_id="abcd1234",
+        )
+
+
+def test_execution_plan_binds_fixed_launcher_and_config_identity(tmp_path: Path) -> None:
+    relative_root = store_project_bundle(tmp_path, project_id="counter-plan", files=_project_files())
+    manifest = build_project_manifest(tmp_path, _project_manifest(relative_root))
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    project = adapter.materialize_project(
+        tmp_path,
+        manifest,
+        run_dir=run_dir,
+        run_id="abcd1234",
+    )
+
+    plan = adapter.build_execution_plan(
+        adapter.LibreLaneProbe("available", "/opt/librelane/python", "3.0.10", "ok"),
+        run_dir=run_dir,
+        project=project,
+    )
+
+    assert plan.identity.backend == "librelane"
+    assert plan.command.launcher_path == "scripts/xylon-librelane"
+    assert plan.command.arguments == ("run", str(run_dir.resolve()), "inputs/librelane/config.json")
+    assert plan.command.env_contract == ("XYLON_LIBRELANE_PYTHON", "XYLON_LIBRELANE_PDK_ROOT")
+    assert len(plan.config_identity_sha256) == 64
+    assert len(plan.plan_identity_sha256) == 64
+
+    config_path = run_dir / project.config_path
+    original = json.loads(config_path.read_text(encoding="utf-8"))
+    changed = dict(original)
+    changed["CLOCK_PERIOD"] = 12
+    config_path.write_text(json.dumps(changed, sort_keys=True) + "\n", encoding="utf-8")
+    second = adapter.build_execution_plan(
+        adapter.LibreLaneProbe("available", "/opt/librelane/python", "3.0.10", "ok"),
+        run_dir=run_dir,
+        project=project,
+    )
+    assert second.config_identity_sha256 != plan.config_identity_sha256
+    assert second.plan_identity_sha256 != plan.plan_identity_sha256
+
+
 def test_config_path_stays_inside_owned_run_dir(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -138,6 +273,73 @@ def test_config_path_stays_inside_owned_run_dir(tmp_path: Path) -> None:
     (run_dir / "escape.yaml").symlink_to(outside)
     with pytest.raises(adapter.LibreLaneAdapterError, match="symbolic link"):
         adapter.validate_config_path("escape.yaml", run_dir)
+
+
+def test_execute_plan_uses_only_fixed_launcher_and_requires_native_readback(tmp_path: Path) -> None:
+    relative_root = store_project_bundle(tmp_path, project_id="counter-exec", files=_project_files())
+    manifest = build_project_manifest(tmp_path, _project_manifest(relative_root))
+    run_dir = tmp_path / ".xylon" / "timing" / "runs" / ("a" * 32)
+    run_dir.mkdir(parents=True)
+    project = adapter.materialize_project(tmp_path, manifest, run_dir=run_dir, run_id="a" * 32)
+    launcher = tmp_path / "scripts" / "xylon-librelane"
+    launcher.parent.mkdir()
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o700)
+    plan = adapter.build_execution_plan(
+        adapter.LibreLaneProbe("available", "/opt/librelane/python", "3.0.10", "ok"),
+        run_dir=run_dir,
+        project=project,
+    )
+
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_runner(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((command, kwargs))
+        signoff = run_dir / "signoff" / "counter" / "openlane-signoff"
+        signoff.mkdir(parents=True)
+        (signoff / "resolved.json").write_text(
+            '{"PDK":"sky130A","STD_CELL_LIBRARY":"sky130_fd_sc_hd"}\n',
+            encoding="utf-8",
+        )
+        (signoff.parent / "metrics.csv").write_text("Metric,Value\ntiming__setup__wns,0.1\n", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout="flow ok\n", stderr="")
+
+    result = adapter.execute_plan(tmp_path, run_dir=run_dir, plan=plan, runner=fake_runner)
+    assert result["state"] == "succeeded"
+    assert result["readback"]["metrics"]["timing__setup__wns"] == 0.1
+    assert calls[0][0] == [str(launcher), "run", str(run_dir.resolve()), "inputs/librelane/config.json"]
+    assert calls[0][1]["cwd"] == tmp_path.resolve()
+
+
+def test_execute_plan_rejects_missing_readback_after_launcher_success(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".xylon" / "timing" / "runs" / ("b" * 32)
+    run_dir.mkdir(parents=True)
+    config = run_dir / "config.json"
+    config.write_text("{}\n", encoding="utf-8")
+    launcher = tmp_path / "scripts" / "xylon-librelane"
+    launcher.parent.mkdir()
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o700)
+    project = adapter.LibreLaneMaterializedProject(
+        request={"platform": "sky130hd", "run_id": "b" * 32, "config_path": "config.json"},
+        top="counter",
+        source_revision="a" * 40,
+        design_path="inputs/design.v",
+        sdc_path="inputs/design.sdc",
+        config_path="config.json",
+    )
+    plan = adapter.build_execution_plan(
+        adapter.LibreLaneProbe("available", "/opt/librelane/python", "3.0.10", "ok"),
+        run_dir=run_dir,
+        project=project,
+    )
+    with pytest.raises(adapter.LibreLaneExecutionError, match="native metrics"):
+        adapter.execute_plan(
+            tmp_path,
+            run_dir=run_dir,
+            plan=plan,
+            runner=lambda command, **kwargs: subprocess.CompletedProcess(command, 0, stdout="", stderr=""),
+        )
 
 
 def test_readback_requires_native_librelane_outputs(tmp_path: Path) -> None:

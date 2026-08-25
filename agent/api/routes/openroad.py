@@ -3,17 +3,35 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
+import shutil
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent.openroad.librelane_adapter import (
+    LibreLaneAdapterError,
+    build_config,
+    build_identity,
+    probe_librelane,
+)
+from agent.openroad.librelane_adapter import (
+    parse_request as parse_librelane_request,
+)
 from agent.openroad.librelane_readiness import collect_librelane_readiness
 from agent.openroad.project_manifest import preflight_project_manifest
-from agent.openroad.project_store import ProjectStoreError, store_project_bundle
+from agent.openroad.project_store import (
+    MAX_PROJECT_FILES,
+    MAX_PROJECT_TOTAL_BYTES,
+    SUPPORTED_PROJECT_FILE_EXTENSIONS,
+    ProjectStoreError,
+    store_project_bundle,
+)
 
 router = APIRouter(tags=["openroad"])
 
@@ -71,6 +89,13 @@ class ProjectImportRequest(BaseModel):
     clocks: list[ProjectClockRequest] = Field(min_length=1)
     macros: list[str] = Field(default_factory=list)
     files: list[ProjectFileRequest] = Field(min_length=1, max_length=32)
+
+
+class LibreLaneProjectPreparationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$")
+    project_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,63}$")
 
 
 def _path_within_repo(candidate: Path) -> bool:
@@ -201,6 +226,174 @@ def _load_snapshot() -> dict[str, Any]:
     return _canonical_snapshot(payload)
 
 
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _sha256_json(value: Any) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _load_ready_imported_project_manifest(project_id: str) -> dict[str, Any]:
+    project_root = REPO_ROOT / ".xylon" / "projects" / project_id
+    manifest_path = project_root / "manifest.json"
+    if not manifest_path.is_file() or manifest_path.is_symlink():
+        raise ProjectStoreError("imported project manifest is unavailable; import the bundle again")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict) or manifest.get("project_id") != project_id:
+        raise ProjectStoreError("imported project manifest identity is invalid")
+    if manifest.get("state") != "ready":
+        raise ProjectStoreError("project preflight is not ready; correct the bundle before preparing LibreLane")
+    declared_manifest = manifest.get("manifest")
+    if not isinstance(declared_manifest, dict):
+        raise ProjectStoreError("imported project manifest payload is invalid")
+    current_preflight = preflight_project_manifest(REPO_ROOT, declared_manifest)
+    if current_preflight["state"] != "ready" or current_preflight["manifest"] is None:
+        failure = current_preflight.get("failure") or {}
+        raise ProjectStoreError(
+            str(failure.get("message", "the imported project changed after preflight"))
+        )
+    current_manifest = current_preflight["manifest"]
+    if current_manifest.get("source_revision") != declared_manifest.get("source_revision"):
+        raise ProjectStoreError("imported project source revision changed after preflight")
+    return current_manifest
+
+
+def _collect_prepared_project_files(project_root: Path, manifest: dict[str, Any]) -> list[str]:
+    files: set[str] = set(str(path) for path in manifest.get("rtl", []))
+    files.add(str(manifest.get("sdc", "")))
+    total_bytes = 0
+    for directory in manifest.get("include_dirs", []):
+        include_root = (project_root / str(directory)).resolve()
+        if include_root.is_symlink() or not include_root.is_dir() or not include_root.is_relative_to(project_root):
+            raise ProjectStoreError("project include directory is no longer a local regular directory")
+        for candidate in include_root.rglob("*"):
+            if candidate.is_symlink():
+                raise ProjectStoreError("project include directory contains an unsupported symbolic link")
+            if candidate.is_dir():
+                continue
+            resolved = candidate.resolve()
+            if not resolved.is_file() or not resolved.is_relative_to(project_root):
+                raise ProjectStoreError("project include directory contains an unsupported file")
+            relative = resolved.relative_to(project_root).as_posix()
+            if resolved.suffix.lower() not in SUPPORTED_PROJECT_FILE_EXTENSIONS:
+                continue
+            files.add(relative)
+    ordered = sorted(files)
+    if not ordered or len(ordered) > MAX_PROJECT_FILES:
+        raise ProjectStoreError(
+            f"prepared LibreLane project must contain 1 to {MAX_PROJECT_FILES} files"
+        )
+    for relative in ordered:
+        source = (project_root / relative).resolve()
+        if source.is_symlink() or not source.is_file() or not source.is_relative_to(project_root):
+            raise ProjectStoreError(f"project file is not a local regular file: {relative}")
+        total_bytes += source.stat().st_size
+        if total_bytes > MAX_PROJECT_TOTAL_BYTES:
+            raise ProjectStoreError("prepared LibreLane project exceeds the 4 MiB total limit")
+    return ordered
+
+
+def _stage_librelane_preparation(
+    request: LibreLaneProjectPreparationRequest,
+    manifest: dict[str, Any],
+    readiness: dict[str, Any],
+) -> dict[str, Any]:
+    project_root = (REPO_ROOT / str(manifest.get("root", ""))).resolve()
+    if project_root.is_symlink() or not project_root.is_dir() or not project_root.is_relative_to(REPO_ROOT.resolve()):
+        raise ProjectStoreError("imported project root is unavailable")
+    clocks = manifest.get("clocks")
+    if not isinstance(clocks, list) or len(clocks) != 1 or not isinstance(clocks[0], dict):
+        raise ProjectStoreError("LibreLane preparation currently supports exactly one declared clock")
+    staged_files = _collect_prepared_project_files(project_root, manifest)
+    run_root = REPO_ROOT / ".xylon" / "timing" / "runs" / request.run_id
+    if run_root.exists() or run_root.is_symlink():
+        raise FileExistsError("run_id already exists; choose a new local LibreLane run identity")
+    inputs_root = run_root / "inputs" / "project"
+    try:
+        inputs_root.mkdir(parents=True, mode=0o700)
+        for relative in staged_files:
+            source = (project_root / relative).resolve()
+            destination = inputs_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            shutil.copyfile(source, destination)
+            destination.chmod(0o600)
+        clock = clocks[0]
+        config = build_config(
+            top=str(manifest.get("top", "")),
+            rtl_paths=[f"inputs/project/{relative}" for relative in manifest.get("rtl", [])],
+            sdc_path=f"inputs/project/{manifest.get('sdc', '')}",
+            clock_port=str(clock.get("port", "")),
+            clock_period_ns=clock.get("period_ns"),
+            include_dirs=[f"inputs/project/{directory}" for directory in manifest.get("include_dirs", [])],
+        )
+        config_path = run_root / "config.json"
+        config_path.write_text(
+            json.dumps(config, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        config_path.chmod(0o600)
+        adapter_request = parse_librelane_request(
+            {
+                "platform": manifest.get("platform"),
+                "run_id": request.run_id,
+                "config_path": "config.json",
+            }
+        )
+        state = "prepared" if readiness.get("state") == "ready" else "blocked"
+        response = {
+            "schema_version": "xylon-librelane-project-preparation/v1",
+            "run_id": request.run_id,
+            "project_id": request.project_id,
+            "state": state,
+            "source_revision": manifest.get("source_revision"),
+            "readiness": readiness,
+            "runtime_identity": None,
+            "preparation": {
+                "root": f".xylon/timing/runs/{request.run_id}",
+                "inputs_root": "inputs/project",
+                "config_path": "config.json",
+                "config_sha256": hashlib.sha256(config_path.read_bytes()).hexdigest(),
+                "adapter_request": adapter_request,
+                "files": staged_files,
+            },
+            "failure": None,
+            "next_action": (
+                "Use the exact saved config handoff with a future bounded LibreLane executor."
+                if state == "prepared"
+                else "Resolve the listed LibreLane readiness blockers before starting any subprocess."
+            ),
+        }
+        manifest_payload = {
+            **response,
+            "manifest": {
+                "top": manifest.get("top"),
+                "platform": manifest.get("platform"),
+                "rtl": manifest.get("rtl"),
+                "include_dirs": manifest.get("include_dirs"),
+                "sdc": manifest.get("sdc"),
+                "clocks": manifest.get("clocks"),
+            },
+        }
+        if state == "blocked":
+            manifest_payload["failure"] = {
+                "code": "LibreLaneReadinessBlocked",
+                "message": "Xylon prepared the LibreLane run inputs but did not start any subprocess.",
+                "recovery": str(readiness.get("next_action", "Resolve the first readiness blocker, then retry.")),
+            }
+            response["failure"] = manifest_payload["failure"]
+        manifest_path = run_root / "manifest.json"
+        manifest_path.write_text(
+            json.dumps(manifest_payload, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        manifest_path.chmod(0o600)
+        return response
+    except Exception:
+        shutil.rmtree(run_root, ignore_errors=True)
+        raise
+
+
 @router.get("/openroad/snapshot")
 async def get_openroad_snapshot() -> dict[str, Any]:
     """Return the canonical local OpenROAD snapshot contract."""
@@ -211,6 +404,44 @@ async def get_openroad_snapshot() -> dict[str, Any]:
 async def get_librelane_readiness() -> dict[str, object]:
     """Return measured pinned-LibreLane readiness without starting or pulling anything."""
     return await asyncio.to_thread(collect_librelane_readiness, REPO_ROOT)
+
+
+@router.post("/openroad/librelane-project-runs", status_code=201)
+async def post_librelane_project_preparation(
+    request: LibreLaneProjectPreparationRequest,
+) -> dict[str, Any]:
+    """Prepare an imported project for a future LibreLane run without starting any subprocess."""
+    try:
+        manifest = _load_ready_imported_project_manifest(request.project_id)
+        probe = probe_librelane()
+        readiness = await asyncio.to_thread(collect_librelane_readiness, REPO_ROOT, probe=probe)
+        result = await asyncio.to_thread(_stage_librelane_preparation, request, manifest, readiness)
+        if probe.state == "available":
+            identity = build_identity(probe, platform=str(manifest.get("platform", "")))
+            result["runtime_identity"] = asdict(identity)
+            result["preparation"]["runtime_identity_sha256"] = _sha256_json(asdict(identity))
+            manifest_path = REPO_ROOT / result["preparation"]["root"] / "manifest.json"
+            persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+            persisted["runtime_identity"] = result["runtime_identity"]
+            persisted["preparation"]["runtime_identity_sha256"] = result["preparation"]["runtime_identity_sha256"]
+            manifest_path.write_text(
+                json.dumps(persisted, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        return result
+    except FileExistsError as error:
+        raise HTTPException(status_code=409, detail={
+            "error": "LibreLaneRunConflict",
+            "message": str(error),
+            "recovery": "Choose a new local LibreLane run identity for this prepared project.",
+        }) from error
+    except (OSError, json.JSONDecodeError, KeyError, ProjectStoreError, LibreLaneAdapterError) as error:
+        raise HTTPException(status_code=422, detail={
+            "error": "LibreLaneProjectPreparationInvalid",
+            "message": str(error),
+            "recovery": "Import the project again, keep one declared clock, and correct the first readiness or project blocker before preparing LibreLane.",
+            "project_id": request.project_id,
+        }) from error
 
 
 @router.post("/openroad/project-preflight")

@@ -19,6 +19,8 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from agent.openroad.project_store import ProjectStoreError, materialize_timing_input
+
 LIBRELANE_VERSION = "3.0.10"
 ADAPTER_SCHEMA_VERSION = "xylon-librelane-runtime-adapter/v1"
 SUPPORTED_PLATFORM = "sky130hd"
@@ -26,16 +28,23 @@ LIBRELANE_IMAGE = "ghcr.io/librelane/librelane@sha256:322b81f76d22053e5b92f9eaa6
 LIBRELANE_CONTAINER_PLATFORM = "linux/arm64"
 LIBRELANE_PDK = "sky130A"
 LIBRELANE_SCL = "sky130_fd_sc_hd"
+LIBRELANE_LAUNCHER = "scripts/xylon-librelane"
+MAX_EXECUTION_OUTPUT_BYTES = 64 * 1024
 ALLOWED_REQUEST_FIELDS = frozenset({"platform", "run_id", "config_path"})
 FORBIDDEN_EXECUTION_FIELDS = frozenset(
     {"argv", "command", "docker_args", "model", "prompt", "script", "shell", "tcl"}
 )
 IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$")
 VERILOG_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,127}$")
+SOURCE_REVISION_RE = re.compile(r"^[a-f0-9]{40}$|^[a-f0-9]{64}$")
 
 
 class LibreLaneAdapterError(ValueError):
     """Raised when a LibreLane identity or request cannot be trusted."""
+
+
+class LibreLaneExecutionError(LibreLaneAdapterError):
+    """Raised when the fixed LibreLane launcher cannot produce verified output."""
 
 
 @dataclass(frozen=True)
@@ -61,8 +70,55 @@ class LibreLaneIdentity:
     temporary: bool
 
 
+@dataclass(frozen=True)
+class LibreLaneMaterializedProject:
+    request: dict[str, str]
+    top: str
+    source_revision: str
+    design_path: str
+    sdc_path: str
+    config_path: str
+
+
+@dataclass(frozen=True)
+class LibreLaneCommand:
+    launcher_path: str
+    arguments: tuple[str, ...]
+    env_contract: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class LibreLaneExecutionPlan:
+    identity: LibreLaneIdentity
+    project: LibreLaneMaterializedProject
+    command: LibreLaneCommand
+    config_identity_sha256: str
+    plan_identity_sha256: str
+
+
 def _bounded(value: object, maximum: int = 512) -> str:
     return " ".join(str(value).split())[:maximum]
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _sha256_json(value: object) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _owned_run_root(run_dir: Path) -> Path:
+    declared = Path(run_dir)
+    if declared.exists() and declared.is_symlink():
+        raise LibreLaneAdapterError("run directory must not be a symbolic link")
+    if declared.exists() and not declared.is_dir():
+        raise LibreLaneAdapterError("run directory must be a regular directory")
+    declared.mkdir(parents=True, exist_ok=True, mode=0o700)
+    root = declared.resolve()
+    if not root.is_dir():
+        raise LibreLaneAdapterError("run directory must be a regular directory")
+    return root
 
 
 def _python_candidate(value: str | None) -> str | None:
@@ -147,14 +203,13 @@ def build_identity(probe: LibreLaneProbe, platform: str = SUPPORTED_PLATFORM) ->
 
 
 def identity_sha256(identity: LibreLaneIdentity) -> str:
-    payload = json.dumps(asdict(identity), sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return _sha256_json(asdict(identity))
 
 
 def validate_config_path(config_path: str, run_dir: Path) -> Path:
     """Keep the future config inside the Xylon-owned run directory."""
 
-    root = run_dir.resolve()
+    root = _owned_run_root(run_dir)
     declared = root / config_path
     if declared.is_symlink():
         raise LibreLaneAdapterError("LibreLane config must not be a symbolic link")
@@ -173,6 +228,197 @@ def _relative_file(value: str, field: str) -> str:
     if candidate.name in {"", "."}:
         raise LibreLaneAdapterError(f"{field} must name a file")
     return candidate.as_posix()
+
+
+def _write_owned_text(run_dir: Path, relative: str, content: str) -> str:
+    root = _owned_run_root(run_dir)
+    destination = root / _relative_file(relative, "run file")
+    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    resolved_parent = destination.parent.resolve()
+    if not resolved_parent.is_relative_to(root):
+        raise LibreLaneAdapterError("run file must stay inside the owned run directory")
+    if destination.exists() and destination.is_symlink():
+        raise LibreLaneAdapterError("run file must not be a symbolic link")
+    destination.write_text(content, encoding="utf-8")
+    destination.chmod(0o600)
+    return destination.relative_to(root).as_posix()
+
+
+def _clock_from_manifest(manifest: Mapping[str, object]) -> tuple[str, float]:
+    raw_clocks = manifest.get("clocks")
+    if not isinstance(raw_clocks, list) or not raw_clocks:
+        raise LibreLaneAdapterError("project manifest must declare at least one clock")
+    first = raw_clocks[0]
+    if not isinstance(first, Mapping):
+        raise LibreLaneAdapterError("project manifest clock payload is invalid")
+    clock_port = first.get("port")
+    clock_period = first.get("period_ns")
+    if not isinstance(clock_port, str) or not VERILOG_IDENTIFIER_RE.fullmatch(clock_port):
+        raise LibreLaneAdapterError("project manifest clock port is invalid")
+    try:
+        period = float(clock_period)
+    except (TypeError, ValueError) as error:
+        raise LibreLaneAdapterError("project manifest clock period is invalid") from error
+    if period <= 0:
+        raise LibreLaneAdapterError("project manifest clock period is invalid")
+    return clock_port, period
+
+
+def _source_revision(manifest: Mapping[str, object]) -> str:
+    value = manifest.get("source_revision")
+    if not isinstance(value, str) or not SOURCE_REVISION_RE.fullmatch(value):
+        raise LibreLaneAdapterError("project manifest source_revision is invalid")
+    return value
+
+
+def materialize_project(
+    repo_root: Path,
+    manifest: Mapping[str, object],
+    *,
+    run_dir: Path,
+    run_id: str,
+) -> LibreLaneMaterializedProject:
+    """Write deterministic LibreLane-owned inputs from an imported Xylon project."""
+
+    if not isinstance(run_id, str) or not IDENTITY_RE.fullmatch(run_id):
+        raise LibreLaneAdapterError("invalid LibreLane run_id")
+    if not isinstance(manifest, Mapping):
+        raise LibreLaneAdapterError("project manifest must be a mapping")
+    top = manifest.get("top")
+    platform = manifest.get("platform")
+    if not isinstance(top, str) or not VERILOG_IDENTIFIER_RE.fullmatch(top):
+        raise LibreLaneAdapterError("project manifest top is invalid")
+    if platform != SUPPORTED_PLATFORM:
+        raise LibreLaneAdapterError(f"unsupported LibreLane platform: {platform}")
+    clock_port, clock_period = _clock_from_manifest(manifest)
+    source_revision = _source_revision(manifest)
+    try:
+        timing_input = materialize_timing_input(repo_root, dict(manifest))
+    except ProjectStoreError as error:
+        raise LibreLaneAdapterError(str(error)) from error
+
+    design_path = _write_owned_text(run_dir, "inputs/design.v", timing_input["rtl"])
+    sdc_path = _write_owned_text(run_dir, "inputs/design.sdc", timing_input["sdc"])
+    config = build_config(
+        top=top,
+        rtl_paths=[design_path],
+        sdc_path=sdc_path,
+        clock_port=clock_port,
+        clock_period_ns=clock_period,
+    )
+    config_path = _write_owned_text(run_dir, "inputs/librelane/config.json", _canonical_json(config) + "\n")
+    request = parse_request(
+        {"platform": SUPPORTED_PLATFORM, "run_id": run_id, "config_path": config_path}
+    )
+    return LibreLaneMaterializedProject(
+        request=request,
+        top=top,
+        source_revision=source_revision,
+        design_path=design_path,
+        sdc_path=sdc_path,
+        config_path=config_path,
+    )
+
+
+def build_execution_plan(
+    probe: LibreLaneProbe,
+    *,
+    run_dir: Path,
+    project: LibreLaneMaterializedProject,
+) -> LibreLaneExecutionPlan:
+    """Bind a materialized project to the fixed LibreLane launcher seam."""
+
+    identity = build_identity(probe, project.request["platform"])
+    config_path = validate_config_path(project.config_path, run_dir)
+    command = LibreLaneCommand(
+        launcher_path=LIBRELANE_LAUNCHER,
+        arguments=(
+            "run",
+            str(run_dir.resolve()),
+            project.config_path,
+        ),
+        env_contract=(
+            "XYLON_LIBRELANE_PYTHON",
+            "XYLON_LIBRELANE_PDK_ROOT",
+        ),
+    )
+    config_identity_sha256 = hashlib.sha256(config_path.read_bytes()).hexdigest()
+    plan_identity_sha256 = _sha256_json(
+        {
+            "identity": asdict(identity),
+            "project": asdict(project),
+            "command": asdict(command),
+            "config_identity_sha256": config_identity_sha256,
+        }
+    )
+    return LibreLaneExecutionPlan(
+        identity=identity,
+        project=project,
+        command=command,
+        config_identity_sha256=config_identity_sha256,
+        plan_identity_sha256=plan_identity_sha256,
+    )
+
+
+def _bounded_output(value: str | None) -> str:
+    text = value or ""
+    return text if len(text) <= MAX_EXECUTION_OUTPUT_BYTES else text[:MAX_EXECUTION_OUTPUT_BYTES] + "…"
+
+
+def execute_plan(
+    repo_root: Path,
+    *,
+    run_dir: Path,
+    plan: LibreLaneExecutionPlan,
+    timeout_seconds: float = 3600.0,
+    runner=subprocess.run,
+) -> dict[str, object]:
+    """Execute only the fixed launcher, then require native LibreLane readback."""
+
+    root = repo_root.resolve()
+    runs_root = (root / ".xylon" / "timing" / "runs").resolve()
+    owned_run = run_dir.resolve()
+    if not owned_run.is_relative_to(runs_root) or owned_run == runs_root:
+        raise LibreLaneExecutionError("LibreLane run directory is outside the Xylon-owned timing workspace")
+    launcher = (root / plan.command.launcher_path).resolve()
+    if launcher.is_symlink() or not launcher.is_file() or not os.access(launcher, os.X_OK):
+        raise LibreLaneExecutionError("the pinned LibreLane launcher is unavailable")
+    command = [str(launcher), *plan.command.arguments]
+    environment = os.environ.copy()
+    environment.setdefault("PYTHONUNBUFFERED", "1")
+    try:
+        result = runner(
+            command,
+            cwd=root,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise LibreLaneExecutionError("LibreLane execution exceeded the bounded timeout") from error
+    except OSError as error:
+        raise LibreLaneExecutionError("LibreLane launcher could not start") from error
+    stdout = _bounded_output(result.stdout)
+    stderr = _bounded_output(result.stderr)
+    if result.returncode != 0:
+        detail = _bounded(stderr or stdout or "the pinned LibreLane launcher returned a failure")
+        raise LibreLaneExecutionError(f"LibreLane execution failed: {detail}")
+    try:
+        readback = readback_artifacts(owned_run, plan.project.top, plan.identity)
+    except LibreLaneAdapterError as error:
+        raise LibreLaneExecutionError(str(error)) from error
+    return {
+        "state": "succeeded",
+        "run_id": plan.project.request["run_id"],
+        "identity": asdict(plan.identity),
+        "config_identity_sha256": plan.config_identity_sha256,
+        "plan_identity_sha256": plan.plan_identity_sha256,
+        "stdout": stdout,
+        "stderr": stderr,
+        "readback": readback,
+    }
 
 
 def build_config(
