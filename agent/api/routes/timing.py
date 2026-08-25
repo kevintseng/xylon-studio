@@ -750,10 +750,10 @@ async def cancel_timing_run(run_id: str, request: Request) -> dict:
                 "run_id": run_id,
             })
         return state
+    await _persist_operation(job, "cancelling")
+    job.cancel_requested.set()
     if job.process is not None:
         _signal_timing_bridge(job, signal.SIGUSR1)
-    job.cancel_requested.set()
-    await _persist_operation(job, "cancelling")
     try:
         await asyncio.wait_for(job.done.wait(), timeout=TIMING_CANCEL_WAIT_SECONDS)
     except TimeoutError:
