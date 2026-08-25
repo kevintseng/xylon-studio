@@ -1,14 +1,30 @@
 # XylonStudio
 
-用一句話告訴 Xylon 你要完成的 setup 時序工作。Xylon 會使用真實 RTL、SDC
-執行範圍受限的本機 OpenROAD 流程，讀回實測證據，並告訴你下一個可執行動作。
+Xylon 是在本機執行的 OpenROAD 時序助理。提供真實 RTL、SDC、頂層模組，再用一句話
+描述 setup 時序需求；Xylon 會執行受限流程，讀回實測證據，並告訴你下一步。
 
-[English](README.md)
+[English](README.md) · [產品網站](https://xylonstud.io)
 
-## 目前版本已實作
+![Xylon OpenROAD 時序工作台](web/public/screenshots/openroad-timing-workflow-v2.jpg)
 
-下列程式路徑已實作並有自動化檢查，但尚待同一個 commit 的真實 OpenROAD 與瀏覽器
-流程驗證。完成這道門檻前，不應把此工作分支視為已發布產品。
+## 公開網站與本機程式
+
+`xylonstud.io` 目前只提供 landing page，用來說明支援的 OpenROAD 時序流程與展示產品畫面；
+它不提供工作台、OpenROAD 執行環境或 timing API。
+
+真正可操作的本機程式仍然來自這個 checkout。執行 `scripts/xylon start` 後，操作入口
+會出現在 `/openroad` 與 `/pipeline`。
+
+## 第一個實用流程
+
+1. 匯入大小受限的 RTL、SDC，或載入內建 `sky130hd` 時序範例。
+2. 輸入：「檢查 setup 時序、找出最差路徑，並告訴我怎麼改善。」
+3. Xylon 會先驗證輸入與本機資源，通過後才啟動 OpenROAD。
+4. 查看實測 WNS、TNS 與最差 setup 路徑。
+5. 若有違規，審閱一個確切的 `PLACE_DENSITY 0.60 → 0.65` 提案。
+6. 只有確定要跑 candidate 才確認；完成後比較相同指標的前後差異。
+
+支援這個流程的功能包括：
 
 - **Setup 時序助理：**支援 OpenAI API 格式的本機模型只負責理解一句需求。受限工具會
   驗證 RTL／SDC，執行內建 `sky130hd` 流程，讀回 WNS、TNS 與最差 setup 路徑；
@@ -68,10 +84,20 @@ Xylon 不會自行下載或暗中選擇模型。
 5. 查看實測 WNS／TNS 與確切提案；只有確定要執行一次候選改善時才輸入代碼。
 6. 明確要求助理執行已確認的改善，或使用專用執行按鈕。只詢問狀態或說明不會啟動 EDA。
 
+## OpenROAD 無法啟動時
+
 同一個 Xylon API 程序啟動的時序工作會依序執行，並先檢查本機資源。命令列時序工具
 與獨立 MCP 執行環境仍是不同入口；在 Xylon 顯示已取得全機共用鎖之前，請勿同時執行。
 每次時序分析預設使用 1 CPU、8 GiB 記憶體上限、容器禁止連網，且只清理由 Xylon
-建立的資源。容量低於安全門檻時，Xylon 不會啟動 OpenROAD。
+建立的資源。資源不足時，工作台仍可使用，但 OpenROAD 不會啟動。先關閉或等候其他
+高負載工作，再執行：
+
+```bash
+scripts/xylon doctor
+scripts/xylon-openroad doctor
+```
+
+設計輸入與已保存結果不會消失。
 
 下列指令只管理目前工作目錄啟動的服務：
 
@@ -81,7 +107,7 @@ scripts/xylon logs --tail 100
 scripts/xylon stop
 ```
 
-## 能力邊界
+## 目前能力邊界
 
 | 目前版本已實作 | 尚未提供 |
 | --- | --- |
