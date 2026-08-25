@@ -44,6 +44,8 @@ test('LibreLane launcher documents a bounded run and fails before missing resour
   const source = await readFile(launcher, 'utf8')
   assert.match(source, /LIBRELANE_IMAGE_OVERRIDE/)
   assert.match(source, /XYLON_LIBRELANE_PDK_ROOT/)
+  assert.match(source, /\.xylon\/librelane\/venv\/bin\/python/)
+  assert.match(source, /\.xylon\/librelane\/pdk/)
   assert.match(source, /local resource admission blocked LibreLane/)
   assert.match(source, /--docker-no-tty --pdk-root/)
   assert.match(source, /run directory must stay inside \.xylon\/timing\/runs/)

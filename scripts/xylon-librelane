@@ -4,7 +4,8 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/.." && pwd)"
 image="ghcr.io/librelane/librelane@sha256:322b81f76d22053e5b92f9eaa6e4fb0440084fd02d77a4de0caa4ba7644c88c3"
-python_bin="${XYLON_LIBRELANE_PYTHON:-}"
+python_bin="${XYLON_LIBRELANE_PYTHON:-${repo_root}/.xylon/librelane/venv/bin/python}"
+pdk_root="${XYLON_LIBRELANE_PDK_ROOT:-${repo_root}/.xylon/librelane/pdk}"
 runtime_bin="${repo_root}/runtime/librelane/bin"
 
 die() { echo "BLOCKED: $*" >&2; exit 1; }
@@ -61,7 +62,7 @@ run_flow() {
   [[ "${config_abs}" == *.json || "${config_abs}" == *.yaml || "${config_abs}" == *.yml ]] || die "LibreLane config must be JSON or YAML"
   resource_preflight || die "local resource admission blocked LibreLane"
   docker image inspect "${image}" >/dev/null || die "pinned LibreLane image is missing; pull it only after resource preflight allows it"
-  [[ -n "${XYLON_LIBRELANE_PDK_ROOT:-}" && -d "${XYLON_LIBRELANE_PDK_ROOT}" && ! -L "${XYLON_LIBRELANE_PDK_ROOT}" ]] || die "XYLON_LIBRELANE_PDK_ROOT must name a regular local PDK directory"
+  [[ -d "${pdk_root}" && ! -L "${pdk_root}" ]] || die "XYLON_LIBRELANE_PDK_ROOT must name a regular local PDK directory"
   local real_docker
   real_docker="$(command -v docker)" || die "Docker is unavailable; start Docker and retry"
   mkdir -p "${run_abs}/home"
@@ -71,7 +72,7 @@ run_flow() {
     LIBRELANE_IMAGE_OVERRIDE="${image}" \
     XYLON_LIBRELANE_DOCKER_REAL="${real_docker}" \
     PATH="${runtime_bin}:${PATH}" \
-    "${python_bin}" -m librelane --docker-no-tty --pdk-root "${XYLON_LIBRELANE_PDK_ROOT:?XYLON_LIBRELANE_PDK_ROOT is required}" --dockerized "${config_abs}")
+    "${python_bin}" -m librelane --docker-no-tty --pdk-root "${pdk_root}" --dockerized "${config_abs}")
 }
 
 case "${1:-}" in
