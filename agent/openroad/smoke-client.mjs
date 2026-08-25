@@ -7,18 +7,20 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 const repoRoot = path.resolve(import.meta.dirname, '..', '..')
 const launcher = path.join(repoRoot, 'scripts', 'xylon-openroad')
+const XYLON_VERSION = '0.5.0'
 const transport = new StdioClientTransport({
   command: launcher,
   args: ['mcp'],
   env: { XYLON_OPENROAD_CPUS: process.env.XYLON_OPENROAD_CPUS ?? '4' },
 })
-const client = new Client({ name: 'xylon-openroad-smoke', version: '0.4.0' })
+const client = new Client({ name: 'xylon-openroad-smoke', version: XYLON_VERSION })
 
 function firstText(result) {
   return result.content?.find((item) => item.type === 'text')?.text ?? ''
 }
 
 await client.connect(transport)
+assert.equal(client.getServerVersion()?.version, XYLON_VERSION)
 let sessionId
 try {
   const tools = await client.listTools()
