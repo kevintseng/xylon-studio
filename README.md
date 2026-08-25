@@ -19,7 +19,7 @@ live at `/openroad` and `/pipeline` after `scripts/xylon start`.
 
 ## The first useful journey
 
-1. Import bounded RTL and SDC or load the included `sky130hd` timing example.
+1. Choose **Import a project bundle** to select a bounded multi-file RTL/SDC bundle, or load the included `sky130hd` timing example. Xylon stores only the selected text files inside its local workspace.
 2. Ask: “Check setup timing, identify the worst path, and tell me how to improve it.”
 3. Xylon validates the input and local resources before starting OpenROAD.
 4. Review measured WNS, TNS, and the worst setup path.
@@ -28,6 +28,8 @@ live at `/openroad` and `/pipeline` after `scripts/xylon start`.
    before and after.
 
 The supported paths behind that journey are:
+
+- **Multi-file project import:** the workbench accepts `.v`, `.sv`, `.vh`, `.svh`, and `.sdc` files, checks the declared top module and clock before EDA, and refuses to start if any file changes after preflight.
 
 - **Setup-timing assistant:** a local OpenAI-compatible model interprets one
   sentence. Deterministic tools validate RTL/SDC, run the built-in `sky130hd`
@@ -141,6 +143,8 @@ or inconclusive evidence never becomes a completed stage.
   orchestration; there is no confirmation tool.
 - `/api/timing/runs/*` — typed baseline, status, proposal, confirmation, and
   candidate endpoints.
+- `POST /api/openroad/projects` and `POST /api/timing/project-runs` — bounded
+  project import, revalidation, and timing start from a local project ID.
 - `GET /api/openroad/snapshot` — read-only MCP execution record.
 
 See [API contract](docs/API.md), [security boundary](SECURITY.md), and

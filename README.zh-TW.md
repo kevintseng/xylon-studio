@@ -17,7 +17,7 @@ Xylon 是在本機執行的 OpenROAD 時序助理。提供真實 RTL、SDC、頂
 
 ## 第一個實用流程
 
-1. 匯入大小受限的 RTL、SDC，或載入內建 `sky130hd` 時序範例。
+1. 選擇「匯入多檔專案」一次載入受限的 RTL／include／SDC 檔案，或載入內建 `sky130hd` 時序範例。Xylon 只會把選取的文字檔保存到自己的本機工作區。
 2. 輸入：「檢查 setup 時序、找出最差路徑，並告訴我怎麼改善。」
 3. Xylon 會先驗證輸入與本機資源，通過後才啟動 OpenROAD。
 4. 查看實測 WNS、TNS 與最差 setup 路徑。
@@ -25,6 +25,8 @@ Xylon 是在本機執行的 OpenROAD 時序助理。提供真實 RTL、SDC、頂
 6. 只有確定要跑 candidate 才確認；完成後比較相同指標的前後差異。
 
 支援這個流程的功能包括：
+
+- **多檔專案匯入：**工作台接受 `.v`、`.sv`、`.vh`、`.svh` 與 `.sdc`，會在啟動 EDA 前檢查頂層模組與 clock；preflight 後只要檔案被改動，就會拒絕啟動並要求重新匯入。
 
 - **Setup 時序助理：**支援 OpenAI API 格式的本機模型只負責理解一句需求。受限工具會
   驗證 RTL／SDC，執行內建 `sky130hd` 流程，讀回 WNS、TNS 與最差 setup 路徑；
@@ -126,6 +128,7 @@ Candidate 有改善不等於 timing closure。目前 setup 邊界沒有違規，
 - `/pipeline`：RTL 驗證。
 - `POST /api/assistant/timing`：本機模型理解需求，再由受限程式執行時序流程；沒有確認工具。
 - `/api/timing/runs/*`：baseline、狀態、提案、確認與 candidate 的固定介面。
+- `POST /api/openroad/projects` 與 `POST /api/timing/project-runs`：受限專案匯入、重新驗證，以及從本機專案 ID 啟動時序分析。
 - `GET /api/openroad/snapshot`：唯讀 MCP 執行紀錄。
 
 詳細規格請見 [API 說明](docs/API.md)、[安全邊界](SECURITY.md) 與
