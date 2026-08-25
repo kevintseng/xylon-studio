@@ -29,6 +29,8 @@ LIBRELANE_CONTAINER_PLATFORM = "linux/arm64"
 LIBRELANE_PDK = "sky130A"
 LIBRELANE_SCL = "sky130_fd_sc_hd"
 LIBRELANE_LAUNCHER = "scripts/xylon-librelane"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+LOCAL_LIBRELANE_PYTHON = REPO_ROOT / ".xylon" / "librelane" / "venv" / "bin" / "python"
 MAX_EXECUTION_OUTPUT_BYTES = 64 * 1024
 ALLOWED_REQUEST_FIELDS = frozenset({"platform", "run_id", "config_path"})
 FORBIDDEN_EXECUTION_FIELDS = frozenset(
@@ -123,6 +125,8 @@ def _owned_run_root(run_dir: Path) -> Path:
 
 def _python_candidate(value: str | None) -> str | None:
     candidate = value or os.environ.get("XYLON_LIBRELANE_PYTHON")
+    if not candidate and LOCAL_LIBRELANE_PYTHON.is_file():
+        candidate = str(LOCAL_LIBRELANE_PYTHON)
     if candidate:
         path = Path(candidate).expanduser()
         resolved = path.resolve()

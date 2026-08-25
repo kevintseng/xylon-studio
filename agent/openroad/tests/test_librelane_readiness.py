@@ -68,3 +68,16 @@ def test_readiness_becomes_ready_only_when_every_boundary_is_measured(
         "resources": True,
     }
     assert result["blockers"] == []
+
+
+def test_readiness_uses_project_local_pdk_when_environment_is_unset(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("XYLON_LIBRELANE_PDK_ROOT", raising=False)
+    (tmp_path / ".xylon" / "librelane" / "pdk").mkdir(parents=True)
+    result = collect_librelane_readiness(
+        tmp_path,
+        snapshot=_snapshot(),
+        probe=SimpleNamespace(state="available"),
+        docker="/usr/bin/docker",
+        image_present=True,
+    )
+    assert result["checks"]["pdk"] is True

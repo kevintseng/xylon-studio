@@ -42,11 +42,13 @@ def _image_present(
     return result.returncode == 0
 
 
-def _pdk_present() -> bool:
+def _pdk_present(repo_root: Path) -> bool:
     raw = os.environ.get("XYLON_LIBRELANE_PDK_ROOT", "")
-    if not raw:
-        return False
-    path = Path(raw).expanduser()
+    path = (
+        Path(raw).expanduser()
+        if raw
+        else repo_root / ".xylon" / "librelane" / "pdk"
+    )
     return path.is_dir() and not path.is_symlink()
 
 
@@ -68,7 +70,7 @@ def collect_librelane_readiness(
         if image_present is not None
         else _image_present(current_docker)
     )
-    pdk_present = _pdk_present()
+    pdk_present = _pdk_present(repo_root)
     resource_blockers = evaluate_openroad_preflight(current_snapshot, requested_cpus=1)
     blockers: list[str] = []
     if current_probe.state != "available":

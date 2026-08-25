@@ -72,8 +72,23 @@ def test_probe_requires_exact_version_without_starting_a_flow(monkeypatch: pytes
 
 def test_probe_does_not_trust_ambient_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("XYLON_LIBRELANE_PYTHON", raising=False)
+    monkeypatch.setattr(adapter, "LOCAL_LIBRELANE_PYTHON", Path("/missing/local/librelane/python"))
     assert adapter.probe_librelane().state == "unavailable"
     assert adapter.probe_librelane().python is None
+
+
+def test_probe_uses_project_local_python_when_present(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    python = tmp_path / "python"
+    python.write_text("#!/bin/sh\n", encoding="utf-8")
+    python.chmod(0o700)
+    monkeypatch.delenv("XYLON_LIBRELANE_PYTHON", raising=False)
+    monkeypatch.setattr(adapter, "LOCAL_LIBRELANE_PYTHON", python)
+    monkeypatch.setattr(
+        adapter.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, stdout="3.0.10\n", stderr=""),
+    )
+    assert adapter.probe_librelane().state == "available"
 
 
 def test_probe_rejects_version_mismatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
