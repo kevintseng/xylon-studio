@@ -179,6 +179,41 @@ def test_removed_dragon_endpoints_are_not_public_api_surfaces():
         assert client.get("/api/verification/health").status_code == 404
 
 
+def test_local_readiness_endpoint_returns_runtime_state_resource_metrics_and_policy():
+    readiness = {
+        "status": "blocked",
+        "runtime_healthy": False,
+        "resource_blocker_codes": ["memory_low"],
+        "resource_blockers": ["memory free 19% is below the 20% safety floor"],
+        "snapshot": {
+            "logical_cpus": 12,
+            "load_one_minute": 5.25,
+            "memory_free_percent": 19,
+            "memory_free_bytes": 5153960755,
+            "memory_total_bytes": 17179869184,
+            "disk_free_bytes": 30386876416,
+            "disk_total_bytes": 137438953472,
+        },
+        "policy": {
+            "max_heavy_jobs": 1,
+            "container_cpu_limit": 2,
+            "container_memory_limit_bytes": 4294967296,
+            "container_network_access": False,
+            "cleanup_scope": "launcher_owned_only",
+        },
+    }
+
+    with patch(
+        "agent.api.routes.local.collect_local_readiness",
+        return_value=type("Ready", (), {"to_dict": lambda self: readiness})(),
+    ):
+        with TestClient(app) as client:
+            response = client.get("/api/local/readiness")
+
+    assert response.status_code == 200
+    assert response.json() == readiness
+
+
 def test_rest_rejects_removed_generated_testbench_configuration():
     with TestClient(app) as client:
         response = client.post(

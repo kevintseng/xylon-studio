@@ -66,6 +66,70 @@ def test_resource_preflight_blocks_saturated_cpu_low_memory_and_low_disk():
     ]
 
 
+def test_resource_preflight_classifies_blockers_for_ui_surfaces():
+    snapshot = local_app.ResourceSnapshot(
+        logical_cpus=8,
+        load_one_minute=8.2,
+        memory_free_percent=12,
+        disk_free_bytes=6 * 1024**3,
+    )
+
+    assert local_app.identify_resource_blockers(snapshot) == [
+        "cpu_saturated",
+        "memory_low",
+        "disk_low",
+    ]
+
+
+def test_local_readiness_reports_ready_only_when_runtime_and_resources_are_both_healthy():
+    snapshot = local_app.ResourceSnapshot(
+        logical_cpus=12,
+        load_one_minute=4.0,
+        memory_free_percent=61,
+        disk_free_bytes=47 * 1024**3,
+        memory_free_bytes=6 * 1024**3,
+        memory_total_bytes=16 * 1024**3,
+        disk_total_bytes=128 * 1024**3,
+    )
+
+    readiness = local_app.summarize_local_readiness(snapshot, runtime_healthy=True)
+
+    assert readiness.status == "ready"
+    assert readiness.runtime_healthy is True
+    assert readiness.resource_blocker_codes == ()
+    assert readiness.policy["max_heavy_jobs"] == 1
+    assert readiness.snapshot.to_dict()["memory_free_bytes"] == 6 * 1024**3
+
+
+def test_local_readiness_reports_runtime_unavailable_without_fabricating_resource_failures():
+    snapshot = local_app.ResourceSnapshot(
+        logical_cpus=12,
+        load_one_minute=4.0,
+        memory_free_percent=None,
+        disk_free_bytes=47 * 1024**3,
+        disk_total_bytes=128 * 1024**3,
+    )
+
+    readiness = local_app.summarize_local_readiness(snapshot, runtime_healthy=False)
+
+    assert readiness.status == "runtime_unavailable"
+    assert readiness.resource_blocker_codes == ()
+
+
+def test_local_readiness_prioritizes_blocked_status_when_host_capacity_is_unsafe():
+    snapshot = local_app.ResourceSnapshot(
+        logical_cpus=12,
+        load_one_minute=12.0,
+        memory_free_percent=19,
+        disk_free_bytes=47 * 1024**3,
+    )
+
+    readiness = local_app.summarize_local_readiness(snapshot, runtime_healthy=False)
+
+    assert readiness.status == "blocked"
+    assert readiness.resource_blocker_codes == ("cpu_saturated", "memory_low")
+
+
 def test_runtime_version_preflight_accepts_supported_python_and_node():
     evaluate = getattr(local_app, "evaluate_runtime_version_preflight", None)
     assert callable(evaluate)

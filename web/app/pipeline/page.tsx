@@ -1,12 +1,16 @@
 'use client'
 
-import { useState, useRef, useCallback, useMemo } from 'react'
+import { useState, useRef, useCallback, useMemo, useEffect } from 'react'
+import { LocalReadinessCard } from '@/components/local-readiness-card'
 import { useI18n } from '@/lib/i18n'
 import {
+  fetchLocalReadiness,
   getPipelineCloseErrorKey,
   requestPipelineCancellation,
   resolveLocalApiUrl,
+  type LocalReadiness,
 } from '@/lib/pipeline-client'
+import { isReadinessBlocked } from '@/lib/local-readiness'
 import {
   DEFAULT_PIPELINE_SCENARIO_KEY,
   PIPELINE_SCENARIOS,
@@ -95,6 +99,9 @@ export default function PipelinePage() {
   const [steps, setSteps] = useState<StepState[]>([])
   const [result, setResult] = useState<PipelineResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [readiness, setReadiness] = useState<LocalReadiness | null>(null)
+  const [readinessLoading, setReadinessLoading] = useState(true)
+  const [readinessError, setReadinessError] = useState<string | null>(null)
   const [elapsed, setElapsed] = useState(0)
   const [activeStep, setActiveStep] = useState<string | null>(null)
   const [stepElapsed, setStepElapsed] = useState(0)
@@ -131,6 +138,41 @@ export default function PipelinePage() {
   const selectedScenario = selectedScenarioKey
     ? getPipelineScenario(selectedScenarioKey)
     : null
+
+  const refreshReadiness = useCallback(
+    async ({ signal, silent = false }: { signal?: AbortSignal; silent?: boolean } = {}) => {
+      if (!silent) {
+        setReadinessLoading(true)
+      }
+      try {
+        const nextReadiness = await fetchLocalReadiness(API_URL, signal)
+        setReadiness(nextReadiness)
+        setReadinessError(null)
+      } catch (err) {
+        if (signal?.aborted) return
+        setReadinessError(err instanceof Error ? err.message : 'readiness unavailable')
+      } finally {
+        if (!signal?.aborted) {
+          setReadinessLoading(false)
+        }
+      }
+    },
+    [],
+  )
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void refreshReadiness({ signal: controller.signal })
+    const interval = setInterval(() => {
+      void refreshReadiness({ silent: true })
+    }, 15000)
+    return () => {
+      controller.abort()
+      clearInterval(interval)
+    }
+  }, [refreshReadiness])
+
+  const runBlocked = isReadinessBlocked(readiness)
 
   const invalidateDisplayedRun = useCallback(() => {
     if (running) return
@@ -179,6 +221,14 @@ export default function PipelinePage() {
   }, [finishRun])
 
   const handleRun = useCallback(() => {
+    if (runBlocked) {
+      setError(
+        readiness?.status === 'runtime_unavailable'
+          ? t('pipeline.readiness.summary.runtime_unavailable')
+          : t('pipeline.readiness.summary.blocked'),
+      )
+      return
+    }
     setRunning(true)
     setCancelling(false)
     setSteps([])
@@ -278,7 +328,7 @@ export default function PipelinePage() {
       if (errorKey) setError(t(errorKey))
       finishRun(ws)
     }
-  }, [rtlCode, testbenchCode, coverageTarget, lintEnabled, synthesisEnabled, simulationTimeout, finishRun, requestedStepNames, t])
+  }, [rtlCode, testbenchCode, coverageTarget, lintEnabled, synthesisEnabled, simulationTimeout, finishRun, requestedStepNames, readiness, runBlocked, t])
 
   const formatDuration = (seconds: number) => {
     if (seconds < 1) return '<1s'
@@ -349,6 +399,15 @@ export default function PipelinePage() {
         <div className="grid lg:grid-cols-5 gap-8">
           {/* Left: Input form */}
           <div className="lg:col-span-2 space-y-4">
+            <LocalReadinessCard
+              readiness={readiness}
+              loading={readinessLoading}
+              error={readinessError}
+              onRefresh={() => {
+                void refreshReadiness()
+              }}
+            />
+
             {/* Complete adoption scenarios */}
             <section aria-labelledby="pipeline-scenarios-title">
               <div className="flex items-end justify-between gap-3">
@@ -570,7 +629,7 @@ export default function PipelinePage() {
             ) : (
               <button
                 onClick={handleRun}
-                disabled={!rtlCode.trim()}
+                disabled={!rtlCode.trim() || runBlocked || (readinessLoading && readiness === null)}
                 className="w-full bg-blue-600 text-white px-6 py-3 rounded-md font-medium hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99] transition-all"
               >
                 {t('pipeline.btn.run')}

@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from agent.api import LOCAL_WEB_ORIGINS
-from agent.api.routes import pipeline
+from agent.api.routes import local, pipeline
 from agent.pipeline.limits import MAX_PIPELINE_BODY_BYTES
 
 # Configure logging
@@ -44,6 +44,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(pipeline.router, prefix="/api", tags=["pipeline"])
+app.include_router(local.router, prefix="/api", tags=["local"])
 
 
 def _payload_too_large() -> JSONResponse:

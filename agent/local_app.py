@@ -102,28 +102,160 @@ class ResourceSnapshot:
     load_one_minute: float
     memory_free_percent: int | None
     disk_free_bytes: int
+    memory_free_bytes: int | None = None
+    memory_total_bytes: int | None = None
+    disk_total_bytes: int | None = None
+
+    def to_dict(self) -> dict[str, int | float | None]:
+        return {
+            "logical_cpus": self.logical_cpus,
+            "load_one_minute": self.load_one_minute,
+            "memory_free_percent": self.memory_free_percent,
+            "memory_free_bytes": self.memory_free_bytes,
+            "memory_total_bytes": self.memory_total_bytes,
+            "disk_free_bytes": self.disk_free_bytes,
+            "disk_total_bytes": self.disk_total_bytes,
+        }
 
 
-def evaluate_resource_preflight(snapshot: ResourceSnapshot) -> list[str]:
+@dataclass(frozen=True)
+class LocalReadiness:
+    status: str
+    runtime_healthy: bool
+    resource_blocker_codes: tuple[str, ...]
+    resource_blockers: tuple[str, ...]
+    snapshot: ResourceSnapshot
+    policy: dict[str, object]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "runtime_healthy": self.runtime_healthy,
+            "resource_blocker_codes": list(self.resource_blocker_codes),
+            "resource_blockers": list(self.resource_blockers),
+            "snapshot": self.snapshot.to_dict(),
+            "policy": self.policy,
+        }
+
+
+def identify_resource_blockers(snapshot: ResourceSnapshot) -> list[str]:
     blockers: list[str] = []
     if snapshot.load_one_minute >= snapshot.logical_cpus:
-        blockers.append(
-            f"CPU load {snapshot.load_one_minute:.2f} has reached "
-            f"{snapshot.logical_cpus} logical CPUs"
-        )
+        blockers.append("cpu_saturated")
     if (
         snapshot.memory_free_percent is not None
         and snapshot.memory_free_percent < 20
     ):
-        blockers.append(
-            f"memory free {snapshot.memory_free_percent}% is below the 20% safety floor"
-        )
+        blockers.append("memory_low")
     disk_free_gib = snapshot.disk_free_bytes / 1024**3
     if disk_free_gib < 10:
-        blockers.append(
+        blockers.append("disk_low")
+    return blockers
+
+
+def _resource_blocker_message(code: str, snapshot: ResourceSnapshot) -> str:
+    if code == "cpu_saturated":
+        return (
+            f"CPU load {snapshot.load_one_minute:.2f} has reached "
+            f"{snapshot.logical_cpus} logical CPUs"
+        )
+    if code == "memory_low":
+        return (
+            f"memory free {snapshot.memory_free_percent}% is below the 20% safety floor"
+        )
+    if code == "disk_low":
+        disk_free_gib = snapshot.disk_free_bytes / 1024**3
+        return (
             f"workspace disk free {disk_free_gib:.1f} GiB is below the 10.0 GiB safety floor"
         )
-    return blockers
+    raise ValueError(f"unsupported resource blocker code: {code}")
+
+
+def evaluate_resource_preflight(snapshot: ResourceSnapshot) -> list[str]:
+    return [
+        _resource_blocker_message(code, snapshot)
+        for code in identify_resource_blockers(snapshot)
+    ]
+
+
+def _read_proc_meminfo_kib() -> tuple[int | None, int | None]:
+    meminfo_path = PROC_ROOT / "meminfo"
+    if not meminfo_path.is_file():
+        return (None, None)
+    try:
+        raw = meminfo_path.read_text(encoding="utf-8")
+    except OSError:
+        return (None, None)
+
+    total_kib: int | None = None
+    available_kib: int | None = None
+    for line in raw.splitlines():
+        if line.startswith("MemTotal:"):
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].isdigit():
+                total_kib = int(parts[1])
+        elif line.startswith("MemAvailable:"):
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].isdigit():
+                available_kib = int(parts[1])
+    return (available_kib, total_kib)
+
+
+def _read_sysctl_int(name: str) -> int | None:
+    sysctl = shutil.which("sysctl")
+    if sysctl is None:
+        return None
+    result = subprocess.run(
+        [sysctl, "-n", name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    raw_value = result.stdout.strip()
+    if not raw_value.isdigit():
+        return None
+    return int(raw_value)
+
+
+def _read_memory_bytes() -> tuple[int | None, int | None]:
+    available_kib, total_kib = _read_proc_meminfo_kib()
+    if available_kib is not None and total_kib is not None:
+        return (available_kib * 1024, total_kib * 1024)
+
+    total_bytes = _read_sysctl_int("hw.memsize")
+    page_size = _read_sysctl_int("hw.pagesize") or 4096
+    vm_stat = shutil.which("vm_stat")
+    if total_bytes is None or vm_stat is None:
+        return (None, total_bytes)
+
+    result = subprocess.run(
+        [vm_stat],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return (None, total_bytes)
+
+    pages: dict[str, int] = {}
+    pattern = re.compile(r"Pages ([^:]+):\s+(\d+)\.")
+    for line in result.stdout.splitlines():
+        match = pattern.search(line)
+        if match is None:
+            continue
+        key = match.group(1).strip().lower().replace(" ", "_")
+        pages[key] = int(match.group(2))
+
+    available_pages = (
+        pages.get("free", 0)
+        + pages.get("speculative", 0)
+        + pages.get("inactive", 0)
+    )
+    if available_pages <= 0:
+        return (None, total_bytes)
+    return (available_pages * page_size, total_bytes)
 
 
 def collect_resource_snapshot(repo_root: Path) -> ResourceSnapshot:
@@ -149,11 +281,71 @@ def collect_resource_snapshot(repo_root: Path) -> ResourceSnapshot:
         if result.returncode == 0 and match is not None:
             memory_free_percent = int(match.group(1))
 
+    memory_free_bytes, memory_total_bytes = _read_memory_bytes()
+    if (
+        memory_free_percent is None
+        and memory_free_bytes is not None
+        and memory_total_bytes not in (None, 0)
+    ):
+        memory_free_percent = int((memory_free_bytes / memory_total_bytes) * 100)
+
+    disk_usage = shutil.disk_usage(repo_root)
+
     return ResourceSnapshot(
         logical_cpus=logical_cpus,
         load_one_minute=load_one_minute,
         memory_free_percent=memory_free_percent,
-        disk_free_bytes=shutil.disk_usage(repo_root).free,
+        disk_free_bytes=disk_usage.free,
+        memory_free_bytes=memory_free_bytes,
+        memory_total_bytes=memory_total_bytes,
+        disk_total_bytes=disk_usage.total,
+    )
+
+
+def summarize_local_readiness(
+    snapshot: ResourceSnapshot,
+    *,
+    runtime_healthy: bool,
+) -> LocalReadiness:
+    blocker_codes = tuple(identify_resource_blockers(snapshot))
+    blockers = tuple(_resource_blocker_message(code, snapshot) for code in blocker_codes)
+    if blocker_codes:
+        status = "blocked"
+    elif runtime_healthy:
+        status = "ready"
+    else:
+        status = "runtime_unavailable"
+
+    return LocalReadiness(
+        status=status,
+        runtime_healthy=runtime_healthy,
+        resource_blocker_codes=blocker_codes,
+        resource_blockers=blockers,
+        snapshot=snapshot,
+        policy={
+            "max_heavy_jobs": 1,
+            "container_cpu_limit": 2,
+            "container_memory_limit_bytes": 4 * 1024**3,
+            "container_network_access": False,
+            "cleanup_scope": "launcher_owned_only",
+        },
+    )
+
+
+def collect_local_readiness(
+    *,
+    repo_root: Path = REPO_ROOT,
+    runtime: RuntimeController | None = None,
+    resource_probe: Callable[[], ResourceSnapshot] | None = None,
+) -> LocalReadiness:
+    runtime_controller = runtime or EdaRuntime(repo_root)
+    snapshot = (
+        resource_probe() if resource_probe is not None
+        else collect_resource_snapshot(repo_root)
+    )
+    return summarize_local_readiness(
+        snapshot,
+        runtime_healthy=runtime_controller.is_running(),
     )
 
 
