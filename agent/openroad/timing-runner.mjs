@@ -110,6 +110,7 @@ export async function executeTimingBatch({
   let timedOut = false
   let logLimitExceeded = false
   let interrupted = false
+  let interruptionReason = null
   let killTimer = null
   let terminationStarted = false
   const signalBatch = (requestedSignal) => {
@@ -129,6 +130,7 @@ export async function executeTimingBatch({
   }
   const handleAbort = () => {
     interrupted = true
+    interruptionReason = signal?.reason === 'user_cancelled' ? 'user_cancelled' : 'application_shutdown'
     terminate()
   }
   signal?.addEventListener('abort', handleAbort, { once: true })
@@ -171,6 +173,7 @@ export async function executeTimingBatch({
     child_pid: child.pid ?? null,
     timed_out: timedOut,
     interrupted,
+    interruption_reason: interruptionReason,
     log_limit_exceeded: logLimitExceeded,
     stdout_bytes: stdout.bytes,
     stderr_bytes: stderr.bytes,
@@ -181,6 +184,12 @@ export async function executeTimingBatch({
 
 export function classifyTimingFailure(runtimeResult) {
   if (runtimeResult.interrupted) {
+    if (runtimeResult.interruption_reason === 'user_cancelled') {
+      return {
+        code: 'TimingRunCancelled',
+        recovery: 'The requested timing run stopped and Xylon verified owned cleanup. Review the saved input, then start a new baseline when ready.',
+      }
+    }
     return {
       code: 'TimingRunInterrupted',
       recovery: 'The local application stopped this run. Wait for cleanup verification, then start a new timing baseline.',
@@ -316,7 +325,7 @@ export async function runTimingDesign(rawInput, {
     await persistBlocked(staged.runDir, staged.identity, failure, runtime, cleanup)
     throw new TimingRunError(failure.code, 'Timing runtime cleanup could not be verified', failure.recovery, { run_id: staged.runId, cleanup })
   }
-  if (!runtime || runtime.code !== 0 || runtime.timed_out || runtime.log_limit_exceeded) {
+  if (!runtime || runtime.code !== 0 || runtime.timed_out || runtime.interrupted || runtime.log_limit_exceeded) {
     const failure = classifyTimingFailure(runtime ?? {})
     await persistBlocked(staged.runDir, staged.identity, failure, runtime, cleanup)
     throw new TimingRunError(failure.code, 'Pinned ORFS timing run failed', failure.recovery, { run_id: staged.runId })

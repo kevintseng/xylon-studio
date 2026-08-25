@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { createTimingRunId, normalizeTimingReadiness, resolveTimingApiUrl } from './timing-client.ts'
+import { cancelTimingRun, createTimingRunId, normalizeTimingReadiness, resolveTimingApiUrl } from './timing-client.ts'
 
 test('timing client uses only the selected local API root', () => {
   assert.equal(resolveTimingApiUrl(undefined), 'http://127.0.0.1:5001/api/timing')
@@ -18,6 +18,7 @@ test('timing client normalizes a structured safe-mode readiness result', () => {
     schema_version: 'xylon-timing-readiness/v1',
     state: 'blocked',
     can_start_eda: false,
+    can_queue_eda: true,
     requested_cpus: 1,
     resource: {
       logical_cpus: 12,
@@ -26,10 +27,16 @@ test('timing client normalizes a structured safe-mode readiness result', () => {
       memory_free_percent: 30,
       disk_free_bytes: 40 * 1024 ** 3,
     },
+    thresholds: {
+      memory_available_bytes: 8 * 1024 ** 3,
+      memory_free_percent: 35,
+      disk_free_bytes: 10 * 1024 ** 3,
+    },
     blockers: ['memory below floor'],
   }), {
     state: 'blocked',
     canStartEda: false,
+    canQueueEda: true,
     requestedCpus: 1,
     resource: {
       logicalCpus: 12,
@@ -38,6 +45,11 @@ test('timing client normalizes a structured safe-mode readiness result', () => {
       memoryFreePercent: 30,
       diskFreeBytes: 40 * 1024 ** 3,
     },
+    thresholds: {
+      memoryAvailableBytes: 8 * 1024 ** 3,
+      memoryFreePercent: 35,
+      diskFreeBytes: 10 * 1024 ** 3,
+    },
     blockers: ['memory below floor'],
   })
   assert.throws(
@@ -45,10 +57,64 @@ test('timing client normalizes a structured safe-mode readiness result', () => {
       schema_version: 'xylon-timing-readiness/v1',
       state: 'ready',
       can_start_eda: false,
+      can_queue_eda: false,
       requested_cpus: 1,
       resource: {},
+      thresholds: {},
       blockers: [],
     }),
     /contract is invalid/,
   )
+  assert.throws(
+    () => normalizeTimingReadiness({
+      schema_version: 'xylon-timing-readiness/v1',
+      state: 'blocked',
+      can_start_eda: false,
+      can_queue_eda: true,
+      requested_cpus: null,
+      resource: {},
+      thresholds: {},
+      blockers: ['invalid CPU budget'],
+    }),
+    /contract is invalid/,
+  )
+})
+
+test('timing client asks the server to cancel the exact recoverable run', async (context) => {
+  const originalFetch = globalThis.fetch
+  const runId = 'ab'.repeat(16)
+  let observedUrl = ''
+  let observedMethod = ''
+  globalThis.fetch = (async (input, init) => {
+    observedUrl = String(input)
+    observedMethod = init?.method ?? ''
+    return new Response(JSON.stringify({
+      schema_version: 'xylon-timing-api/v1',
+      run_id: runId,
+      phase: 'cancelled',
+      platform: 'sky130hd',
+      top_module: 'timing_demo',
+      source_revision: null,
+      clock: null,
+      metrics: null,
+      evidence: null,
+      proposal: null,
+      confirmation: null,
+      comparison: null,
+      failure: {
+        code: 'TimingRunCancelledBeforeStart',
+        message: 'The timing run was cancelled.',
+        recovery: 'Start a new baseline when ready.',
+        candidate_run_id: null,
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
+  context.after(() => { globalThis.fetch = originalFetch })
+
+  const state = await cancelTimingRun('http://127.0.0.1:5001/api/timing', runId)
+
+  assert.equal(observedUrl, `http://127.0.0.1:5001/api/timing/runs/${runId}/cancel`)
+  assert.equal(observedMethod, 'POST')
+  assert.equal(state.phase, 'cancelled')
+  assert.equal(state.failure?.code, 'TimingRunCancelledBeforeStart')
 })

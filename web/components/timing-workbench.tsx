@@ -1,13 +1,15 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
 
 import { useI18n } from '@/lib/i18n'
 import { getRovingTabTargetIndex } from '@/lib/roving-tab-index'
 import { TimingAgentPanel } from '@/components/timing-agent-panel'
+import { ResourceStatusDashboard } from '@/components/resource-status-dashboard'
 import type { TimingAgentResult } from '@/lib/timing-agent-contract'
 import {
   analyzeTiming,
+  cancelTimingRun,
   confirmTimingProposal,
   createTimingProposal,
   createTimingRunId,
@@ -21,7 +23,13 @@ import {
   type TimingReadiness,
 } from '@/lib/timing-client'
 import { TIMING_SAMPLE_RTL, TIMING_SAMPLE_SDC, TIMING_SAMPLE_TOP } from '@/lib/timing-sample'
-import { isTimingProposalExpired, type TimingState } from '@/lib/timing-contract'
+import {
+  isTimingActivePhase,
+  isTimingCancellablePhase,
+  isTimingProposalExpired,
+  TIMING_RUN_ID_PATTERN,
+  type TimingState,
+} from '@/lib/timing-contract'
 
 const API_URL = resolveTimingApiUrl(process.env.NEXT_PUBLIC_API_URL)
 const SAVED_RUN_KEY = 'xylon.timing.latestRunId'
@@ -30,6 +38,7 @@ const POLL_MS = 2000
 type StageKey = 'input' | 'baseline' | 'proposal' | 'confirm' | 'compare'
 type StageStatus = 'pending' | 'active' | 'complete' | 'blocked'
 type BusyAction = 'assistant' | 'analyze' | 'proposal' | 'confirm' | 'candidate' | null
+type RunConnection = 'idle' | 'restoring' | 'connected' | 'connection_lost'
 
 interface VisibleError {
   code: string
@@ -56,7 +65,7 @@ function localizeError(error: VisibleError, locale: 'en' | 'zh-TW', t: (key: str
     'TimingInputInvalid',
     'TimingFloorplanCapacityExceeded', 'TimingRuntimeCpuIncompatible', 'TimingCleanupUnverified',
     'TimingEvidenceReadbackFailed', 'TimingRunInterrupted', 'TimingConfirmationRejected',
-    'TimingProposalExpired',
+    'TimingProposalExpired', 'TimingRunCancelled', 'TimingRunCancelledBeforeStart',
   ])
   const key = supportedCodes.has(error.code) ? error.code : 'generic'
   return { code: error.code, message: t(`timing.error.${key}.message`), recovery: t(`timing.error.${key}.recovery`) }
@@ -64,10 +73,6 @@ function localizeError(error: VisibleError, locale: 'en' | 'zh-TW', t: (key: str
 
 function formatNs(value: number): string {
   return `${value > 0 ? '+' : ''}${value.toFixed(3)} ns`
-}
-
-function formatGiB(value: number | null): string {
-  return value === null ? '—' : `${(value / 1024 ** 3).toFixed(1)} GiB`
 }
 
 function formatDate(value: string, locale: 'en' | 'zh-TW'): string {
@@ -84,7 +89,11 @@ export function TimingWorkbench() {
   const [runId, setRunId] = useState<string | null>(null)
   const [timing, setTiming] = useState<TimingState | null>(null)
   const [busy, setBusy] = useState<BusyAction>(null)
+  const [cancelling, setCancelling] = useState(false)
+  const [runConnection, setRunConnection] = useState<RunConnection>('idle')
+  const [pollRefresh, setPollRefresh] = useState(0)
   const [error, setError] = useState<VisibleError | null>(null)
+  const [connectionError, setConnectionError] = useState<VisibleError | null>(null)
   const [typedToken, setTypedToken] = useState('')
   const [proposalClock, setProposalClock] = useState(() => Date.now())
   const [selectedStageKey, setSelectedStageKey] = useState<StageKey>('input')
@@ -95,10 +104,26 @@ export function TimingWorkbench() {
   const restored = useRef(false)
 
   const inputReady = rtl.trim().length > 0 && sdc.trim().length > 0 && /^[A-Za-z_][A-Za-z0-9_$]*$/.test(topModule)
-  const locked = busy !== null
+  const serverActive = isTimingActivePhase(timing?.phase)
+  const serverRunning = isTimingCancellablePhase(timing?.phase)
+  const cancellationPending = cancelling || timing?.phase === 'cancelling'
+  const locked = busy !== null || cancellationPending || serverActive || runConnection === 'restoring' || runConnection === 'connection_lost'
   const proposalExpiresAt = timing?.proposal?.expiresAt ?? null
   const proposalExpired = proposalExpiresAt ? isTimingProposalExpired(proposalExpiresAt, proposalClock) : false
   const edaCanStart = readiness?.canStartEda === true
+  const edaCanQueue = readiness?.canQueueEda === true
+  const edaActionAvailable = edaCanStart || edaCanQueue
+
+  const localizedTimingFailure = useCallback((state: TimingState): VisibleError | null => (
+    state.failure ? localizeError(state.failure, locale, t) : null
+  ), [locale, t])
+
+  const acceptActionState = (state: TimingState) => {
+    setTiming(state)
+    setError(localizedTimingFailure(state))
+    setConnectionError(null)
+    setRunConnection('connected')
+  }
 
   useEffect(() => {
     const controller = new AbortController()
@@ -132,6 +157,8 @@ export function TimingWorkbench() {
     setRunId(null)
     setTiming(null)
     setError(null)
+    setConnectionError(null)
+    setRunConnection('idle')
     setTypedToken('')
     globalThis.localStorage?.removeItem(SAVED_RUN_KEY)
   }
@@ -146,48 +173,65 @@ export function TimingWorkbench() {
     restored.current = true
     const saved = globalThis.localStorage?.getItem(SAVED_RUN_KEY)
     if (!saved) return
+    if (!TIMING_RUN_ID_PATTERN.test(saved)) {
+      globalThis.localStorage?.removeItem(SAVED_RUN_KEY)
+      return
+    }
     void Promise.resolve(saved).then((savedRunId) => {
+      setRunConnection('restoring')
       setRunId(savedRunId)
       return readTimingRun(API_URL, savedRunId)
     }).then(
       (state) => {
         setTiming(state)
+        setError(localizedTimingFailure(state))
+        setConnectionError(null)
+        setRunConnection('connected')
         setSelectedStageKey(state.comparison ? 'compare' : state.confirmation ? 'confirm' : state.proposal ? 'proposal' : 'baseline')
       },
       (caught) => {
         if (caught instanceof TimingApiError && caught.code === 'TimingRunNotFound') {
           setRunId(null)
+          setRunConnection('idle')
           globalThis.localStorage?.removeItem(SAVED_RUN_KEY)
           return
         }
-        setError(localizeError(displayError(caught), locale, t))
+        setConnectionError(localizeError(displayError(caught), locale, t))
+        setRunConnection('connection_lost')
       },
     )
-  }, [locale, t])
+  }, [locale, localizedTimingFailure, t])
 
   useEffect(() => {
     if (!runId) return
-    const shouldPoll = (busy !== null && busy !== 'assistant') || timing?.phase === 'running' || timing?.phase === 'candidate_running'
+    const shouldPoll = (busy !== null && busy !== 'assistant') || serverActive || runConnection === 'connection_lost'
     if (!shouldPoll) return
     const controller = new AbortController()
-    const poll = () => {
-      void readTimingRun(API_URL, runId, controller.signal).then(
-        (state) => {
-          setTiming(state)
-          if (state.failure) setError(state.failure)
-        },
-        (caught) => {
-          if (controller.signal.aborted) return
-          if (!(caught instanceof TimingApiError && caught.code === 'TimingRunNotFound')) setError(localizeError(displayError(caught), locale, t))
-        },
-      )
+    let timeout: ReturnType<typeof setTimeout> | null = null
+    const poll = async () => {
+      try {
+        const state = await readTimingRun(API_URL, runId, controller.signal)
+        if (controller.signal.aborted) return
+        setTiming(state)
+        setError(localizedTimingFailure(state))
+        setConnectionError(null)
+        setRunConnection('connected')
+      } catch (caught) {
+        if (controller.signal.aborted) return
+        if (!(caught instanceof TimingApiError && caught.code === 'TimingRunNotFound')) {
+          setConnectionError(localizeError(displayError(caught), locale, t))
+          setRunConnection('connection_lost')
+        }
+      } finally {
+        if (!controller.signal.aborted) timeout = setTimeout(() => void poll(), POLL_MS)
+      }
     }
-    const interval = setInterval(poll, POLL_MS)
+    void poll()
     return () => {
       controller.abort()
-      clearInterval(interval)
+      if (timeout) clearTimeout(timeout)
     }
-  }, [busy, locale, runId, t, timing?.phase])
+  }, [busy, locale, localizedTimingFailure, pollRefresh, runConnection, runId, serverActive, t])
 
   const stages = useMemo(() => {
     const status = (key: StageKey): StageStatus => {
@@ -195,7 +239,7 @@ export function TimingWorkbench() {
       if (key === 'input') return inputReady ? 'complete' : 'active'
       if (key === 'baseline') {
         if (timing?.metrics) return 'complete'
-        return busy === 'assistant' || busy === 'analyze' || timing?.phase === 'running' ? 'active' : 'pending'
+        return busy === 'assistant' || busy === 'analyze' || timing?.phase === 'queued' || timing?.phase === 'running' || timing?.phase === 'cancelling' ? 'active' : 'pending'
       }
       if (key === 'proposal') {
         if (timing?.proposal) return 'complete'
@@ -207,7 +251,7 @@ export function TimingWorkbench() {
         return busy === 'confirm' ? 'active' : 'pending'
       }
       if (timing?.comparison) return 'complete'
-      return busy === 'candidate' || timing?.phase === 'candidate_running' ? 'active' : 'pending'
+      return busy === 'candidate' || timing?.phase === 'candidate_queued' || timing?.phase === 'candidate_running' || timing?.phase === 'cancelling' ? 'active' : 'pending'
     }
     return STAGE_KEYS.map((key) => ({ key, status: status(key) }))
   }, [busy, error, inputReady, proposalExpired, selectedStageKey, timing])
@@ -245,16 +289,18 @@ export function TimingWorkbench() {
   }
 
   const analyze = async () => {
-    if (!inputReady || busy) return
+    if (!inputReady || locked) return
     const nextRunId = createTimingRunId()
     setRunId(nextRunId)
     globalThis.localStorage?.setItem(SAVED_RUN_KEY, nextRunId)
     setTiming(null)
     setError(null)
+    setConnectionError(null)
+    setRunConnection('connected')
     setBusy('analyze')
     setSelectedStageKey('baseline')
     try {
-      setTiming(await analyzeTiming(API_URL, { runId: nextRunId, rtl, sdc, topModule }))
+      acceptActionState(await analyzeTiming(API_URL, { runId: nextRunId, rtl, sdc, topModule }))
     } catch (caught) {
       if (caught instanceof TimingApiError && caught.runId === null) {
         setRunId(null)
@@ -267,28 +313,31 @@ export function TimingWorkbench() {
   }
 
   const propose = async () => {
-    if (!runId || busy) return
+    if (!runId || timing?.phase !== 'diagnosis_ready' || busy || cancelling) return
     setError(null)
+    setConnectionError(null)
     setBusy('proposal')
     setSelectedStageKey('proposal')
-    try { setTiming(await createTimingProposal(API_URL, runId)) } catch (caught) { setError(localizeError(displayError(caught), locale, t)) } finally { setBusy(null) }
+    try { acceptActionState(await createTimingProposal(API_URL, runId)) } catch (caught) { setError(localizeError(displayError(caught), locale, t)) } finally { setBusy(null) }
   }
 
   const confirm = async () => {
-    if (!runId || !timing?.proposal || proposalExpired || typedToken !== timing.proposal.confirmationToken || busy) return
+    if (!runId || timing?.phase !== 'proposal_ready' || !timing.proposal || proposalExpired || typedToken !== timing.proposal.confirmationToken || busy || cancelling) return
     setError(null)
+    setConnectionError(null)
     setBusy('confirm')
     setSelectedStageKey('confirm')
-    try { setTiming(await confirmTimingProposal(API_URL, runId, timing.proposal.proposalId, typedToken)) } catch (caught) { setError(localizeError(displayError(caught), locale, t)) } finally { setBusy(null) }
+    try { acceptActionState(await confirmTimingProposal(API_URL, runId, timing.proposal.proposalId, typedToken)) } catch (caught) { setError(localizeError(displayError(caught), locale, t)) } finally { setBusy(null) }
   }
 
   const execute = async () => {
-    if (!runId || !timing?.proposal || !timing.confirmation || busy) return
+    if (!runId || timing?.phase !== 'confirmed' || !timing.proposal || !timing.confirmation || busy || cancelling) return
     setError(null)
+    setConnectionError(null)
     setBusy('candidate')
     setSelectedStageKey('compare')
     try {
-      setTiming(await executeTimingCandidate(API_URL, runId, timing.proposal.proposalId, timing.confirmation.confirmationId))
+      acceptActionState(await executeTimingCandidate(API_URL, runId, timing.proposal.proposalId, timing.confirmation.confirmationId))
     } catch (caught) {
       setError(localizeError(displayError(caught), locale, t))
     } finally {
@@ -296,11 +345,24 @@ export function TimingWorkbench() {
     }
   }
 
+  const cancel = async () => {
+    if (!runId || !serverRunning || cancelling) return
+    setCancelling(true)
+    setConnectionError(null)
+    try {
+      acceptActionState(await cancelTimingRun(API_URL, runId))
+    } catch (caught) {
+      setConnectionError(localizeError(displayError(caught), locale, t))
+      setRunConnection('connection_lost')
+    } finally {
+      setCancelling(false)
+    }
+  }
+
   const applyAgentResult = (result: TimingAgentResult) => {
     if (!result.timing) return
     setRunId(result.timing.runId)
-    setTiming(result.timing)
-    setError(result.timing.failure)
+    acceptActionState(result.timing)
     globalThis.localStorage?.setItem(SAVED_RUN_KEY, result.timing.runId)
     setSelectedStageKey(
       result.timing.comparison
@@ -314,6 +376,11 @@ export function TimingWorkbench() {
   }
 
   const selectedStage = stages.find((stage) => stage.key === selectedStageKey) ?? stages[0]
+  const stageStatusCopy = (stage: { key: StageKey; status: StageStatus }) => (
+    stage.key === 'input' && stage.status === 'complete'
+      ? t('timing.stage.status.inputReady')
+      : t(`timing.stage.status.${stage.status}`)
+  )
   const statusStyle: Record<StageStatus, string> = {
     pending: 'border-slate-700 bg-slate-900/70 text-slate-300',
     active: 'border-cyan-400/50 bg-cyan-500/10 text-cyan-100',
@@ -330,25 +397,12 @@ export function TimingWorkbench() {
             <h2 className="mt-3 text-3xl font-semibold text-slate-50">{t('timing.workbench.title')}</h2>
             <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">{t('timing.workbench.subtitle')}</p>
           </div>
-          <div className={`rounded-2xl border p-4 text-sm ${readiness?.state === 'ready' ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-100' : readiness?.state === 'blocked' ? 'border-amber-500/40 bg-amber-500/10 text-amber-100' : 'border-slate-700 bg-slate-950/70 text-slate-300'}`} aria-live="polite">
-            <p className="font-semibold text-slate-100">{t('timing.resource.title')}</p>
-            <p className="mt-2 leading-6">{t('timing.resource.detail')}</p>
-            <p className="mt-3 font-semibold">
-              {readinessLoading
-                ? t('timing.resource.statusChecking')
-                : readinessUnavailable
-                  ? t('timing.resource.statusUnavailable')
-                  : readiness?.state === 'ready'
-                    ? `✓ ${t('timing.resource.statusReady')}`
-                    : t('timing.resource.statusBlocked')}
-            </p>
-            {readiness ? <dl className="mt-3 grid grid-cols-2 gap-3 text-xs">
-              <div><dt className="opacity-70">{t('timing.resource.availableMemory')}</dt><dd className="mt-1 font-mono">{formatGiB(readiness.resource.memoryAvailableBytes)}</dd></div>
-              <div><dt className="opacity-70">{t('timing.resource.freeDisk')}</dt><dd className="mt-1 font-mono">{formatGiB(readiness.resource.diskFreeBytes)}</dd></div>
-            </dl> : null}
-            {readiness?.state === 'blocked' ? <p className="mt-3 leading-6">{t('timing.resource.recovery')}</p> : null}
-            <button type="button" onClick={() => { setReadinessLoading(true); setReadinessUnavailable(false); setReadinessRefresh((value) => value + 1) }} disabled={readinessLoading} className="mt-3 rounded-lg border border-current/30 px-3 py-2 text-xs font-semibold hover:bg-white/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 disabled:cursor-wait disabled:opacity-50">{t('timing.resource.refresh')}</button>
-          </div>
+          <ResourceStatusDashboard
+            readiness={readiness}
+            loading={readinessLoading}
+            unavailable={readinessUnavailable}
+            onRefresh={() => { setReadinessLoading(true); setReadinessUnavailable(false); setReadinessRefresh((value) => value + 1) }}
+          />
         </div>
 
         <ol className="mt-8 grid gap-3 sm:grid-cols-5" role="tablist" aria-label={t('timing.flow.title')}>
@@ -359,7 +413,7 @@ export function TimingWorkbench() {
                 <button type="button" id={`timing-stage-tab-${stage.key}`} role="tab" aria-selected={active} aria-controls="timing-stage-detail" tabIndex={active ? 0 : -1} onClick={() => setSelectedStageKey(stage.key)} onKeyDown={(event) => handleStageKeyDown(event, index)} className={`h-full w-full rounded-2xl border p-4 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 ${statusStyle[stage.status]}`}>
                   <span className="text-[11px] uppercase tracking-[0.16em] opacity-70">0{index + 1}</span>
                   <span className="mt-2 block text-sm font-semibold">{t(`timing.stage.${stage.key}.label`)}</span>
-                  <span className="mt-2 block text-xs">{t(`timing.stage.status.${stage.status}`)}</span>
+                  <span className="mt-2 block text-xs">{stageStatusCopy(stage)}</span>
                 </button>
               </li>
             )
@@ -394,7 +448,7 @@ export function TimingWorkbench() {
             <input id="timing-sdc-file" type="file" accept=".sdc,text/plain" disabled={locked} onChange={(event) => void importFile(event, MAX_TIMING_SDC_BYTES, setSdc)} className="mt-2 block max-w-full text-xs text-slate-400 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-xs file:text-slate-100" aria-label={t('timing.input.sdcFile')} />
             <textarea id="timing-sdc" value={sdc} onChange={(event) => changeInput(setSdc)(event.target.value)} disabled={locked} rows={5} placeholder={t('timing.input.sdcPlaceholder')} className="mt-3 w-full resize-y rounded-2xl border border-slate-700 bg-slate-900 p-4 font-mono text-xs leading-6 text-slate-100 outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-500/20 disabled:opacity-60" />
 
-              {!timing?.metrics ? <button type="button" onClick={() => void analyze()} disabled={!inputReady || locked || !edaCanStart} className="mt-6 w-full rounded-2xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">{busy === 'analyze' ? t('timing.action.analyzing') : t('timing.action.analyze')}</button> : null}
+              {!timing?.metrics ? <button type="button" onClick={() => void analyze()} disabled={!inputReady || locked || readinessLoading || readinessUnavailable || !readiness || !edaActionAvailable} className="mt-6 w-full rounded-2xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">{busy === 'analyze' ? t('timing.action.analyzing') : edaCanStart ? t('timing.action.analyze') : edaCanQueue ? t('timing.action.queue') : t('timing.action.unavailable')}</button> : null}
             </section>
 
             <TimingAgentPanel
@@ -411,8 +465,11 @@ export function TimingWorkbench() {
           <div className="space-y-6">
             <section className="rounded-3xl border border-slate-700 bg-slate-950/70 p-5 sm:p-6" aria-live="polite">
               <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="text-xl font-semibold text-slate-50">{t('timing.result.title')}</h3>{runId ? <span className="break-all font-mono text-xs text-slate-500">{t('timing.runId')}: {runId}</span> : null}</div>
-              {busy ? <div className="mt-5 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4 text-sm leading-6 text-cyan-50"><span aria-hidden="true" className="mr-2 inline-block animate-pulse">●</span>{t(`timing.progress.${busy}`)}</div> : null}
-              {!timing?.metrics && !busy ? <p className="mt-5 text-sm leading-6 text-slate-400">{t('timing.result.empty')}</p> : null}
+              {runConnection === 'restoring' ? <div role="status" className="mt-5 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4 text-sm leading-6 text-cyan-50"><span aria-hidden="true" className="mr-2 inline-block animate-pulse">●</span>{t('timing.connection.restoring')}</div> : null}
+              {runConnection === 'connection_lost' ? <div role="status" className="mt-5 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm leading-6 text-amber-100"><p className="font-semibold">{t('timing.connection.lost')}</p><p className="mt-2">{t('timing.connection.lostDetail')}</p><button type="button" onClick={() => setPollRefresh((value) => value + 1)} className="mt-3 rounded-lg border border-amber-300/40 px-3 py-2 text-xs font-semibold hover:bg-amber-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300">{t('timing.connection.retry')}</button>{connectionError ? <details className="mt-3 text-xs text-amber-200"><summary className="cursor-pointer font-semibold">{t('timing.failure.details')}</summary><code className="mt-2 block break-all font-mono">{connectionError.code}</code></details> : null}</div> : null}
+              {busy && !serverActive && !cancelling ? <div className="mt-5 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4 text-sm leading-6 text-cyan-50"><span aria-hidden="true" className="mr-2 inline-block animate-pulse">●</span>{t(`timing.progress.${busy}`)}</div> : null}
+              {serverActive || cancelling ? <div className="mt-5 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4 text-sm leading-6 text-cyan-50"><p><span aria-hidden="true" className="mr-2 inline-block animate-pulse">●</span>{t(timing?.phase === 'queued' ? 'timing.progress.queued' : timing?.phase === 'candidate_queued' ? 'timing.progress.candidateQueued' : cancellationPending ? 'timing.progress.cancelling' : timing?.phase === 'candidate_running' ? 'timing.progress.candidate' : 'timing.progress.analyze')}</p>{serverRunning ? <button type="button" onClick={() => void cancel()} disabled={cancelling} className="mt-3 rounded-xl border border-red-400/50 px-4 py-2.5 font-semibold text-red-100 hover:bg-red-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300 disabled:cursor-wait disabled:opacity-60">{cancelling ? t('timing.action.cancelling') : t('timing.action.cancel')}</button> : null}{cancellationPending ? <p role="status" className="mt-3 text-xs text-slate-300">{t('timing.cancel.waitingForCleanup')}</p> : null}</div> : null}
+              {!timing?.metrics && !busy && !serverActive ? <p className="mt-5 text-sm leading-6 text-slate-400">{t('timing.result.empty')}</p> : null}
               {timing?.metrics ? <>
                 <div className="mt-5 grid gap-3 sm:grid-cols-2">
                   <div className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4"><p className="text-xs uppercase tracking-[0.16em] text-slate-500">WNS</p><p className={`mt-2 text-2xl font-semibold ${timing.metrics.wns < 0 ? 'text-red-200' : 'text-emerald-200'}`}>{formatNs(timing.metrics.wns)}</p></div>
@@ -426,7 +483,7 @@ export function TimingWorkbench() {
                   <div><dt className="text-slate-500">{t('timing.path.slack')}</dt><dd className="mt-1 font-mono text-slate-200">{formatNs(timing.metrics.worstPath.slack)}</dd></div>
                 </dl>
                 {timing.evidence ? <p className="mt-4 text-xs leading-5 text-emerald-200">✓ {t('timing.result.cleanupVerified')}</p> : null}
-                {timing.metrics.violations && !timing.proposal ? <button type="button" onClick={() => void propose()} disabled={locked} className="mt-5 w-full rounded-2xl border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-sm font-semibold text-amber-100 hover:bg-amber-500/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 disabled:opacity-50">{busy === 'proposal' ? t('timing.action.proposing') : t('timing.action.proposal')}</button> : null}
+                {timing.phase === 'diagnosis_ready' && timing.metrics.violations && !timing.proposal ? <button type="button" onClick={() => void propose()} disabled={locked} className="mt-5 w-full rounded-2xl border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-sm font-semibold text-amber-100 hover:bg-amber-500/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 disabled:opacity-50">{busy === 'proposal' ? t('timing.action.proposing') : t('timing.action.proposal')}</button> : null}
               </> : null}
             </section>
 
@@ -436,15 +493,15 @@ export function TimingWorkbench() {
               <dl className="mt-4 space-y-3 text-sm"><div><dt className="font-medium text-slate-200">{t('timing.proposal.hypothesis')}</dt><dd className="mt-1 leading-6 text-slate-400">{t('timing.proposal.hypothesisDetail')}</dd></div><div><dt className="font-medium text-slate-200">{t('timing.proposal.signal')}</dt><dd className="mt-1 leading-6 text-slate-400">{t('timing.proposal.signalDetail')}</dd></div></dl>
               <p className="mt-4 text-sm font-medium text-slate-200">{t('timing.proposal.tradeoffs')}</p><ul className="mt-2 list-disc space-y-2 pl-5 text-sm leading-6 text-slate-400"><li>{t('timing.proposal.tradeoff.runtime')}</li><li>{t('timing.proposal.tradeoff.congestion')}</li><li>{t('timing.proposal.tradeoff.evidence')}</li></ul>
               <p className="mt-4 text-xs text-slate-500">{t('timing.proposal.expires')}: {formatDate(timing.proposal.expiresAt, locale)}</p>
-              {!timing.confirmation && proposalExpired ? <div role="alert" className="mt-5 rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-red-100">
+              {timing.phase === 'proposal_ready' && !timing.confirmation && proposalExpired ? <div role="alert" className="mt-5 rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-red-100">
                 <p className="font-semibold">{t('timing.error.TimingProposalExpired.message')}</p>
                 <p className="mt-2 text-sm leading-6">{t('timing.error.TimingProposalExpired.recovery')}</p>
-              </div> : !timing.confirmation ? <div className="mt-5 rounded-2xl border border-slate-700 bg-slate-950/70 p-4">
+              </div> : timing.phase === 'proposal_ready' && !timing.confirmation ? <div className="mt-5 rounded-2xl border border-slate-700 bg-slate-950/70 p-4">
                 <label className="block text-sm text-slate-200" htmlFor="timing-confirmation-token">{t('timing.confirm.label')} <span className="font-mono text-amber-200">{timing.proposal.confirmationToken}</span></label>
                 <input id="timing-confirmation-token" value={typedToken} onChange={(event) => setTypedToken(event.target.value.trim().toLowerCase())} maxLength={12} autoComplete="off" spellCheck={false} className="mt-3 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 font-mono text-sm tracking-[0.18em] text-slate-100 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-500/20" />
                 <p className="mt-3 text-xs leading-5 text-slate-500">{t('timing.confirm.identity')}</p>
                 <button type="button" onClick={() => void confirm()} disabled={typedToken !== timing.proposal.confirmationToken || locked} className="mt-4 w-full rounded-xl bg-amber-400 px-4 py-3 text-sm font-semibold text-slate-950 hover:bg-amber-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">{busy === 'confirm' ? t('timing.action.confirming') : t('timing.action.confirm')}</button>
-              </div> : <button type="button" onClick={() => void execute()} disabled={locked || !edaCanStart || timing.phase === 'comparison_ready'} className="mt-5 w-full rounded-2xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-slate-950 hover:bg-cyan-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">{busy === 'candidate' ? t('timing.action.executing') : t('timing.action.execute')}</button>}
+              </div> : timing.phase === 'confirmed' && timing.confirmation ? <button type="button" onClick={() => void execute()} disabled={locked || readinessLoading || readinessUnavailable || !readiness || !edaActionAvailable} className="mt-5 w-full rounded-2xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-slate-950 hover:bg-cyan-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">{busy === 'candidate' ? t('timing.action.executing') : edaCanStart ? t('timing.action.execute') : edaCanQueue ? t('timing.action.queueCandidate') : t('timing.action.unavailable')}</button> : null}
             </section> : null}
 
             {timing?.comparison ? <section className="rounded-3xl border border-cyan-500/30 bg-cyan-500/5 p-5 sm:p-6">

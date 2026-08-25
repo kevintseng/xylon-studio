@@ -7,7 +7,13 @@ export const MAX_TIMING_SDC_BYTES = 16 * 1024
 export interface TimingReadiness {
   state: 'ready' | 'blocked'
   canStartEda: boolean
+  canQueueEda: boolean
   requestedCpus: number | null
+  thresholds: {
+    memoryAvailableBytes: number
+    memoryFreePercent: number
+    diskFreeBytes: number
+  }
   resource: {
     logicalCpus: number
     loadOneMinute: number | null
@@ -109,29 +115,36 @@ export function normalizeTimingReadiness(input: unknown): TimingReadiness {
   if (!input || typeof input !== 'object') throw new Error('timing readiness must be an object')
   const value = input as Record<string, unknown>
   const resource = value.resource
+  const thresholds = value.thresholds
   if (
     value.schema_version !== 'xylon-timing-readiness/v1'
     || (value.state !== 'ready' && value.state !== 'blocked')
     || typeof value.can_start_eda !== 'boolean'
     || value.can_start_eda !== (value.state === 'ready')
+    || typeof value.can_queue_eda !== 'boolean'
+    || (value.can_queue_eda && (value.state !== 'blocked' || value.requested_cpus === null))
+    || (value.can_start_eda && value.can_queue_eda)
     || (value.requested_cpus !== null && (!Number.isInteger(value.requested_cpus) || (value.requested_cpus as number) < 1 || (value.requested_cpus as number) > 4))
     || !resource
     || typeof resource !== 'object'
+    || !thresholds
+    || typeof thresholds !== 'object'
     || !Array.isArray(value.blockers)
     || !value.blockers.every((blocker) => typeof blocker === 'string')
   ) {
     throw new Error('timing readiness contract is invalid')
   }
   const snapshot = resource as Record<string, unknown>
-  const requiredNumber = (field: string): number => {
-    const observed = snapshot[field]
+  const safetyFloor = thresholds as Record<string, unknown>
+  const requiredNumber = (source: Record<string, unknown>, field: string): number => {
+    const observed = source[field]
     if (typeof observed !== 'number' || !Number.isFinite(observed) || observed < 0) {
       throw new Error(`timing readiness ${field} is invalid`)
     }
     return observed
   }
-  const optionalNumber = (field: string): number | null => {
-    const observed = snapshot[field]
+  const optionalNumber = (source: Record<string, unknown>, field: string): number | null => {
+    const observed = source[field]
     if (observed === null) return null
     if (typeof observed !== 'number' || !Number.isFinite(observed) || observed < 0) {
       throw new Error(`timing readiness ${field} is invalid`)
@@ -141,13 +154,19 @@ export function normalizeTimingReadiness(input: unknown): TimingReadiness {
   return {
     state: value.state,
     canStartEda: value.can_start_eda,
+    canQueueEda: value.can_queue_eda,
     requestedCpus: value.requested_cpus as number | null,
+    thresholds: {
+      memoryAvailableBytes: requiredNumber(safetyFloor, 'memory_available_bytes'),
+      memoryFreePercent: requiredNumber(safetyFloor, 'memory_free_percent'),
+      diskFreeBytes: requiredNumber(safetyFloor, 'disk_free_bytes'),
+    },
     resource: {
-      logicalCpus: requiredNumber('logical_cpus'),
-      loadOneMinute: optionalNumber('load_one_minute'),
-      memoryAvailableBytes: optionalNumber('memory_available_bytes'),
-      memoryFreePercent: optionalNumber('memory_free_percent'),
-      diskFreeBytes: requiredNumber('disk_free_bytes'),
+      logicalCpus: requiredNumber(snapshot, 'logical_cpus'),
+      loadOneMinute: optionalNumber(snapshot, 'load_one_minute'),
+      memoryAvailableBytes: optionalNumber(snapshot, 'memory_available_bytes'),
+      memoryFreePercent: optionalNumber(snapshot, 'memory_free_percent'),
+      diskFreeBytes: requiredNumber(snapshot, 'disk_free_bytes'),
     },
     blockers: [...value.blockers],
   }
@@ -180,6 +199,10 @@ export function analyzeTiming(
 
 export function readTimingRun(apiUrl: string, runId: string, signal?: AbortSignal): Promise<TimingState> {
   return timingRequest(`${apiUrl}/runs/${runId}`, { method: 'GET', signal })
+}
+
+export function cancelTimingRun(apiUrl: string, runId: string): Promise<TimingState> {
+  return timingRequest(`${apiUrl}/runs/${runId}/cancel`, { method: 'POST' })
 }
 
 export function createTimingProposal(apiUrl: string, runId: string): Promise<TimingState> {

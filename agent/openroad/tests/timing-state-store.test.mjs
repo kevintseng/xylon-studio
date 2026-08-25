@@ -105,14 +105,18 @@ test('persists one proposal and one-use external confirmation transitions', asyn
   const consumed = await consumeConfirmedTimingRepair(runDir, {
     proposalId: proposal.proposal_id,
     confirmationId: confirmation.confirmation_id,
+    candidateRunId: '9'.repeat(32),
     now: new Date('2026-08-25T00:02:00.000Z'),
   })
   assert.equal(consumed.confirmation.state, 'consumed')
   assert.equal(consumed.confirmation.used_at, '2026-08-25T00:02:00.000Z')
+  const manifestAfterConsume = JSON.parse(await readFile(path.join(runDir, 'manifest.json'), 'utf8'))
+  assert.deepEqual(manifestAfterConsume.candidate, { run_id: '9'.repeat(32), state: 'running' })
   await assert.rejects(
     consumeConfirmedTimingRepair(runDir, {
       proposalId: proposal.proposal_id,
       confirmationId: confirmation.confirmation_id,
+      candidateRunId: 'a'.repeat(32),
       now: new Date('2026-08-25T00:03:00.000Z'),
     }),
     /already used|missing, mismatched/,
@@ -207,6 +211,7 @@ test('proposal, confirmation, and execution each reject mutated baseline evidenc
     consumeConfirmedTimingRepair(executionRun, {
       proposalId: executionProposal.proposal_id,
       confirmationId: confirmation.confirmation_id,
+      candidateRunId: 'b'.repeat(32),
       now: new Date('2026-08-25T00:02:00.000Z'),
     }),
     /TimingArtifactInvalid/,

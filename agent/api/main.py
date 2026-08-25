@@ -8,6 +8,7 @@ Run:
 """
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,7 +16,11 @@ from fastapi.responses import JSONResponse
 
 from agent.api import LOCAL_WEB_ORIGINS
 from agent.api.routes import assistant, local, openroad, pipeline, timing
-from agent.api.routes.timing import MAX_TIMING_BODY_BYTES
+from agent.api.routes.timing import (
+    MAX_TIMING_BODY_BYTES,
+    cancel_active_timing_jobs,
+    reconcile_interrupted_timing_jobs,
+)
 from agent.pipeline.limits import MAX_PIPELINE_BODY_BYTES
 
 # Configure logging
@@ -25,13 +30,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    if not await reconcile_interrupted_timing_jobs():
+        logger.error("Local API startup could not verify all interrupted timing job cleanup")
+    yield
+    if not await cancel_active_timing_jobs(shutdown=True):
+        logger.error("Local API shutdown could not verify all timing job cleanup")
+
+
 # Create FastAPI app
 app = FastAPI(
     title="XylonStudio API",
     description="Local Verilator and Yosys verification with reproducible evidence",
     version="0.4.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # CORS middleware

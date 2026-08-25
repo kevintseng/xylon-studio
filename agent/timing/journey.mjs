@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readFile, realpath } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -12,6 +13,7 @@ import { validateTimingInput } from '../openroad/timing-contract.mjs'
 import { readBoundedRegularText } from '../openroad/timing-files.mjs'
 import { TIMING_CANDIDATE_FLOW_RECIPE } from '../openroad/timing-recipe.mjs'
 import { runTimingDesign } from '../openroad/timing-runner.mjs'
+import { createTimingRuntimeOwnership } from '../openroad/timing-runtime.mjs'
 import { consumeConfirmedTimingRepair } from './state-store.mjs'
 
 const MAX_MANIFEST_BYTES = 1024 * 1024
@@ -132,15 +134,123 @@ export function compareTimingResults({ baseline, candidate, proposal, confirmati
   }
 }
 
-async function persistJourneyFailure(runDir, failure) {
+async function persistJourneyFailure(runDir, failure, candidate = null) {
   const manifestPath = path.join(runDir, 'manifest.json')
   const manifest = await readManifest(manifestPath)
   await writeJsonAtomic(manifestPath, {
     ...manifest,
     journey_state: 'candidate_failed',
     proposal: { ...manifest.proposal, state: 'candidate_failed' },
+    ...(candidate && { candidate: { ...manifest.candidate, ...candidate } }),
     candidate_failure: failure,
   })
+}
+
+async function recoverOwnedTimingRuntime(root, runId) {
+  const runDir = path.join(root, '.xylon', 'timing', 'runs', runId)
+  try {
+    const canonical = await realpath(runDir)
+    if (canonical !== runDir) throw new Error('Timing recovery run path contains an unsupported indirection')
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return {
+        verified: true,
+        cleanup_verified: true,
+        run_id: runId,
+        remaining_container_ids: [],
+        recovery_run_directory_absent: true,
+      }
+    }
+    throw error
+  }
+  const repoId = createHash('sha256').update(root).digest('hex')
+  return createTimingRuntimeOwnership({
+    repoId,
+    runId,
+    cidFile: path.join(runDir, 'container.cid'),
+  }).cleanupAndVerify()
+}
+
+export async function recoverInterruptedTimingRun(
+  { repoRoot, baselineRunId },
+  { recoverRuntime = recoverOwnedTimingRuntime } = {},
+) {
+  const { root, runDir } = await resolveTimingRunDirectory(repoRoot, baselineRunId)
+  const manifestPath = path.join(runDir, 'manifest.json')
+  const manifest = await readManifest(manifestPath)
+  const state = manifest.journey_state ?? manifest.state
+  if (['baseline_ready', 'comparison_ready', 'blocked', 'candidate_failed'].includes(state)) {
+    return manifest
+  }
+  const candidateRunId = state === 'candidate_running' ? manifest.candidate?.run_id : null
+  const cleanupRunId = candidateRunId ?? baselineRunId
+  let cleanup
+  try {
+    cleanup = await recoverRuntime(root, cleanupRunId)
+  } catch (error) {
+    cleanup = { verified: false, cleanup_verified: false, error: error instanceof Error ? error.message : String(error) }
+  }
+  let cleanupVerified = cleanup?.verified === true && cleanup?.cleanup_verified === true
+  const failure = {
+    failed_at: new Date().toISOString(),
+    code: cleanupVerified ? 'TimingRunInterrupted' : 'TimingCleanupUnverified',
+    message: cleanupVerified
+      ? 'The local API restarted before this timing run completed.'
+      : 'Xylon could not verify cleanup after the local API restarted.',
+    recovery: cleanupVerified
+      ? 'Review the saved inputs, then start a new timing baseline when local capacity is ready.'
+      : 'Do not start another EDA run. Run scripts/xylon-openroad doctor and clean only the exact owned timing resources.',
+    candidate_run_id: candidateRunId,
+  }
+  if (candidateRunId) {
+    const candidateManifestPath = path.join(root, '.xylon', 'timing', 'runs', candidateRunId, 'manifest.json')
+    try {
+      const candidateManifest = await readManifest(candidateManifestPath)
+      await writeJsonAtomic(candidateManifestPath, {
+        ...candidateManifest,
+        state: 'blocked',
+        journey_state: 'blocked',
+        failed_at: failure.failed_at,
+        error: failure.code,
+        recovery: failure.recovery,
+        runtime: { ...(candidateManifest.runtime ?? {}), interrupted: true, recovered_after_restart: true },
+        cleanup,
+      })
+    } catch (error) {
+      cleanup = {
+        ...cleanup,
+        verified: false,
+        cleanup_verified: false,
+        ...(error?.code !== 'ENOENT' ? { candidate_manifest_error: error instanceof Error ? error.message : String(error) } : {}),
+      }
+      cleanupVerified = false
+      failure.code = 'TimingCleanupUnverified'
+      failure.message = 'Xylon could not reconcile the candidate manifest after the local API restarted.'
+      failure.recovery = 'Do not start another EDA run. Inspect the exact candidate run and owned timing resources.'
+    }
+    await writeJsonAtomic(manifestPath, {
+      ...manifest,
+      journey_state: 'candidate_failed',
+      proposal: { ...manifest.proposal, state: 'candidate_failed' },
+      candidate: { ...manifest.candidate, state: 'interrupted', cleanup_verified: cleanup?.cleanup_verified === true },
+      candidate_failure: failure,
+    })
+  } else {
+    await writeJsonAtomic(manifestPath, {
+      ...manifest,
+      state: 'blocked',
+      journey_state: 'blocked',
+      failed_at: failure.failed_at,
+      error: failure.code,
+      recovery: failure.recovery,
+      runtime: { ...(manifest.runtime ?? {}), interrupted: true, recovered_after_restart: true },
+      cleanup,
+    })
+  }
+  if (!cleanupVerified) {
+    throw new TimingJourneyError(failure.code, failure.message, failure.recovery, { run_id: baselineRunId, cleanup })
+  }
+  return readManifest(manifestPath)
 }
 
 export async function executeApprovedTimingRepair({
@@ -156,13 +266,14 @@ export async function executeApprovedTimingRepair({
 } = {}) {
   if (!repoRoot) throw new TimingJourneyError('RepositoryRequired', 'Repository root is required', 'Run the timing journey from a Xylon checkout.')
   const { root, runDir } = await resolveTimingRunDirectory(repoRoot, baselineRunId)
+  const candidateRunId = createRunId()
   const consumed = await consumeConfirmedTimingRepair(runDir, {
     proposalId,
     confirmationId,
+    candidateRunId,
     now,
   })
   const baseline = await readManifest(path.join(runDir, 'manifest.json'))
-  const candidateRunId = createRunId()
   let candidateRun = null
   try {
     const rawInput = {
@@ -237,15 +348,40 @@ export async function executeApprovedTimingRepair({
     })
     return { baseline_run_id: baselineRunId, candidate_run_id: candidate.run_id, comparison }
   } catch (error) {
+    const originalCode = error?.code ?? error?.name ?? 'TimingCandidateFailed'
     const failure = {
       failed_at: new Date().toISOString(),
-      code: error?.code ?? error?.name ?? 'TimingCandidateFailed',
+      code: originalCode,
       message: error instanceof Error ? error.message : String(error),
       recovery: error?.recovery ?? 'Review the candidate failure, then create a new baseline and review a new proposal before retrying.',
       candidate_run_id: error?.run_id ?? candidateRun?.run_id ?? candidateRunId,
     }
+    let candidateCleanupVerified = false
     try {
-      await persistJourneyFailure(runDir, failure)
+      const candidateManifest = await readManifest(path.join(
+        root,
+        '.xylon',
+        'timing',
+        'runs',
+        failure.candidate_run_id,
+        'manifest.json',
+      ))
+      candidateCleanupVerified = candidateManifest.cleanup?.verified === true
+        && candidateManifest.cleanup?.cleanup_verified === true
+    } catch {
+      candidateCleanupVerified = false
+    }
+    if (['TimingRunCancelled', 'TimingRunInterrupted'].includes(originalCode) && !candidateCleanupVerified) {
+      failure.code = 'TimingCleanupUnverified'
+      failure.message = 'Xylon could not verify cleanup for the interrupted candidate timing run.'
+      failure.recovery = 'Do not start another EDA run. Inspect only the exact candidate run and owned timing resources.'
+    }
+    try {
+      await persistJourneyFailure(runDir, failure, {
+        run_id: failure.candidate_run_id,
+        state: ['TimingRunCancelled', 'TimingRunInterrupted'].includes(originalCode) ? 'interrupted' : 'failed',
+        cleanup_verified: candidateCleanupVerified,
+      })
     } catch (persistError) {
       failure.state_persist_error = persistError instanceof Error ? persistError.message : String(persistError)
     }

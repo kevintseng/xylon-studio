@@ -185,7 +185,12 @@ export async function acceptProtectedCiTimingConfirmation(runDir, { now = new Da
   })
 }
 
-export async function consumeConfirmedTimingRepair(runDir, { proposalId, confirmationId, now = new Date() }) {
+export async function consumeConfirmedTimingRepair(runDir, {
+  proposalId,
+  confirmationId,
+  candidateRunId,
+  now = new Date(),
+}) {
   return withStateLock(runDir, async () => {
     const manifestPath = path.join(runDir, 'manifest.json')
     const confirmationPath = path.join(runDir, 'proposal', 'confirmation.json')
@@ -194,6 +199,9 @@ export async function consumeConfirmedTimingRepair(runDir, { proposalId, confirm
     const confirmation = await readJson(confirmationPath)
     const timestamp = now instanceof Date ? now : new Date(now)
     if (!Number.isFinite(timestamp.getTime())) throw new Error('TimingConfirmationInvalid: execution clock is invalid')
+    if (!/^[a-f0-9]{32}$/.test(candidateRunId ?? '')) {
+      throw new Error('TimingCandidateInvalid: candidate run identity is invalid')
+    }
     const frozenBaseline = await verifyTimingBaselineArtifacts({ runDir, baseline: manifest })
     assertProposalMatchesBaseline(proposal, frozenBaseline, { now: timestamp })
     if (manifest.journey_state !== 'externally_confirmed'
@@ -211,6 +219,7 @@ export async function consumeConfirmedTimingRepair(runDir, { proposalId, confirm
       journey_state: 'candidate_running',
       proposal: { ...manifest.proposal, state: 'candidate_running' },
       confirmation: { ...manifest.confirmation, state: consumed.state, used_at: consumed.used_at },
+      candidate: { run_id: candidateRunId, state: 'running' },
     })
     return { proposal, confirmation: consumed }
   })

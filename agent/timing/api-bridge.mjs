@@ -9,6 +9,7 @@ import { readBoundedRegularText } from '../openroad/timing-files.mjs'
 import { runTimingDesign } from '../openroad/timing-runner.mjs'
 import {
   executeApprovedTimingRepair,
+  recoverInterruptedTimingRun,
   resolveTimingRunDirectory,
 } from './journey.mjs'
 import {
@@ -83,6 +84,12 @@ function publicMetrics(metrics) {
 
 function journeyPhase(manifest) {
   const state = manifest.journey_state ?? manifest.state
+  const cancelled = manifest.error === 'TimingRunCancelled'
+    || manifest.candidate_failure?.code === 'TimingRunCancelled'
+  const cancellationCleanupVerified = manifest.candidate_failure?.code === 'TimingRunCancelled'
+    ? manifest.candidate?.cleanup_verified === true
+    : manifest.cleanup?.verified === true && manifest.cleanup?.cleanup_verified === true
+  if (cancelled) return cancellationCleanupVerified ? 'cancelled' : 'blocked'
   if (state === 'baseline_ready') return 'diagnosis_ready'
   if (state === 'awaiting_confirmation') return 'proposal_ready'
   if (state === 'externally_confirmed') return 'confirmed'
@@ -94,6 +101,11 @@ function journeyPhase(manifest) {
 
 export function publicTimingState({ manifest, proposal = null, comparison = null }) {
   const candidateFailure = manifest.candidate_failure ?? null
+  const cancelled = manifest.error === 'TimingRunCancelled'
+    || candidateFailure?.code === 'TimingRunCancelled'
+  const cancellationCleanupVerified = candidateFailure?.code === 'TimingRunCancelled'
+    ? manifest.candidate?.cleanup_verified === true
+    : manifest.cleanup?.verified === true && manifest.cleanup?.cleanup_verified === true
   return {
     schema_version: 'xylon-timing-api/v1',
     run_id: manifest.run_id,
@@ -103,10 +115,12 @@ export function publicTimingState({ manifest, proposal = null, comparison = null
     source_revision: manifest.source_revision ?? null,
     clock: manifest.clock ?? null,
     metrics: publicMetrics(manifest.metrics),
-    evidence: manifest.artifacts ? {
-      report_sha256: manifest.artifacts.report?.sha256 ?? null,
-      checkpoint_sha256: manifest.artifacts.checkpoint?.sha256 ?? null,
-      cleanup_verified: manifest.cleanup?.verified === true && manifest.cleanup?.cleanup_verified === true,
+    evidence: cancelled || manifest.artifacts || manifest.cleanup ? {
+      report_sha256: cancelled ? null : manifest.artifacts?.report?.sha256 ?? null,
+      checkpoint_sha256: cancelled ? null : manifest.artifacts?.checkpoint?.sha256 ?? null,
+      cleanup_verified: cancelled
+        ? cancellationCleanupVerified
+        : manifest.cleanup?.verified === true && manifest.cleanup?.cleanup_verified === true,
     } : null,
     proposal: proposal ? {
       proposal_id: proposal.proposal_id,
@@ -141,7 +155,12 @@ export function publicTimingState({ manifest, proposal = null, comparison = null
       baseline: { run_id: comparison.baseline.run_id, metrics: publicMetrics(comparison.baseline.metrics) },
       candidate: { run_id: comparison.candidate.run_id, metrics: publicMetrics(comparison.candidate.metrics) },
     } : null,
-    failure: candidateFailure ? {
+    failure: cancelled && !cancellationCleanupVerified ? {
+      code: 'TimingCleanupUnverified',
+      message: 'Xylon could not verify cleanup for the cancelled timing run.',
+      recovery: 'Do not start another EDA run. Inspect only the exact saved Run ID and owned timing resources.',
+      candidate_run_id: candidateFailure?.candidate_run_id ?? null,
+    } : candidateFailure ? {
       code: candidateFailure.code,
       message: candidateFailure.message,
       recovery: candidateFailure.recovery,
@@ -196,6 +215,11 @@ export async function runTimingApiCommand(command, rawPayload, { repoRoot, signa
   const runId = requireRunId(payload.run_id)
   if (command === 'status') {
     requireExactKeys(payload, ['run_id'], 'status')
+    return loadPublicState(repoRoot, runId)
+  }
+  if (command === 'recover') {
+    requireExactKeys(payload, ['run_id'], 'recovery')
+    await recoverInterruptedTimingRun({ repoRoot, baselineRunId: runId })
     return loadPublicState(repoRoot, runId)
   }
   const { runDir } = await resolveTimingRunDirectory(repoRoot, runId)
@@ -283,12 +307,20 @@ const modulePath = fileURLToPath(import.meta.url)
 if (path.resolve(process.argv[1] ?? '') === modulePath) {
   const repoRoot = path.resolve(path.dirname(modulePath), '..', '..')
   const command = process.argv[2]
+  const claimedRunId = process.argv[3]
   const interruption = new AbortController()
-  const interrupt = () => interruption.abort()
+  const interrupt = () => interruption.abort('application_shutdown')
+  const cancel = () => interruption.abort('user_cancelled')
   process.once('SIGTERM', interrupt)
   process.once('SIGINT', interrupt)
+  process.once('SIGUSR1', cancel)
   readStdinJson().then(
-    (payload) => runTimingApiCommand(command, payload, { repoRoot, signal: interruption.signal }),
+    (payload) => {
+      if (!RUN_ID.test(claimedRunId ?? '') || payload.run_id !== claimedRunId) {
+        throw timingApiError('TimingRunInvalid', 'bridge process identity does not match the requested timing run')
+      }
+      return runTimingApiCommand(command, payload, { repoRoot, signal: interruption.signal })
+    },
   ).then(
     (result) => process.stdout.write(`${JSON.stringify(result)}\n`),
     (error) => {
@@ -298,5 +330,6 @@ if (path.resolve(process.argv[1] ?? '') === modulePath) {
   ).finally(() => {
     process.removeListener('SIGTERM', interrupt)
     process.removeListener('SIGINT', interrupt)
+    process.removeListener('SIGUSR1', cancel)
   })
 }

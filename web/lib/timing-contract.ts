@@ -9,13 +9,29 @@ export function isTimingProposalExpired(expiresAt: string, now = Date.now()): bo
 }
 
 export type TimingPhase =
+  | 'queued'
   | 'running'
   | 'diagnosis_ready'
   | 'proposal_ready'
   | 'confirmed'
+  | 'candidate_queued'
   | 'candidate_running'
+  | 'cancelling'
+  | 'cancelled'
   | 'comparison_ready'
   | 'blocked'
+
+const ACTIVE_TIMING_PHASES = new Set<TimingPhase>([
+  'queued', 'running', 'candidate_queued', 'candidate_running', 'cancelling',
+])
+
+export function isTimingActivePhase(phase: TimingPhase | null | undefined): boolean {
+  return phase !== null && phase !== undefined && ACTIVE_TIMING_PHASES.has(phase)
+}
+
+export function isTimingCancellablePhase(phase: TimingPhase | null | undefined): boolean {
+  return phase === 'queued' || phase === 'running' || phase === 'candidate_queued' || phase === 'candidate_running'
+}
 
 export interface TimingMetrics {
   analysis: 'setup'
@@ -70,8 +86,8 @@ export interface TimingState {
   clock: { name: string; port: string; periodNs: number } | null
   metrics: TimingMetrics | null
   evidence: {
-    reportSha256: string
-    checkpointSha256: string
+    reportSha256: string | null
+    checkpointSha256: string | null
     cleanupVerified: boolean
   } | null
   proposal: TimingProposal | null
@@ -127,6 +143,10 @@ function exactId(value: unknown, pattern: RegExp, label: string): string {
   const result = string(value, label, 128)
   if (!pattern.test(result)) throw new TimingContractError(`${label} is invalid`)
   return result
+}
+
+function nullableExactId(value: unknown, pattern: RegExp, label: string): string | null {
+  return value === null || value === undefined ? null : exactId(value, pattern, label)
 }
 
 function timestamp(value: unknown, label: string): string {
@@ -236,8 +256,9 @@ function comparison(value: unknown): TimingComparison {
 export function normalizeTimingState(value: unknown): TimingState {
   const input = record(value, 'timing response')
   const phases = new Set<TimingPhase>([
-    'running', 'diagnosis_ready', 'proposal_ready', 'confirmed',
-    'candidate_running', 'comparison_ready', 'blocked',
+    'queued', 'running', 'diagnosis_ready', 'proposal_ready', 'confirmed',
+    'candidate_queued', 'candidate_running', 'cancelling', 'cancelled',
+    'comparison_ready', 'blocked',
   ])
   if (input.schema_version !== 'xylon-timing-api/v1' || !phases.has(input.phase as TimingPhase)) {
     throw new TimingContractError('timing response schema or phase is unsupported')
@@ -250,8 +271,8 @@ export function normalizeTimingState(value: unknown): TimingState {
     ? null
     : record(input.evidence, 'evidence')
   const parsedEvidence = evidenceInput === null ? null : {
-    reportSha256: exactId(evidenceInput.report_sha256, SHA256_PATTERN, 'evidence.report_sha256'),
-    checkpointSha256: exactId(evidenceInput.checkpoint_sha256, SHA256_PATTERN, 'evidence.checkpoint_sha256'),
+    reportSha256: nullableExactId(evidenceInput.report_sha256, SHA256_PATTERN, 'evidence.report_sha256'),
+    checkpointSha256: nullableExactId(evidenceInput.checkpoint_sha256, SHA256_PATTERN, 'evidence.checkpoint_sha256'),
     cleanupVerified: evidenceInput.cleanup_verified === true,
   }
   const confirmationInput = input.confirmation === null || input.confirmation === undefined
@@ -302,7 +323,10 @@ export function normalizeTimingState(value: unknown): TimingState {
     },
   }
 
-  if (result.phase !== 'running' && result.phase !== 'blocked' && (!result.metrics || !result.evidence)) {
+  const hasMeasuredEvidence = result.evidence?.reportSha256 !== null
+    && result.evidence?.reportSha256 !== undefined
+    && result.evidence.checkpointSha256 !== null
+  if (!isTimingActivePhase(result.phase) && result.phase !== 'blocked' && result.phase !== 'cancelled' && (!result.metrics || !hasMeasuredEvidence)) {
     throw new TimingContractError('completed timing state is missing metrics or evidence')
   }
   if (result.evidence && !result.evidence.cleanupVerified) {
@@ -314,6 +338,16 @@ export function normalizeTimingState(value: unknown): TimingState {
   }
   if (result.phase === 'comparison_ready' && !result.comparison) {
     throw new TimingContractError('comparison phase is missing before/after evidence')
+  }
+  if (result.phase === 'cancelled') {
+    if (!result.failure) throw new TimingContractError('cancelled phase is missing recovery guidance')
+    const cancellationCodes = new Set(['TimingRunCancelled', 'TimingRunCancelledBeforeStart'])
+    if (!cancellationCodes.has(result.failure.code)) {
+      throw new TimingContractError('cancelled phase has an unsupported failure code')
+    }
+    if (result.failure.code === 'TimingRunCancelled' && !result.evidence?.cleanupVerified) {
+      throw new TimingContractError('started cancellation is missing verified cleanup evidence')
+    }
   }
   if (result.phase === 'blocked' && !result.failure) throw new TimingContractError('blocked phase is missing recovery guidance')
   return result

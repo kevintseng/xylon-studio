@@ -14,6 +14,8 @@ import { runTimingDesign } from '../timing-runner.mjs'
 import {
   compareTimingResults,
   executeApprovedTimingRepair,
+  recoverInterruptedTimingRun,
+  TimingJourneyError,
 } from '../../timing/journey.mjs'
 import {
   acceptExternalTimingConfirmation,
@@ -62,6 +64,43 @@ async function preparedBaseline(context) {
     }),
   })
   return { repoRoot, runDir: staged.runDir, proposal, confirmation }
+}
+
+async function stagedTimingRunForRecovery(context, {
+  runId = 'a'.repeat(32),
+  candidateRunId = 'b'.repeat(32),
+  candidateRunning = false,
+  withCandidateManifest = true,
+} = {}) {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'xylon-timing-recovery-'))
+  context.after(() => rm(repoRoot, { recursive: true, force: true }))
+  await createTimingRunWorkspace({
+    repoRoot,
+    validatedInput: INPUT,
+    runId,
+  })
+  const runDir = path.join(repoRoot, '.xylon', 'timing', 'runs', runId)
+  const manifestPath = path.join(runDir, 'manifest.json')
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  const nextManifest = {
+    ...manifest,
+    state: candidateRunning ? 'candidate_running' : 'running',
+    journey_state: candidateRunning ? 'candidate_running' : 'running',
+    candidate: candidateRunning ? { run_id: candidateRunId, state: 'running' } : null,
+  }
+  await writeFile(manifestPath, `${JSON.stringify(nextManifest)}\n`)
+  if (candidateRunning && withCandidateManifest) {
+    const candidateDir = path.join(repoRoot, '.xylon', 'timing', 'runs', candidateRunId)
+    await mkdir(candidateDir, { recursive: true })
+    await writeFile(path.join(candidateDir, 'manifest.json'), `${JSON.stringify({
+      run_id: candidateRunId,
+      state: 'candidate_running',
+      journey_state: 'candidate_running',
+      source_revision: SOURCE_REVISION,
+      runtime: {},
+    })}\n`)
+  }
+  return { repoRoot, runDir, candidateRunId }
 }
 
 async function writeCandidateArtifacts(runDir, { wns = -0.3, tns = -1 } = {}) {
@@ -223,4 +262,153 @@ test('candidate execution failure directs the user to a fresh baseline', async (
   assert.equal(manifest.journey_state, 'candidate_failed')
   assert.equal(manifest.confirmation.state, 'consumed')
   assert.match(manifest.candidate_failure.recovery, /create a new baseline/)
+})
+
+test('candidate cancellation binds verified cleanup to the exact candidate run', async (context) => {
+  const prepared = await preparedBaseline(context)
+  await assert.rejects(
+    executeApprovedTimingRepair({
+      repoRoot: prepared.repoRoot,
+      baselineRunId: 'a'.repeat(32),
+      proposalId: prepared.proposal.proposal_id,
+      confirmationId: prepared.confirmation.confirmation_id,
+    }, {
+      now: new Date('2026-08-25T00:02:00.000Z'),
+      createRunId: () => '1'.repeat(32),
+      runTiming: async (_input, { repoRoot, runId }) => {
+        const candidateDir = path.join(repoRoot, '.xylon', 'timing', 'runs', runId)
+        await mkdir(candidateDir, { recursive: true })
+        await writeFile(path.join(candidateDir, 'manifest.json'), `${JSON.stringify({
+          run_id: runId,
+          state: 'blocked',
+          cleanup: { verified: true, cleanup_verified: true },
+        })}\n`)
+        throw Object.assign(new Error('candidate stopped by the user'), {
+          code: 'TimingRunCancelled',
+          run_id: runId,
+          recovery: 'Start a new baseline when ready.',
+        })
+      },
+    }),
+    (error) => {
+      assert.equal(error.code, 'TimingRunCancelled')
+      return true
+    },
+  )
+  const manifest = JSON.parse(await readFile(path.join(prepared.runDir, 'manifest.json'), 'utf8'))
+  assert.equal(manifest.candidate.run_id, '1'.repeat(32))
+  assert.equal(manifest.candidate.state, 'interrupted')
+  assert.equal(manifest.candidate.cleanup_verified, true)
+  assert.equal(manifest.candidate_failure.code, 'TimingRunCancelled')
+})
+
+test('candidate cancellation without exact cleanup evidence fails closed', async (context) => {
+  const prepared = await preparedBaseline(context)
+  await assert.rejects(
+    executeApprovedTimingRepair({
+      repoRoot: prepared.repoRoot,
+      baselineRunId: 'a'.repeat(32),
+      proposalId: prepared.proposal.proposal_id,
+      confirmationId: prepared.confirmation.confirmation_id,
+    }, {
+      now: new Date('2026-08-25T00:02:00.000Z'),
+      createRunId: () => '2'.repeat(32),
+      runTiming: async (_input, { runId }) => {
+        throw Object.assign(new Error('candidate stopped without a manifest'), {
+          code: 'TimingRunCancelled',
+          run_id: runId,
+        })
+      },
+    }),
+    (error) => {
+      assert.equal(error.code, 'TimingCleanupUnverified')
+      assert.match(error.recovery, /Do not start another EDA run/)
+      return true
+    },
+  )
+  const manifest = JSON.parse(await readFile(path.join(prepared.runDir, 'manifest.json'), 'utf8'))
+  assert.equal(manifest.candidate.run_id, '2'.repeat(32))
+  assert.equal(manifest.candidate.cleanup_verified, false)
+  assert.equal(manifest.candidate_failure.code, 'TimingCleanupUnverified')
+})
+
+test('recovering an interrupted baseline run records blocked state when cleanup is verified', async (context) => {
+  const prepared = await stagedTimingRunForRecovery(context)
+  const recovered = await recoverInterruptedTimingRun({
+    repoRoot: prepared.repoRoot,
+    baselineRunId: 'a'.repeat(32),
+  }, {
+    recoverRuntime: async () => ({
+      verified: true,
+      cleanup_verified: true,
+      remaining_container_ids: [],
+    }),
+  })
+  assert.equal(recovered.state, 'blocked')
+  assert.equal(recovered.journey_state, 'blocked')
+  assert.equal(recovered.error, 'TimingRunInterrupted')
+  assert.equal(recovered.runtime.interrupted, true)
+  assert.equal(recovered.runtime.recovered_after_restart, true)
+  assert.equal(recovered.cleanup.verified, true)
+  assert.equal(recovered.cleanup.cleanup_verified, true)
+})
+
+test('recovering a candidate-running flow marks candidate manifest blocked with verified cleanup', async (context) => {
+  const prepared = await stagedTimingRunForRecovery(context, { candidateRunning: true })
+  const recovered = await recoverInterruptedTimingRun({
+    repoRoot: prepared.repoRoot,
+    baselineRunId: 'a'.repeat(32),
+  }, {
+    recoverRuntime: async () => ({
+      verified: true,
+      cleanup_verified: true,
+      remaining_container_ids: [],
+    }),
+  })
+  assert.equal(recovered.journey_state, 'candidate_failed')
+  assert.equal(recovered.proposal?.state, 'candidate_failed')
+  assert.equal(recovered.candidate.state, 'interrupted')
+  assert.equal(recovered.candidate.cleanup_verified, true)
+  assert.equal(recovered.candidate_failure.code, 'TimingRunInterrupted')
+  assert.equal(recovered.candidate_failure.candidate_run_id, prepared.candidateRunId)
+  const candidateManifest = JSON.parse(await readFile(
+    path.join(prepared.repoRoot, '.xylon', 'timing', 'runs', prepared.candidateRunId, 'manifest.json'),
+    'utf8',
+  ))
+  assert.equal(candidateManifest.state, 'blocked')
+  assert.equal(candidateManifest.journey_state, 'blocked')
+  assert.equal(candidateManifest.runtime.interrupted, true)
+  assert.equal(candidateManifest.runtime.recovered_after_restart, true)
+  assert.equal(candidateManifest.cleanup.verified, true)
+  assert.equal(candidateManifest.cleanup.cleanup_verified, true)
+})
+
+test('candidate recovery fails closed when candidate manifest cannot be reconciled', async (context) => {
+  const prepared = await stagedTimingRunForRecovery(context, {
+    candidateRunning: true,
+    withCandidateManifest: false,
+  })
+  await assert.rejects(
+    recoverInterruptedTimingRun({
+      repoRoot: prepared.repoRoot,
+      baselineRunId: 'a'.repeat(32),
+    }, {
+      recoverRuntime: async () => ({
+        verified: true,
+        cleanup_verified: true,
+        remaining_container_ids: [],
+      }),
+    }),
+    (error) => {
+      assert.equal(error instanceof TimingJourneyError, true)
+      assert.equal(error.code, 'TimingCleanupUnverified')
+      assert.equal(error.recovery, 'Do not start another EDA run. Inspect the exact candidate run and owned timing resources.')
+      return true
+    },
+  )
+  const manifest = JSON.parse(await readFile(path.join(prepared.runDir, 'manifest.json'), 'utf8'))
+  assert.equal(manifest.journey_state, 'candidate_failed')
+  assert.equal(manifest.candidate.state, 'interrupted')
+  assert.equal(manifest.candidate.cleanup_verified, false)
+  assert.equal(manifest.candidate_failure.code, 'TimingCleanupUnverified')
 })

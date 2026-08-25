@@ -41,6 +41,76 @@ test('timing API state exposes decision evidence without report or runtime text'
   assert.doesNotMatch(JSON.stringify(state), /private report body|private runtime output/)
 })
 
+test('cancelled candidate state binds cleanup-only evidence to the exact candidate run', () => {
+  const state = publicTimingState({
+    manifest: {
+      run_id: 'c'.repeat(32),
+      state: 'blocked',
+      error: 'TimingRunCancelled',
+      run_purpose: 'baseline',
+      platform: 'sky130hd',
+      top_module: 'demo',
+      source_revision: 'b'.repeat(40),
+      candidate_failure: {
+        code: 'TimingRunCancelled',
+        message: 'user requested cancellation',
+        recovery: 'start a new bounded timing baseline after cleanup',
+        candidate_run_id: 'd'.repeat(32),
+      },
+      candidate: {
+        run_id: 'd'.repeat(32),
+        state: 'interrupted',
+        cleanup_verified: true,
+      },
+      artifacts: {
+        report: { sha256: 'e'.repeat(64) },
+        checkpoint: { sha256: 'f'.repeat(64) },
+      },
+      cleanup: {
+        verified: true,
+        cleanup_verified: true,
+      },
+    },
+  })
+  assert.equal(state.phase, 'cancelled')
+  assert.equal(state.failure.code, 'TimingRunCancelled')
+  assert.equal(state.failure.candidate_run_id, 'd'.repeat(32))
+  assert.equal(state.evidence.report_sha256, null)
+  assert.equal(state.evidence.checkpoint_sha256, null)
+  assert.equal(state.evidence.cleanup_verified, true)
+})
+
+test('cancelled candidate state fails closed when exact candidate cleanup is unverified', () => {
+  const state = publicTimingState({
+    manifest: {
+      run_id: 'c'.repeat(32),
+      state: 'baseline_ready',
+      journey_state: 'candidate_failed',
+      run_purpose: 'baseline',
+      platform: 'sky130hd',
+      top_module: 'demo',
+      candidate: {
+        run_id: 'd'.repeat(32),
+        state: 'interrupted',
+        cleanup_verified: false,
+      },
+      candidate_failure: {
+        code: 'TimingRunCancelled',
+        message: 'user requested cancellation',
+        recovery: 'start a new bounded timing baseline after cleanup',
+        candidate_run_id: 'd'.repeat(32),
+      },
+      cleanup: { verified: true, cleanup_verified: true },
+    },
+  })
+  assert.equal(state.phase, 'blocked')
+  assert.equal(state.failure.code, 'TimingCleanupUnverified')
+  assert.equal(state.failure.candidate_run_id, 'd'.repeat(32))
+  assert.equal(state.evidence.report_sha256, null)
+  assert.equal(state.evidence.checkpoint_sha256, null)
+  assert.equal(state.evidence.cleanup_verified, false)
+})
+
 test('timing bridge exposes stable codes without leaking internal paths', () => {
   const coded = publicBridgeError(new Error('TimingProposalExists: this baseline already has a proposal'))
   assert.equal(coded.error, 'TimingProposalExists')

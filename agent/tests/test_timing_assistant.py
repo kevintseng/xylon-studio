@@ -363,10 +363,11 @@ def test_assistant_execute_rechecks_resource_admission_before_bridge(monkeypatch
     monkeypatch.setattr(
         assistant_routes.timing_routes,
         "_current_timing_readiness",
-        AsyncMock(return_value={
-            "can_start_eda": False,
-            "blockers": ["memory below OpenROAD safety floor"],
-        }),
+            AsyncMock(return_value={
+                "can_start_eda": False,
+                "can_queue_eda": False,
+                "blockers": ["memory below OpenROAD safety floor"],
+            }),
     )
 
     with pytest.raises(HTTPException) as caught:

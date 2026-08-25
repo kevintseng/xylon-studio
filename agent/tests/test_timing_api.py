@@ -3,14 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from agent import local_app
 from agent.api.main import app
 from agent.api.routes import pipeline as pipeline_routes
 from agent.api.routes import timing as timing_routes
+
+
+@pytest.fixture(autouse=True)
+def isolated_timing_operation_root(monkeypatch, tmp_path):
+    monkeypatch.setattr(timing_routes, "TIMING_OPERATION_ROOT", tmp_path / "operations")
 
 
 def _state(phase: str) -> dict:
@@ -26,18 +34,23 @@ def _state(phase: str) -> dict:
 def test_timing_api_wires_analysis_proposal_confirmation_and_candidate(monkeypatch):
     calls: list[tuple[str, dict]] = []
 
-    async def fake_bridge(command: str, payload: dict) -> dict:
+    async def fake_bridge(command: str, payload: dict, **_kwargs) -> dict:
         calls.append((command, payload))
         phases = {
-            "analyze": "diagnosis_ready",
             "propose": "proposal_ready",
             "confirm": "confirmed",
-            "execute": "comparison_ready",
+            "status": "confirmed",
         }
         return _state(phases[command])
 
+    async def fake_start(command: str, payload: dict, *, current=None):
+        calls.append((command, payload))
+        return SimpleNamespace(
+            public_state=_state("candidate_queued" if current else "queued"),
+        )
+
     monkeypatch.setattr(timing_routes, "_invoke_timing_bridge", fake_bridge)
-    monkeypatch.setattr(timing_routes, "_run_heavy_timing", fake_bridge)
+    monkeypatch.setattr(timing_routes, "_start_timing_job", fake_start)
     run_id = "a" * 32
     proposal_id = "b" * 64
     confirmation_id = "c" * 32
@@ -64,11 +77,15 @@ def test_timing_api_wires_analysis_proposal_confirmation_and_candidate(monkeypat
             "confirmation_id": confirmation_id,
         })
 
-    assert analyze.status_code == 200
+    assert analyze.status_code == 202
+    assert analyze.json()["phase"] == "queued"
     assert proposal.json()["phase"] == "proposal_ready"
     assert confirmation.json()["phase"] == "confirmed"
-    assert candidate.json()["phase"] == "comparison_ready"
-    assert [command for command, _payload in calls] == ["analyze", "propose", "confirm", "execute"]
+    assert candidate.status_code == 202
+    assert candidate.json()["phase"] == "candidate_queued"
+    assert [command for command, _payload in calls] == [
+        "analyze", "propose", "confirm", "status", "execute",
+    ]
 
 
 def test_timing_readiness_exposes_safe_mode_before_heavy_work(monkeypatch):
@@ -93,7 +110,13 @@ def test_timing_readiness_exposes_safe_mode_before_heavy_work(monkeypatch):
         "schema_version": "xylon-timing-readiness/v1",
         "state": "blocked",
         "can_start_eda": False,
+        "can_queue_eda": True,
         "requested_cpus": 1,
+        "thresholds": {
+            "memory_available_bytes": 8 * 1024**3,
+            "memory_free_percent": 35,
+            "disk_free_bytes": 10 * 1024**3,
+        },
         "resource": {
             "logical_cpus": 12,
             "load_one_minute": 4.0,
@@ -147,38 +170,126 @@ def test_timing_readiness_fails_closed_for_an_invalid_cpu_budget(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["can_start_eda"] is False
+    assert response.json()["can_queue_eda"] is False
     assert response.json()["requested_cpus"] is None
     assert response.json()["blockers"] == [
         "OpenROAD CPU budget must be an integer from 1 to 4",
     ]
 
 
-def test_heavy_timing_route_rechecks_admission_before_the_bridge(monkeypatch):
+def test_timing_routes_reject_nonretryable_admission_without_queueing(monkeypatch):
+    payload = {
+        "run_id": "a" * 32,
+        "rtl": "module demo(input clk); endmodule",
+        "sdc": "create_clock -period 1.2 [get_ports {clk}]",
+        "top_module": "demo",
+        "platform": "sky130hd",
+    }
+    start = AsyncMock()
+    monkeypatch.setattr(timing_routes, "_start_timing_job", start)
+    monkeypatch.setenv("XYLON_OPENROAD_CPUS", "8")
+
+    with TestClient(app) as client:
+        invalid_cpu = client.post("/api/timing/runs", json=payload)
+
+    assert invalid_cpu.status_code == 503
+    assert invalid_cpu.json()["detail"]["retryable"] is False
+    start.assert_not_awaited()
+
+    monkeypatch.setenv("XYLON_OPENROAD_CPUS", "1")
+    monkeypatch.setattr(timing_routes, "_timing_recovery_verified", lambda: False)
+    monkeypatch.setattr(
+        timing_routes,
+        "_invoke_timing_bridge",
+        AsyncMock(return_value=_state("confirmed")),
+    )
+    with TestClient(app) as client:
+        cleanup_unverified = client.post(
+            f"/api/timing/runs/{payload['run_id']}/candidate",
+            json={"proposal_id": "b" * 64, "confirmation_id": "c" * 32},
+        )
+
+    assert cleanup_unverified.status_code == 503
+    assert cleanup_unverified.json()["detail"]["error"] == "TimingCleanupUnverified"
+    assert cleanup_unverified.json()["detail"]["retryable"] is False
+    start.assert_not_awaited()
+
+
+def test_async_timing_route_waits_for_admission_before_the_bridge(monkeypatch, tmp_path):
+    bridge = AsyncMock(return_value=_state("diagnosis_ready"))
+    monkeypatch.setattr(timing_routes, "_invoke_timing_bridge", bridge)
+    blocked = local_app.ResourceSnapshot(
+        logical_cpus=12,
+        load_one_minute=2.0,
+        memory_free_percent=60,
+        disk_free_bytes=40 * 1024**3,
+        memory_available_bytes=4 * 1024**3,
+    )
+    ready = local_app.ResourceSnapshot(
+        logical_cpus=12,
+        load_one_minute=2.0,
+        memory_free_percent=60,
+        disk_free_bytes=40 * 1024**3,
+        memory_available_bytes=12 * 1024**3,
+    )
+    snapshots = iter([blocked, ready, ready])
+    monkeypatch.setattr(
+        timing_routes,
+        "collect_resource_snapshot",
+        lambda _repo_root: next(snapshots, ready),
+    )
+    monkeypatch.setattr(timing_routes, "TIMING_ADMISSION_POLL_SECONDS", 0.001)
+
+    monkeypatch.setattr(timing_routes, "TIMING_OPERATION_ROOT", tmp_path / "operations")
+    payload = {
+        "run_id": "a" * 32,
+        "rtl": "module demo(input wire clk); endmodule",
+        "sdc": "create_clock -name core -period 1.2 [get_ports {clk}]",
+        "top_module": "demo",
+        "platform": "sky130hd",
+    }
+    async def scenario() -> dict:
+        job = await timing_routes._start_timing_job("analyze", payload)
+        await asyncio.wait_for(job.done.wait(), timeout=1)
+        assert job.result is not None
+        return job.result
+
+    result = asyncio.run(scenario())
+
+    assert result["phase"] == "diagnosis_ready"
+    bridge.assert_awaited_once()
+    assert bridge.await_args.args == ("analyze", payload)
+
+
+def test_heavy_timing_route_blocks_when_startup_cleanup_is_unverified(monkeypatch, tmp_path):
     bridge = AsyncMock()
     monkeypatch.setattr(timing_routes, "_invoke_timing_bridge", bridge)
+    monkeypatch.setattr(timing_routes, "_timing_recovery_verified", lambda: False)
     monkeypatch.setattr(
         timing_routes,
         "collect_resource_snapshot",
         lambda _repo_root: local_app.ResourceSnapshot(
             logical_cpus=12,
-            load_one_minute=2.0,
+            load_one_minute=1.0,
             memory_free_percent=60,
             disk_free_bytes=40 * 1024**3,
-            memory_available_bytes=4 * 1024**3,
+            memory_available_bytes=12 * 1024**3,
         ),
     )
+    monkeypatch.setattr(timing_routes, "TIMING_OPERATION_ROOT", tmp_path / "operations")
 
-    with TestClient(app) as client:
-        response = client.post("/api/timing/runs", json={
-            "run_id": "a" * 32,
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(timing_routes._run_heavy_timing("analyze", {
+            "run_id": "b" * 32,
             "rtl": "module demo(input wire clk); endmodule",
             "sdc": "create_clock -name core -period 1.2 [get_ports {clk}]",
             "top_module": "demo",
             "platform": "sky130hd",
-        })
+        }))
 
-    assert response.status_code == 503
-    assert response.json()["detail"]["error"] == "ResourceAdmissionBlocked"
+    assert caught.value.status_code == 503
+    assert caught.value.detail["error"] == "TimingCleanupUnverified"
+    assert "Do not start another EDA run" in caught.value.detail["recovery"]
     bridge.assert_not_awaited()
 
 
@@ -270,7 +381,7 @@ async def _measure_peak_shared_eda_work() -> int:
     async def fake_pipeline(**_kwargs):
         return await observed_result("pipeline")
 
-    async def fake_bridge(_command: str, _payload: dict):
+    async def fake_bridge(_command: str, _payload: dict, **_kwargs):
         return await observed_result("timing")
 
     with (
@@ -280,7 +391,13 @@ async def _measure_peak_shared_eda_work() -> int:
     ):
         results = await asyncio.gather(
             pipeline_routes._run_pipeline_in_local_slot(rtl_code="demo"),
-            timing_routes._run_heavy_timing("analyze", {}),
+            timing_routes._run_heavy_timing("analyze", {
+                "run_id": "f" * 32,
+                "rtl": "module demo; endmodule",
+                "sdc": "create_clock -period 1 [get_ports clk]",
+                "top_module": "demo",
+                "platform": "sky130hd",
+            }),
         )
 
     assert results == ["pipeline", "timing"]
