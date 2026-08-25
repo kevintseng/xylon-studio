@@ -80,3 +80,16 @@ test('natural-language timing assistant stays local and separates model interpre
   }
   assert.doesNotMatch(agentSource, /localStorage|sessionStorage|Authorization|api[_-]?key/i)
 })
+
+test('timing failures keep internal codes behind user-controlled technical details', () => {
+  for (const source of [timingSource, agentSource]) {
+    assert.match(source, /<details/)
+    assert.match(source, /timing\.failure\.details/)
+    assert.match(source, /<code[^>]*>\{error\.code\}<\/code>/)
+  }
+})
+
+test('preflight failures do not leave a fake recoverable timing run', () => {
+  assert.match(timingSource, /caught instanceof TimingApiError && caught\.runId === null/)
+  assert.match(timingSource, /globalThis\.localStorage\?\.removeItem\(SAVED_RUN_KEY\)/)
+})

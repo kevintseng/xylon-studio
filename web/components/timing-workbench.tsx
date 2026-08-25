@@ -229,6 +229,10 @@ export function TimingWorkbench() {
     try {
       setTiming(await analyzeTiming(API_URL, { runId: nextRunId, rtl, sdc, topModule }))
     } catch (caught) {
+      if (caught instanceof TimingApiError && caught.runId === null) {
+        setRunId(null)
+        globalThis.localStorage?.removeItem(SAVED_RUN_KEY)
+      }
       setError(localizeError(displayError(caught), locale, t))
     } finally {
       setBusy(null)
@@ -404,7 +408,7 @@ export function TimingWorkbench() {
               <div className={`mt-5 rounded-2xl border p-4 text-sm leading-6 ${timing.comparison.timingClean ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100' : 'border-amber-500/30 bg-amber-500/10 text-amber-100'}`}><p className="font-semibold">{t(`timing.outcome.${timing.comparison.outcome}`)}</p><p className="mt-1">{timing.comparison.timingClean ? t('timing.comparison.clean') : t('timing.comparison.stillViolating')}</p></div>
             </section> : null}
 
-            {error ? <section role="alert" className="rounded-3xl border border-red-500/40 bg-red-500/10 p-5 text-red-100"><h3 className="text-lg font-semibold">{t('timing.failure.title')}</h3><p className="mt-2 font-mono text-xs text-red-200">{error.code}</p><p className="mt-3 text-sm leading-6">{error.message}</p><p className="mt-4 text-sm font-semibold">{t('timing.failure.next')}</p><p className="mt-1 text-sm leading-6">{error.recovery}</p>{error.code === 'TimingCleanupUnverified' ? <pre className="mt-4 overflow-x-auto rounded-xl border border-red-400/20 bg-slate-950/60 px-3 py-2 text-xs"><code>scripts/xylon-openroad doctor</code></pre> : null}</section> : null}
+            {error ? <section role="alert" className="rounded-3xl border border-red-500/40 bg-red-500/10 p-5 text-red-100"><h3 className="text-lg font-semibold">{t('timing.failure.title')}</h3><p className="mt-3 text-sm leading-6">{error.message}</p><p className="mt-4 text-sm font-semibold">{t('timing.failure.next')}</p><p className="mt-1 text-sm leading-6">{error.recovery}</p>{error.code === 'TimingCleanupUnverified' ? <pre className="mt-4 overflow-x-auto rounded-xl border border-red-400/20 bg-slate-950/60 px-3 py-2 text-xs"><code>scripts/xylon-openroad doctor</code></pre> : null}<details className="mt-4 text-xs text-red-200"><summary className="cursor-pointer font-semibold">{t('timing.failure.details')}</summary><code className="mt-2 block break-all font-mono">{error.code}</code></details></section> : null}
           </div>
         </div>
       </div>
