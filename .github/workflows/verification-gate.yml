@@ -36,7 +36,7 @@ jobs:
           agent/venv/bin/python -m pytest -q -m "not integration"
           --ignore=agent/tests/test_local_app.py agent/tests agent/pipeline/tests
       - name: Lint Python source
-        run: agent/venv/bin/python -m ruff check agent setup.py
+        run: agent/venv/bin/python -m ruff check agent
       - name: Audit resolved Python dependency graph
         run: agent/venv/bin/python -m pip_audit --strict -r requirements.lock
       - name: Check launcher syntax
