@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import re
+from collections.abc import Callable
 
 from agent.pipeline.models import CoverageReport, FailureKind, StepResult, StepStatus
 from agent.sandbox.manager import SandboxManager
@@ -87,6 +88,7 @@ async def run_coverage_step(
     sandbox: SandboxManager | None = None,
     timeout: int = 300,
     simulation_result: dict | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> tuple[StepResult, CoverageReport]:
     """
     Run Verilator simulation with coverage collection.
@@ -120,6 +122,7 @@ async def run_coverage_step(
                 tb_code,
                 timeout=timeout,
                 coverage=True,
+                cancel_requested=cancel_requested,
             )
             duration_seconds = result.get('duration_seconds', 0)
         else:

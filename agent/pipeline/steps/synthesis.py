@@ -8,6 +8,7 @@ This step is optional (controlled by config.synthesis_enabled).
 import logging
 import re
 import time
+from collections.abc import Callable
 
 from agent.pipeline.models import FailureKind, StepResult, StepStatus
 
@@ -33,6 +34,7 @@ async def run_synthesis_step(
     rtl_file: str,
     sandbox,
     timeout: int = 600,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> StepResult:
     """
     Run Yosys synthesis on RTL and produce a resource report.
@@ -56,6 +58,7 @@ async def run_synthesis_step(
         result = await asyncio.to_thread(
             sandbox.synthesize_verilog_string,
             rtl_code,
+            cancel_requested=cancel_requested,
         )
         duration = time.monotonic() - start
 
@@ -69,9 +72,18 @@ async def run_synthesis_step(
                 else FailureKind.CONFIGURATION
             )
             recovery_code = (
-                "repair_toolchain"
-                if failure_kind == FailureKind.INFRASTRUCTURE
-                else "correct_rtl"
+                "rerun_when_ready"
+                if failure_kind == FailureKind.CANCELLATION
+                else (
+                    "repair_toolchain"
+                    if failure_kind == FailureKind.INFRASTRUCTURE
+                    else "correct_rtl"
+                )
+            )
+            status = (
+                StepStatus.SKIPPED
+                if failure_kind == FailureKind.CANCELLATION
+                else StepStatus.FAILED
             )
             if stderr:
                 # Extract Yosys error lines
@@ -85,7 +97,7 @@ async def run_synthesis_step(
 
             return StepResult(
                 step_name=STEP_NAME,
-                status=StepStatus.FAILED,
+                status=status,
                 duration_seconds=duration,
                 output={
                     "stdout": result.get("stdout", "")[:2000],

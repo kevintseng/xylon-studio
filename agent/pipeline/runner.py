@@ -1,9 +1,11 @@
 """Sequential canonical RTL verification pipeline."""
 
 import asyncio
+import contextlib
 import logging
 import shutil
 import tempfile
+import threading
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict
@@ -32,6 +34,14 @@ StepCallback = Callable[[StepResult], Awaitable[None]] | None
 StepStartCallback = Callable[[str], Awaitable[None]] | None
 
 
+def _existing_storage_probe_path(storage_path: Path) -> Path:
+    """Return the nearest existing parent on the target storage filesystem."""
+    probe_path = storage_path.expanduser().resolve()
+    while not probe_path.exists() and probe_path != probe_path.parent:
+        probe_path = probe_path.parent
+    return probe_path
+
+
 async def run_pipeline(
     rtl_code: str,
     testbench_code: str | None = None,
@@ -56,6 +66,19 @@ async def run_pipeline(
     final_coverage = None
     iterations_used = 0
     start_time = asyncio.get_event_loop().time()
+    cancellation_token = threading.Event()
+    cancellation_relay: asyncio.Task | None = None
+
+    async def relay_cancellation() -> None:
+        assert cancellation_event is not None
+        await cancellation_event.wait()
+        cancellation_token.set()
+
+    if cancellation_event is not None:
+        if cancellation_event.is_set():
+            cancellation_token.set()
+        else:
+            cancellation_relay = asyncio.create_task(relay_cancellation())
 
     async def emit(step: StepResult) -> None:
         if on_step_complete:
@@ -116,6 +139,8 @@ async def run_pipeline(
     async def cancel_if_requested() -> PipelineResult | None:
         if cancellation_event is None or not cancellation_event.is_set():
             return None
+        if steps and steps[-1].failure_kind == FailureKind.INFRASTRUCTURE:
+            return await finish()
         if not steps or steps[-1].failure_kind != FailureKind.CANCELLATION:
             cancelled_step = StepResult(
                 step_name="cancelled",
@@ -160,7 +185,7 @@ async def run_pipeline(
 
                 resource_snapshot = await asyncio.to_thread(
                     collect_resource_snapshot,
-                    Path(config.artifact_root).expanduser().resolve(),
+                    _existing_storage_probe_path(Path(config.artifact_root)),
                 )
                 resource_blockers = evaluate_resource_preflight(resource_snapshot)
                 resource_output = {
@@ -199,6 +224,9 @@ async def run_pipeline(
             handle.write(rtl_code)
 
         sandbox = SandboxManager()
+        cancel_requested = (
+            cancellation_token.is_set if cancellation_event is not None else None
+        )
         if config.runtime_check_enabled:
             await emit_start("runtime")
             try:
@@ -227,7 +255,11 @@ async def run_pipeline(
 
         if config.lint_enabled:
             await emit_start("lint")
-            lint_result = await run_lint_step(rtl_file, sandbox)
+            lint_result = await run_lint_step(
+                rtl_file,
+                sandbox,
+                cancel_requested=cancel_requested,
+            )
             steps.append(lint_result)
             await emit(lint_result)
             cancelled = await cancel_if_requested()
@@ -248,6 +280,7 @@ async def run_pipeline(
                     tb_file,
                     sandbox,
                     timeout=config.simulation_timeout,
+                    cancel_requested=cancel_requested,
                 )
             )
             steps.append(simulation_step)
@@ -265,6 +298,7 @@ async def run_pipeline(
                 sandbox,
                 timeout=config.simulation_timeout,
                 simulation_result=simulation_evidence,
+                cancel_requested=cancel_requested,
             )
             steps.append(coverage_step)
             await emit(coverage_step)
@@ -277,7 +311,11 @@ async def run_pipeline(
             if cancelled is not None:
                 return cancelled
             await emit_start("synthesis")
-            synthesis_step = await run_synthesis_step(rtl_file, sandbox)
+            synthesis_step = await run_synthesis_step(
+                rtl_file,
+                sandbox,
+                cancel_requested=cancel_requested,
+            )
             steps.append(synthesis_step)
             await emit(synthesis_step)
 
@@ -286,6 +324,10 @@ async def run_pipeline(
         logger.error("[PIPELINE-%s] Fatal error: %s", pipeline_id, error)
         return await finish(error=str(error))
     finally:
+        if cancellation_relay is not None:
+            cancellation_relay.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cancellation_relay
         shutil.rmtree(work_dir, ignore_errors=True)
 
 

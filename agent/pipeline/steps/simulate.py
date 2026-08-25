@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import re
+from collections.abc import Callable
 
 from agent.pipeline.models import FailureKind, StepResult, StepStatus
 from agent.sandbox.manager import SandboxManager
@@ -34,6 +35,7 @@ async def run_simulate_step(
     tb_file: str,
     sandbox: SandboxManager | None = None,
     timeout: int = 300,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> StepResult:
     """Run simulation and return only the public canonical step result."""
     step_result, _ = await run_simulate_step_with_evidence(
@@ -41,6 +43,7 @@ async def run_simulate_step(
         tb_file,
         sandbox,
         timeout,
+        cancel_requested,
     )
     return step_result
 
@@ -50,6 +53,7 @@ async def run_simulate_step_with_evidence(
     tb_file: str,
     sandbox: SandboxManager | None = None,
     timeout: int = 300,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> tuple[StepResult, dict | None]:
     """
     Run Verilator simulation with testbench.
@@ -80,6 +84,7 @@ async def run_simulate_step_with_evidence(
             tb_code,
             timeout=timeout,
             coverage=True,  # Always enable so testbenches with verilated_cov.h link
+            cancel_requested=cancel_requested,
         )
 
         # Determine pass/fail from stdout content AND exit code
@@ -93,7 +98,11 @@ async def run_simulate_step_with_evidence(
             raw_failure_kind = result.get('failure_kind')
             if raw_failure_kind:
                 failure_kind = FailureKind(raw_failure_kind)
-                recovery_code = "repair_toolchain"
+                recovery_code = (
+                    "rerun_when_ready"
+                    if failure_kind == FailureKind.CANCELLATION
+                    else "repair_toolchain"
+                )
             elif re.search(r'\bFAIL(?:ED|URE)?\b', result.get('stdout', ''), re.IGNORECASE):
                 failure_kind = FailureKind.VERIFICATION
                 recovery_code = "inspect_failing_check"
@@ -103,6 +112,9 @@ async def run_simulate_step_with_evidence(
             else:
                 failure_kind = FailureKind.CONFIGURATION
                 recovery_code = "correct_testbench"
+
+        if failure_kind == FailureKind.CANCELLATION:
+            status = StepStatus.SKIPPED
 
         step_result = StepResult(
             step_name="simulate",
