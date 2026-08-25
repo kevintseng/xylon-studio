@@ -58,30 +58,30 @@ export default function Home() {
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <a
-                href="/pipeline"
+                href="/openroad"
                 className="inline-flex min-h-11 items-center justify-center rounded-lg bg-blue-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
               >
                 {t('home.cta.primary')} <span className="ml-2" aria-hidden="true">→</span>
               </a>
               <a
-                href="/openroad"
+                href="/pipeline"
                 className="inline-flex min-h-11 items-center justify-center rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-6 py-3 text-sm font-semibold text-cyan-100 transition hover:border-cyan-400 hover:bg-cyan-500/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
               >
-                {t('home.cta.openroad')} <span className="ml-2" aria-hidden="true">→</span>
+                {t('home.cta.secondary')} <span className="ml-2" aria-hidden="true">→</span>
               </a>
             </div>
           </div>
 
           <div className="rounded-2xl border border-slate-700/80 bg-slate-950/80 p-4 shadow-2xl shadow-black/30 backdrop-blur sm:p-6">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">{t('home.scope.proven')}</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">{t('home.scope.implemented')}</p>
               <h2 className="mt-2 text-xl font-semibold text-slate-50">{t('home.capabilities.title')}</h2>
             </div>
-            <ul className="mt-4 space-y-2" aria-label={t('home.scope.proven')}>
-              {PRODUCT_SCOPE.proven.map((item) => (
+            <ul className="mt-4 space-y-2" aria-label={t('home.scope.implemented')}>
+              {PRODUCT_SCOPE.implemented.map((item) => (
                 <li key={item.key} className="flex gap-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-2.5">
                   <span className="text-emerald-300" aria-hidden="true">✓</span>
-                  <span className="text-sm leading-6 text-slate-200">{t(`home.scope.proven.${item.key}`)}</span>
+                  <span className="text-sm leading-6 text-slate-200">{t(`home.scope.implemented.${item.key}`)}</span>
                 </li>
               ))}
             </ul>

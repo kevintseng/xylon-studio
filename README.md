@@ -1,47 +1,38 @@
 # XylonStudio
 
-Local, evidence-backed RTL verification with a restricted real OpenROAD
-execution record.
+Tell Xylon what setup-timing job you need. It runs a bounded local OpenROAD flow
+on real RTL and SDC, reads back measured evidence, and tells you the next action.
 
 [繁體中文](README.zh-TW.md)
 
-## What works now
+## Implemented in this build
 
-Xylon currently provides two real, separate workflows:
+The source paths below are implemented and covered by automated checks. Final
+exact-revision OpenROAD and browser journey verification is still pending; do
+not treat this branch as a released product yet.
 
-1. **RTL verification** — run pinned Verilator lint, an optional independent C++
-   self-check, coverage collection, optional Yosys structural statistics, and a
-   checksummed exact-rerun bundle.
-2. **OpenROAD MCP execution record** — let an MCP-capable assistant create one
-   resource-capped real OpenROAD session, run bounded commands, and show the
-   latest execution record in the Web UI.
+- **Setup-timing assistant:** a local OpenAI-compatible model interprets one
+  sentence. Deterministic tools validate RTL/SDC, run the built-in `sky130hd`
+  recipe, read WNS, TNS, and the worst setup path, then prepare one bounded
+  `PLACE_DENSITY 0.60 → 0.65` candidate when violations exist.
+- **Human-controlled improvement:** Xylon shows the exact expiring proposal. A
+  person must type its code in the local page before Xylon can run the candidate
+  and compare the same metrics before and after.
+- **RTL verification:** pinned Verilator lint, optional independent C++
+  self-check, measured coverage, optional Yosys structure, and a checksummed
+  exact-rerun bundle.
+- **Advanced OpenROAD MCP records:** a separate restricted MCP runtime remains
+  available for bounded diagnostics. It is not evidence for the timing journey.
 
-The OpenROAD adapter is a control-plane boundary, not an RTL-to-GDS product
-journey. Xylon does not yet import a complete RTL/SDC/PDK design, diagnose its
-worst timing path, or apply and compare a timing improvement.
+The model never receives RTL, SDC, timing metrics, raw logs, or a confirmation
+tool. Measured facts come only from OpenROAD readback. The first release accepts
+only literal loopback model endpoints (`127.0.0.1` or `::1`), follows no
+redirects, and accepts no API key.
 
-## What comes next
+## Start Xylon
 
-The next product slice is the complete timing engineer journey:
-
-```text
-real RTL + SDC + PDK identity
-  -> load the design in OpenROAD
-  -> report and explain the worst timing path
-  -> propose one bounded change
-  -> obtain operator confirmation in the external MCP host
-  -> rerun the same report
-  -> compare before and after
-  -> return an executable recovery action on failure
-```
-
-Until that entire path runs with readback evidence, the UI labels it as not yet
-available. A tool connection, diagram, mock, or agent response is not enough.
-
-## Run RTL verification
-
-Requirements: Python 3.11+, Node.js 22+, Docker, at least 8 GB RAM (16 GB
-recommended).
+Requirements: Python 3.11+, Node.js 22+, Docker, and at least 8 GiB of currently
+available memory. A 16 GiB or larger machine is recommended.
 
 ```bash
 python3 -m venv agent/venv
@@ -52,13 +43,42 @@ npm ci
 npm run build
 cd ..
 
+scripts/xylon-openroad install
 scripts/xylon doctor
 scripts/xylon start
 ```
 
-Open [http://127.0.0.1:3000/pipeline](http://127.0.0.1:3000/pipeline). The page
-starts with real example RTL and an independent testbench. Inspect or stop only
-the stack owned by this checkout:
+Open [http://127.0.0.1:3000/openroad](http://127.0.0.1:3000/openroad).
+
+For an Ollama-compatible local setup, start the server in one terminal:
+
+```bash
+ollama serve
+```
+
+Then list installed models in another terminal:
+
+```bash
+ollama list
+```
+
+Use `http://127.0.0.1:11434/v1` and the exact name of one installed chat model.
+The page can test that model connection without sending RTL, SDC, or starting
+OpenROAD. Xylon does not download or silently select a model.
+
+1. Start a model server that supports the OpenAI chat-completions API on loopback.
+2. Load the runnable timing example or paste bounded RTL and SDC.
+3. Enter the loopback endpoint and an installed model name, then test the model connection.
+4. Ask: “Check setup timing, identify the worst path, and tell me the next
+   improvement step.”
+5. Review measured WNS/TNS and the exact proposal. Confirm only if you want one
+   candidate run.
+
+Heavy EDA work is serialized and resource-gated. The default runtime uses one
+CPU, an 8 GiB memory cap, no container network, and exact-owner cleanup. If
+capacity is below the safety floor, Xylon does not start OpenROAD.
+
+Manage only the stack owned by this checkout:
 
 ```bash
 scripts/xylon status
@@ -66,80 +86,53 @@ scripts/xylon logs --tail 100
 scripts/xylon stop
 ```
 
-A lint-only run is never called functional verification. The internal
-`verified` outcome means the supplied self-check, every required gate, the
-requested measured coverage, and final artifact readback passed. The UI calls
-this “Provided checks passed” because Xylon does not yet prove that a
-user-supplied testbench completely represents the design specification.
+## Honest boundaries
 
-## Connect the OpenROAD execution record
-
-OpenROAD is a separate on-demand MCP runtime. `scripts/xylon` does not own it.
-
-```bash
-scripts/xylon-openroad install
-scripts/xylon-openroad doctor
-scripts/xylon-openroad config
-```
-
-Add the printed configuration to an MCP-capable assistant, then open
-[http://127.0.0.1:3000/openroad](http://127.0.0.1:3000/openroad) to inspect fresh
-session and command evidence.
-
-Read-only commands run directly. A state-changing command must be prepared and
-bound to the exact session and command before execution. The MCP host obtains
-operator confirmation; Xylon does not authenticate or record the human
-confirmer's identity.
-
-`scripts/xylon-openroad install` pulls a large pinned `linux/amd64` OpenROAD
-image. On Apple Silicon it runs through the compatibility layer. Resource
-preflight can refuse startup when local CPU, memory, or disk headroom is unsafe.
-Xylon repeats this check immediately before every RTL pipeline run and every
-OpenROAD session. A blocked run does not start EDA tools; the UI explains which
-resource needs attention and asks the user to retry after local load subsides.
-
-## Current boundaries
-
-| Available | Not available yet |
+| Implemented in this build | Not available |
 | --- | --- |
-| Verilator/Yosys RTL verification | AI-generated RTL or testbenches |
-| Checksummed run artifacts and exact rerun | Complete RTL/SDC/PDK design import |
-| Restricted real OpenROAD MCP sessions | Automated worst-path improvement loop |
-| Fresh OpenROAD execution readback | DRC/LVS signoff or tape-out readiness |
+| Bounded RTL/SDC setup timing on built-in `sky130hd` | Arbitrary PDK or library import |
+| WNS, TNS, worst max path, and cleanup readback | Hold, multi-corner, power, area, DRC/LVS, or signoff claims |
+| One evidence-bound placement-density candidate | General autonomous OpenROAD command execution |
+| Loopback OpenAI-compatible intent model | Remote BYOK endpoints or stored API keys |
+| Local confirmation gesture bound to one proposal | Authenticated user identity or approval audit |
 
-Missing, stale, failed, interrupted, or inconclusive evidence never becomes a
-completed stage.
+An improved candidate is not timing closure. A clean reported setup boundary is
+not physical signoff or tape-out readiness. Missing, stale, failed, interrupted,
+or inconclusive evidence never becomes a completed stage.
 
 ## Interfaces
 
-- `/pipeline` — run the current RTL-verification journey.
-- `/openroad` — inspect the separate OpenROAD MCP execution record.
-- `POST /api/pipeline/run` and `WS /api/pipeline/ws` — canonical pipeline.
-- `GET /api/openroad/snapshot` — read-only bounded OpenROAD execution snapshot.
-- `agent/venv/bin/python -m agent.cli run ...` and `agent/venv/bin/python -m agent.cli rerun ...` — CLI and
-  exact replay.
+- `/openroad` — natural-language timing assistant, timing workbench, and
+  collapsed advanced MCP diagnostics.
+- `/pipeline` — RTL verification.
+- `POST /api/assistant/timing` — loopback-model intent plus deterministic timing
+  orchestration; there is no confirmation tool.
+- `/api/timing/runs/*` — typed baseline, status, proposal, confirmation, and
+  candidate endpoints.
+- `GET /api/openroad/snapshot` — read-only MCP execution record.
 
 See [API contract](docs/API.md), [security boundary](SECURITY.md), and
-[contribution rules](CONTRIBUTING.md) for details.
+[contribution rules](CONTRIBUTING.md).
 
 ## Verify a change
 
-Run heavyweight checks serially on a resource-constrained machine:
+Run resource-sensitive checks serially:
 
 ```bash
-agent/venv/bin/python -m pytest -q agent
-agent/venv/bin/python -m ruff check agent
+agent/venv/bin/python -m pytest -q agent/tests
+agent/venv/bin/ruff check agent
 
+cd agent/openroad && npm test && cd ../..
 cd web
 npm run test:contracts
-npm run lint
-npm run type-check
 npm run build
+npm run type-check
+npm run lint
 ```
 
-Offline tests prove contracts only. Real EDA and user-journey claims require the
-pinned runtime, result readback, failure-path evidence, cleanup, independent
-review, and protected CI on the exact revision.
+Offline tests prove contracts only. Real EDA and user-journey claims additionally
+require exact-revision runtime readback, a failure path, cleanup evidence,
+independent review, and protected CI.
 
 Python direct and transitive dependencies are hash-locked and audited in the
 verification gate. The runtime base image and EDA source commits are pinned.

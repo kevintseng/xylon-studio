@@ -2,11 +2,13 @@
 
 import { ReactNode, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import { I18nProvider, useI18n } from '@/lib/i18n'
 import { LanguageSwitcher } from '@/components/language-switcher'
 
 function Header() {
   const { t } = useI18n()
+  const pathname = usePathname()
   const [mobileOpen, setMobileOpen] = useState(false)
   const menuButtonRef = useRef<HTMLButtonElement>(null)
 
@@ -22,7 +24,7 @@ function Header() {
     return () => document.removeEventListener('keydown', closeOnEscape)
   }, [mobileOpen])
 
-  const mobileLinkClass = 'rounded-md px-3 py-2 text-sm text-slate-300 hover:bg-slate-800 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400'
+  const linkClass = (href: string, mobile = false) => `${mobile ? 'rounded-md px-3 py-2' : 'rounded-md px-3 py-1.5'} text-sm transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${pathname === href ? 'bg-cyan-500/10 text-cyan-100' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-100'}`
 
   return (
     <header className="sticky top-0 z-50 bg-background/85 backdrop-blur-xl border-b border-slate-800">
@@ -36,14 +38,14 @@ function Header() {
           </Link>
         </div>
         <nav className="hidden items-center gap-1 md:flex" aria-label={t('nav.primary')}>
-          <Link href="/" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400">
+          <Link href="/" aria-current={pathname === '/' ? 'page' : undefined} className={linkClass('/')}>
             {t('nav.home')}
           </Link>
-          <Link href="/openroad" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400">
-            {t('nav.openroad')}
-          </Link>
-          <Link href="/pipeline" className="px-3 py-1.5 rounded-md text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400">
+          <Link href="/pipeline" aria-current={pathname === '/pipeline' ? 'page' : undefined} className={linkClass('/pipeline')}>
             {t('nav.pipeline')}
+          </Link>
+          <Link href="/openroad" aria-current={pathname === '/openroad' ? 'page' : undefined} className={linkClass('/openroad')}>
+            {t('nav.openroad')}
           </Link>
           <div className="w-px h-5 bg-slate-700 mx-1" />
           <LanguageSwitcher />
@@ -74,9 +76,9 @@ function Header() {
       {mobileOpen && (
         <nav id="mobile-navigation" className="border-t border-slate-800 bg-slate-950/95 px-4 py-3 md:hidden" aria-label={t('nav.primary')}>
           <div className="grid grid-cols-1 gap-1">
-            <Link href="/" onClick={() => setMobileOpen(false)} className={mobileLinkClass}>{t('nav.home')}</Link>
-            <Link href="/openroad" onClick={() => setMobileOpen(false)} className={mobileLinkClass}>{t('nav.openroad')}</Link>
-            <Link href="/pipeline" onClick={() => setMobileOpen(false)} className={mobileLinkClass}>{t('nav.pipeline')}</Link>
+            <Link href="/" aria-current={pathname === '/' ? 'page' : undefined} onClick={() => setMobileOpen(false)} className={linkClass('/', true)}>{t('nav.home')}</Link>
+            <Link href="/pipeline" aria-current={pathname === '/pipeline' ? 'page' : undefined} onClick={() => setMobileOpen(false)} className={linkClass('/pipeline', true)}>{t('nav.pipeline')}</Link>
+            <Link href="/openroad" aria-current={pathname === '/openroad' ? 'page' : undefined} onClick={() => setMobileOpen(false)} className={linkClass('/openroad', true)}>{t('nav.openroad')}</Link>
           </div>
         </nav>
       )}

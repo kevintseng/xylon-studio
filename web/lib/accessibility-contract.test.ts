@@ -9,7 +9,7 @@ const readSource = (relativePath: string) => readFileSync(new URL(relativePath, 
 test('interactive process maps expose complete keyboard tab semantics', () => {
   for (const [sourcePath, expectedTabPrefix] of [
     ['../app/page.tsx', 'home-flow-tab-'],
-    ['../app/openroad/page.tsx', 'openroad-stage-tab-'],
+    ['../components/timing-workbench.tsx', 'timing-stage-tab-'],
   ] as const) {
     const source = readSource(sourcePath)
     assert.match(source, /role="tablist"/)
@@ -39,14 +39,20 @@ test('roving-tab keyboard helper keeps wrap-ready and edge semantics intact', ()
 test('public navigation has visible keyboard focus treatment', () => {
   const shell = readSource('../components/client-shell.tsx')
   const languageSwitcher = readSource('../components/language-switcher.tsx')
-  assert.equal((shell.match(/focus-visible:ring-2/g) ?? []).length >= 4, true)
+  assert.match(shell, /const linkClass = .*focus-visible:ring-2/)
+  assert.equal((shell.match(/aria-current=/g) ?? []).length, 6)
   assert.match(languageSwitcher, /focus-visible:ring-2/)
 })
 
 test('runtime failures are announced and pipeline nodes use disclosure semantics', () => {
-  const openroad = readSource('../app/openroad/page.tsx')
+  const timing = readSource('../components/timing-workbench.tsx')
+  const openroad = readSource('../components/openroad-activity-log.tsx')
   const pipeline = readSource('../app/pipeline/page.tsx')
-  assert.equal((openroad.match(/role="alert"/g) ?? []).length >= 2, true)
+  assert.equal((`${timing}\n${openroad}`.match(/role="alert"/g) ?? []).length >= 2, true)
+  assert.match(timing, /aria-live="polite"/)
+  assert.match(timing, /timing-confirmation-token/)
+  assert.match(timing, /timing-rtl-file/)
+  assert.match(timing, /timing-sdc-file/)
   assert.match(pipeline, /role="alert"/)
   assert.match(pipeline, /aria-expanded=\{node\.has_evidence \? selected : undefined\}/)
   assert.match(pipeline, /aria-controls=\{node\.has_evidence \? `pipeline-step-detail-/)

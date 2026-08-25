@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, rename, symlink } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -133,5 +133,18 @@ test('confirmation fails closed without external verifier or with wrong actor an
       }),
     }),
     /confirmation principal and source are not supported/,
+  )
+})
+
+test('proposal transition rejects a symlinked timing manifest', async (context) => {
+  const runDir = await baselineRun(context)
+  const manifestPath = path.join(runDir, 'manifest.json')
+  const targetPath = path.join(runDir, 'manifest-target.json')
+  await rename(manifestPath, targetPath)
+  await symlink(targetPath, manifestPath)
+
+  await assert.rejects(
+    persistTimingRepairProposal(runDir),
+    /regular non-symlink file/,
   )
 })

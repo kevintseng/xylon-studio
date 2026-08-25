@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { usePathname } from 'next/navigation'
 import { consoleCollector } from '@/lib/console-collector'
 import { useI18n } from '@/lib/i18n'
 
@@ -66,6 +67,7 @@ export function BugReportButton() {
 
 function BugReportDialog({ onClose }: { onClose: () => void }) {
   const { t } = useI18n()
+  const pagePath = usePathname()
   const [description, setDescription] = useState('')
   const [steps, setSteps] = useState('')
   const [severity, setSeverity] = useState<BugReportData['severity']>('medium')
@@ -76,6 +78,12 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
   const [showLogs, setShowLogs] = useState(false)
   const dialogRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const stepsPlaceholder = pagePath.startsWith('/openroad')
+    ? t('bugReport.stepsPlaceholder.timing')
+    : pagePath.startsWith('/pipeline')
+      ? t('bugReport.stepsPlaceholder.pipeline')
+      : t('bugReport.stepsPlaceholder')
 
   useEffect(() => {
     const dialog = dialogRef.current
@@ -179,31 +187,31 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
 
     // Also open GitHub issue (pre-filled) if possible
     const issueTitle = encodeURIComponent(
-      `[Bug] ${description.slice(0, 80)}`
+      `[${t('bugReport.issuePrefix')}] ${description.slice(0, 80)}`
     )
     const issueBody = encodeURIComponent(
       [
-        `## Description`,
+        `## ${t('bugReport.whatHappened')}`,
         description,
         '',
-        `## Steps to Reproduce`,
-        steps || '_Not provided_',
+        `## ${t('bugReport.steps')}`,
+        steps || `_${t('bugReport.notProvided')}_`,
         '',
-        `## Severity`,
-        severity,
+        `## ${t('bugReport.severity')}`,
+        t(`bugReport.severity.${severity}`),
         '',
-        `## Environment`,
+        `## ${t('bugReport.environment')}`,
         '```',
         getBrowserInfo(),
         '```',
         '',
-        `## Console Logs`,
+        `## ${t('bugReport.consoleLogs')}`,
         consoleLogs
-          ? `<details><summary>Console output (${consoleLogs.split('\n').length} entries)</summary>\n\n\`\`\`\n${consoleLogs.slice(-3000)}\n\`\`\`\n</details>`
-          : '_No console logs captured_',
+          ? `<details><summary>${t('bugReport.consoleOutput')} (${consoleLogs.split('\n').length} ${t('bugReport.entries')})</summary>\n\n\`\`\`\n${consoleLogs.slice(-3000)}\n\`\`\`\n</details>`
+          : `_${t('bugReport.noLogs')}_`,
         '',
-        `_Report generated at ${new Date().toISOString()}_`,
-        '_Screenshot attached in downloaded JSON report_',
+        `_${t('bugReport.reportGenerated')} ${new Date().toISOString()}_`,
+        `_${t('bugReport.screenshotNote')}_`,
       ].join('\n')
     )
     window.open(
@@ -292,7 +300,7 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
               id="bug-steps"
               value={steps}
               onChange={(e) => setSteps(e.target.value)}
-              placeholder={t('bugReport.stepsPlaceholder')}
+              placeholder={stepsPlaceholder}
               className="w-full min-h-[80px] px-3 py-2 border rounded-md text-sm"
             />
           </div>

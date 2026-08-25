@@ -138,6 +138,34 @@ test('real batch execution returns an actionable log-limit state instead of losi
   assert.ok(result.stdout_bytes > 16)
 })
 
+test('aborting a timing batch terminates its process group and reports interruption', async (context) => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'xylon-timing-abort-'))
+  context.after(() => rm(repoRoot, { recursive: true, force: true }))
+  const wrapperDirectory = path.join(repoRoot, 'runtime', 'openroad', 'bin')
+  const runDir = path.join(repoRoot, '.xylon', 'timing', 'runs', '9'.repeat(32))
+  await mkdir(wrapperDirectory, { recursive: true })
+  await mkdir(runDir, { recursive: true })
+  await writeFile(path.join(wrapperDirectory, 'orfs-timing'), "sleep 30\n")
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(), 25)
+
+  const started = Date.now()
+  const result = await executeTimingBatch({
+    repoRoot,
+    runDir,
+    runId: '9'.repeat(32),
+    repoId: 'a'.repeat(64),
+    cpus: 1,
+    timeoutMs: 5_000,
+    terminationGraceMs: 100,
+    signal: controller.signal,
+  })
+
+  assert.equal(result.interrupted, true)
+  assert.equal(classifyTimingFailure(result).code, 'TimingRunInterrupted')
+  assert.ok(Date.now() - started < 2_000)
+})
+
 test('classifies the exact ORFS global-placement over-capacity error as an actionable floorplan failure', () => {
   const failure = classifyTimingFailure({
     stderr_tail: 'Error: global_place_skip_io.tcl, 19 GPL-0301',

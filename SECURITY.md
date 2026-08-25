@@ -16,8 +16,9 @@ does not promise a fixed security-response SLA.
 
 ## Current trust boundary
 
-XylonStudio is a single-user local RTL verifier plus a separate restricted
-OpenROAD MCP control plane, not a hosted or multi-tenant service. The supported
+XylonStudio is a single-user local RTL verifier and bounded setup-timing
+assistant plus a separate restricted OpenROAD MCP control plane, not a hosted
+or multi-tenant service. The supported
 application launcher binds the API and Web application to `127.0.0.1`, starts
 one API worker, and serializes heavy RTL-verification runs. An MCP host starts
 the OpenROAD stdio server independently and on demand.
@@ -47,6 +48,17 @@ Implemented controls:
   directory, capability-dropped, and CPU/memory/PID limited. A host-global
   lease prevents multiple adapter processes from owning concurrent sessions;
   idle sessions are swept and temporary runtime state is bounded.
+- Inline timing RTL is limited to 1 MiB, SDC to 16 KiB, the platform to the
+  bundled `sky130hd`, and the top/clock grammar to the supported setup recipe.
+  Pipeline and timing work share one heavy-EDA slot. The candidate remains bound
+  to exact baseline artifacts, expires, is one-use, and cannot run until the
+  exact local Web origin records the displayed proposal code.
+- The timing assistant accepts only literal loopback OpenAI-compatible model
+  endpoints (`127.0.0.1` or `::1`) with no API key and no redirect. Requests and
+  responses are bounded and timed out. The model receives the user sentence and
+  versioned skill/knowledge only; RTL, SDC, raw logs, timing metrics, credentials,
+  tool names, and confirmation are excluded. Strict extra-forbid intent parsing
+  rejects command, Tcl, metric, or approval-shaped output before EDA starts.
 - State-changing OpenROAD commands use a two-step, one-use binding to the exact
   session and command. The MCP host is responsible for obtaining operator
   confirmation. Xylon does not authenticate or prove the human approver's
@@ -57,8 +69,9 @@ Not implemented:
 - user authentication, authorization, tenant isolation, or per-user audit
 - network-facing deployment hardening, TLS termination, or IP rate limiting
 - encrypted artifact storage, retention automation, or remote deletion workflow
-- AI/LLM execution, prompt-injection controls, or model cost limiting
-- verified RTL/SDC/PDK design provenance, licensed or proprietary PDK handling,
+- remote BYOK providers, stored model credentials, model billing/cost controls,
+  or general autonomous OpenROAD tool selection
+- externally verified RTL/SDC provenance, arbitrary licensed or proprietary PDK handling,
   DRC/LVS signoff, physical-design signoff, or tape-out security boundaries
 
 Do not expose the local API to a LAN or the public Internet. A non-browser client

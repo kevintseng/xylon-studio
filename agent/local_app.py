@@ -25,7 +25,7 @@ from agent.sandbox.runtime import runtime_project_name as runtime_project_name
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROC_ROOT = Path("/proc")
 MINIMUM_PYTHON_VERSION = (3, 11, 0)
-MINIMUM_NODE_VERSION = (20, 9, 0)
+MINIMUM_NODE_VERSION = (22, 0, 0)
 RESOLVED_TERMINATION_OUTCOMES = frozenset({"stopped", "not_running"})
 MINIMUM_MEMORY_AVAILABLE_BYTES = 8 * 1024**3
 
@@ -1034,7 +1034,7 @@ def doctor(*, api_port: int = 5001, web_port: int = 3000) -> int:
         for blocker in version_blockers:
             print(f"INCOMPATIBLE: {blocker}")
         print(
-            "RECOVERY: install Python 3.11+ and Node.js 20.9+, "
+            "RECOVERY: install Python 3.11+ and Node.js 22+, "
             "then recreate dependencies and the Web build"
         )
         return 1

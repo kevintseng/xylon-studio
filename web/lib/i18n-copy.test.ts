@@ -80,7 +80,7 @@ test('i18n: en and zh-TW keys are 100% aligned', () => {
   const zh = getLocaleMap('zh-TW')
 
   assert.equal(en.size, zh.size)
-  assert.equal(en.size, 315, 'Review inventory changed; re-audit every added or removed key')
+  assert.equal(en.size, 482, 'Review inventory changed; re-audit every added or removed key')
   assert.deepEqual(
     [...en.keys()].sort(),
     [...zh.keys()].sort(),
@@ -109,6 +109,10 @@ test('i18n: zh-TW wording avoids hard calque and approval-implying phrases', () 
     /\bmanifest\b/i,
     /\bscenario\b/i,
     /\brecovery action\b/i,
+    /OpenAI-compatible/i,
+    /timing intent/i,
+    /protected smoke/i,
+    /\bimage\b/i,
     /流水線/i,
   ]
 

@@ -227,3 +227,27 @@ test('post-confirmation RTL mutation fails closed and consumes the confirmation 
     /missing, mismatched, or already used/,
   )
 })
+
+test('candidate execution failure directs the user to a fresh baseline', async (context) => {
+  const prepared = await preparedBaseline(context)
+  await assert.rejects(
+    executeApprovedTimingRepair({
+      repoRoot: prepared.repoRoot,
+      baselineRunId: 'a'.repeat(32),
+      proposalId: prepared.proposal.proposal_id,
+      confirmationId: prepared.confirmation.confirmation_id,
+    }, {
+      now: new Date('2026-08-25T00:02:00.000Z'),
+      createRunId: () => '0'.repeat(32),
+      runTiming: async () => { throw new Error('candidate process stopped') },
+    }),
+    (error) => {
+      assert.equal(error.recovery, 'Review the candidate failure, then create a new baseline and review a new proposal before retrying.')
+      return true
+    },
+  )
+  const manifest = JSON.parse(await readFile(path.join(prepared.runDir, 'manifest.json'), 'utf8'))
+  assert.equal(manifest.journey_state, 'candidate_failed')
+  assert.equal(manifest.confirmation.state, 'consumed')
+  assert.match(manifest.candidate_failure.recovery, /create a new baseline/)
+})

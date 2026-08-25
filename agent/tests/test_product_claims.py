@@ -27,15 +27,19 @@ def test_public_surfaces_state_the_real_openroad_boundary() -> None:
     english_copy = " ".join(english_readme.split())
     traditional_chinese_copy = " ".join(traditional_chinese_readme.split())
 
-    assert "OpenROAD adapter is a control-plane boundary" in english_copy
-    assert "not an RTL-to-GDS product journey" in english_copy
-    assert "OpenROAD 執行紀錄目前只證明受限指令確實執行" in traditional_chinese_copy
-    assert "還不能匯入完整的 RTL／SDC／PDK 設計" in traditional_chinese_copy
-    assert "或執行並比較時序改善結果" in traditional_chinese_copy
-    assert "timing-improvement journey is the next product slice" in ui_copy
-    assert "is not available yet" in ui_copy
-    assert "RTL、SDC、PDK 的時序診斷與改善流程" in ui_copy
-    assert "目前尚未提供" in ui_copy
+    assert "bounded local OpenROAD flow on real RTL and SDC" in english_copy
+    assert "built-in `sky130hd`" in english_copy
+    assert "Remote BYOK endpoints or stored API keys" in english_copy
+    assert "not physical signoff or tape-out readiness" in english_copy
+    assert "真實 RTL、SDC" in traditional_chinese_copy
+    assert "遠端 BYOK 服務網址或保存 API key" in traditional_chinese_copy
+    assert "不等於 timing closure" in traditional_chinese_copy
+    assert "所有結果都來自 OpenROAD 讀回，不是模型宣稱" in ui_copy
+    assert "任意 PDK／元件庫匯入、遠端 BYOK 模型 endpoint" in ui_copy
+    assert "本功能不代表實體驗證完成或可投片" in ui_copy
+    assert "OpenROAD adapter is a control-plane boundary" not in public_text
+    assert "timing-improvement journey is the next product slice" not in public_text
+    assert "還不能匯入完整的 RTL／SDC／PDK 設計" not in public_text
     assert "94.2%" not in public_text
     assert "AI-generated RTL in seconds" not in public_text
     assert "Production-ready GDSII" not in public_text

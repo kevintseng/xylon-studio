@@ -147,6 +147,7 @@ export async function executeApprovedTimingRepair({
   baselineRunId,
   proposalId,
   confirmationId,
+  signal,
 }, {
   runTiming = runTimingDesign,
   createRunId = createTimingRunId,
@@ -181,6 +182,7 @@ export async function executeApprovedTimingRepair({
       runId: candidateRunId,
       sourceRevision: baseline.source_revision ?? null,
       runContext,
+      signal,
       validateInput: candidateValidator(consumed.proposal, baseline),
       createWorkspace: (options) => createTimingRunWorkspace({
         ...options,
@@ -233,7 +235,7 @@ export async function executeApprovedTimingRepair({
       failed_at: new Date().toISOString(),
       code: error?.code ?? error?.name ?? 'TimingCandidateFailed',
       message: error instanceof Error ? error.message : String(error),
-      recovery: error?.recovery ?? 'Review the candidate failure, then create and confirm a new proposal before retrying.',
+      recovery: error?.recovery ?? 'Review the candidate failure, then create a new baseline and review a new proposal before retrying.',
       candidate_run_id: error?.run_id ?? candidateRun?.run_id ?? candidateRunId,
     }
     try {

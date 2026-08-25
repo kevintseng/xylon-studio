@@ -271,7 +271,7 @@ def test_runtime_version_preflight_rejects_versions_below_supported_minimums():
 
     assert evaluate("Python 3.10.16", "v20.8.1") == [
         "Python 3.10.16 is below the required 3.11.0",
-        "Node.js 20.8.1 is below the required 20.9.0",
+        "Node.js 20.8.1 is below the required 22.0.0",
     ]
 
 

@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rmdir, stat } from 'node:fs/promises'
+import { mkdir, rmdir } from 'node:fs/promises'
 import path from 'node:path'
 
 import { writeJsonAtomic } from '../openroad/timing-artifacts.mjs'
+import { readBoundedRegularText } from '../openroad/timing-files.mjs'
 import {
   assertProposalMatchesBaseline,
   buildTimingRepairProposal,
@@ -12,11 +13,14 @@ const MAX_STATE_BYTES = 1024 * 1024
 const CONFIRMATION_ID = /^[a-f0-9]{32,64}$/
 
 async function readJson(filePath) {
-  const metadata = await stat(filePath)
-  if (!metadata.isFile() || metadata.size === 0 || metadata.size > MAX_STATE_BYTES) {
-    throw new Error(`TimingStateInvalid: ${path.basename(filePath)} is not a bounded state file`)
+  try {
+    return JSON.parse(await readBoundedRegularText(filePath, MAX_STATE_BYTES))
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error(`TimingStateInvalid: ${path.basename(filePath)} is not valid JSON`)
+    }
+    throw error
   }
-  return JSON.parse(await readFile(filePath, 'utf8'))
 }
 
 async function withStateLock(runDir, callback) {

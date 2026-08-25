@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from agent.api import LOCAL_WEB_ORIGINS
+from agent.api.execution import run_in_local_eda_slot
 from agent.pipeline.limits import (
     MAX_PIPELINE_WS_MESSAGE_BYTES,
     MAX_SOURCE_BYTES,
@@ -20,13 +21,11 @@ from agent.pipeline.runner import run_pipeline
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["pipeline"])
-_LOCAL_PIPELINE_SLOT = asyncio.Lock()
 
 
 async def _run_pipeline_in_local_slot(**kwargs):
     """Serialize heavy EDA work inside the supported single-worker local API."""
-    async with _LOCAL_PIPELINE_SLOT:
-        return await run_pipeline(**kwargs)
+    return await run_in_local_eda_slot(lambda: run_pipeline(**kwargs))
 
 
 class PipelineRequest(BaseModel):

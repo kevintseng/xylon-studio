@@ -14,7 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from agent.api import LOCAL_WEB_ORIGINS
-from agent.api.routes import local, openroad, pipeline
+from agent.api.routes import assistant, local, openroad, pipeline, timing
+from agent.api.routes.timing import MAX_TIMING_BODY_BYTES
 from agent.pipeline.limits import MAX_PIPELINE_BODY_BYTES
 
 # Configure logging
@@ -46,24 +47,33 @@ app.add_middleware(
 app.include_router(pipeline.router, prefix="/api", tags=["pipeline"])
 app.include_router(local.router, prefix="/api", tags=["local"])
 app.include_router(openroad.router, prefix="/api", tags=["openroad"])
+app.include_router(timing.router, prefix="/api", tags=["timing"])
+app.include_router(assistant.router, prefix="/api", tags=["assistant"])
 
 
-def _payload_too_large() -> JSONResponse:
+def _payload_too_large(label: str = "Pipeline") -> JSONResponse:
     return JSONResponse(
         status_code=413,
-        content={"detail": "Pipeline request body is too large"},
+        content={"detail": f"{label} request body is too large"},
     )
 
 
 @app.middleware("http")
 async def bound_pipeline_request_body(request: Request, call_next):
     """Bound the live REST body before FastAPI allocates or validates JSON."""
-    if request.method == "POST" and request.url.path == "/api/pipeline/run":
+    timing_request = request.method == "POST" and (
+        request.url.path.startswith("/api/timing/")
+        or request.url.path == "/api/assistant/timing"
+    )
+    pipeline_request = request.method == "POST" and request.url.path == "/api/pipeline/run"
+    if pipeline_request or timing_request:
+        body_limit = MAX_TIMING_BODY_BYTES if timing_request else MAX_PIPELINE_BODY_BYTES
+        label = "Timing" if timing_request else "Pipeline"
         content_length = request.headers.get("content-length")
         if content_length is not None:
             try:
-                if int(content_length) > MAX_PIPELINE_BODY_BYTES:
-                    return _payload_too_large()
+                if int(content_length) > body_limit:
+                    return _payload_too_large(label)
             except ValueError:
                 return JSONResponse(
                     status_code=400,
@@ -73,8 +83,8 @@ async def bound_pipeline_request_body(request: Request, call_next):
         body = bytearray()
         async for chunk in request.stream():
             body.extend(chunk)
-            if len(body) > MAX_PIPELINE_BODY_BYTES:
-                return _payload_too_large()
+            if len(body) > body_limit:
+                return _payload_too_large(label)
         request._body = bytes(body)
 
     return await call_next(request)

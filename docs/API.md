@@ -3,10 +3,11 @@
 Version: 0.4.0
 Local base URL used by the web app: `http://127.0.0.1:5001`
 
-The API exposes the canonical local RTL-verification pipeline and a read-only
-snapshot of the separate OpenROAD MCP runtime. It does not expose RTL or
-testbench generation, a natural-language timing agent, or legacy Dragon
-endpoints.
+The API exposes the canonical local RTL-verification pipeline, a bounded
+OpenROAD setup-timing journey, a loopback-model timing assistant, and a
+read-only snapshot of the separate OpenROAD MCP runtime. It does not expose RTL
+or testbench generation, arbitrary PDK import, remote model endpoints, or the
+retired role-play agent interfaces.
 
 Run one API worker. REST and WebSocket requests share one local execution slot,
 so heavy EDA pipeline work is serialized instead of competing for host resources.
@@ -184,6 +185,79 @@ Unsupported fields return an error without starting EDA work:
 }
 ```
 
+## Setup-timing journey
+
+The timing API accepts bounded inline RTL and SDC, one top module, and the
+built-in `sky130hd` platform. It does not accept arbitrary host paths, Tcl,
+OpenROAD commands, PDK paths, or model parameters.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/timing/runs` | Validate inputs, pass resource admission, run one pinned baseline, and read back WNS/TNS/worst max path or an actionable failure |
+| `GET /api/timing/runs/{run_id}` | Read the persisted public timing state |
+| `POST /api/timing/runs/{run_id}/proposal` | Prepare the single supported evidence-bound candidate after a measured setup violation |
+| `POST /api/timing/runs/{run_id}/confirmation` | Record the matching, unexpired proposal code from the exact local Web origin |
+| `POST /api/timing/runs/{run_id}/candidate` | Consume the matching confirmation, rerun the same recipe, and compare before/after evidence |
+
+Baseline request:
+
+```json
+{
+  "run_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "rtl": "module timing_demo(input clk); ... endmodule",
+  "sdc": "create_clock -name core_clock -period 1.2 [get_ports {clk}]",
+  "top_module": "timing_demo",
+  "platform": "sky130hd"
+}
+```
+
+RTL is limited to 1 MiB and SDC to 16 KiB as UTF-8. Unknown fields are rejected.
+Pipeline and timing work share one local heavy-EDA slot. Resource admission,
+runtime interruption, missing reports, invalid timing models, and unverified
+cleanup all fail closed.
+
+The public state uses `xylon-timing-api/v1` and may contain measured `metrics`,
+one `proposal`, a local `confirmation`, a `comparison`, or an actionable
+`failure`. Improvement remains separate from `timing_clean`; neither state is a
+signoff claim.
+
+## Local timing assistant
+
+`POST /api/assistant/timing` asks one loopback OpenAI-compatible model to map a
+natural-language sentence to the supported setup-timing intent. The model never
+receives RTL, SDC, timing metrics, raw logs, credentials, or tool names. Xylon's
+deterministic state machine chooses `analyze`, `status`, `propose`, or `execute`.
+There is deliberately no confirmation tool.
+
+```json
+{
+  "schema_version": "xylon-timing-assistant-request/v1",
+  "message": "Check setup timing and tell me the next improvement step.",
+  "locale": "en",
+  "provider": {
+    "protocol": "openai-compatible",
+    "model": "an-installed-local-model",
+    "base_url": "http://127.0.0.1:11434/v1"
+  },
+  "timing_run_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}
+```
+
+For a new run, replace `timing_run_id` with `design` containing `rtl`, `sdc`,
+`top_module`, and `platform: "sky130hd"`. Supplying both is rejected.
+
+Only literal `127.0.0.1` or `::1` HTTP endpoints with an explicit port are
+accepted. The client follows no redirects, accepts at most 64 KiB of provider
+output, uses a 30-second timeout, and accepts no API key. Model output is a
+strict intent JSON object; extra tool, command, approval, or metric fields reject
+the request before EDA starts.
+
+The response uses `xylon-timing-assistant/v1`. It separates the model's
+`intent`, versioned skill identity and SHA-256 digest, egress receipt, real
+`timing` state, and `human_handoff`. Typical states include
+`awaiting_human_confirmation`, `proposal_expired`, `comparison_ready`,
+`flow_failed`, and `unsupported`.
+
 ## OpenROAD snapshot
 
 `GET /api/openroad/snapshot`
@@ -208,7 +282,7 @@ route rejects unsupported schemas, malformed JSON, symlinks, out-of-workspace
 paths, and snapshots larger than 1 MiB.
 
 This snapshot is execution evidence only. It does not contain a verified
-RTL/SDC/PDK design identity, a worst timing path, a signed human-approval
+RTL/SDC/PDK design identity, a worst timing path, an authenticated confirmer
 identity, report artifacts, signoff results, or a before/after improvement
 comparison. Clients must treat missing, stale, interrupted, failed, or
 inconclusive evidence as non-complete.
@@ -237,7 +311,6 @@ The following paths intentionally return 404 and will not be restored for compat
 - `/api/design/*`
 - `/api/verification/*`
 
-Natural-language design, AI-generated testbenches, and the complete OpenROAD
-timing-improvement journey require new evidence-backed contracts before they
-can become public API surfaces. The existing OpenROAD endpoint is read-only
-execution evidence, not that journey.
+Natural-language design and AI-generated testbenches remain unsupported. The
+separate OpenROAD snapshot is read-only MCP execution evidence and cannot be
+used as a substitute for the typed timing journey above.

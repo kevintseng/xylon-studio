@@ -79,9 +79,17 @@ export async function executeTimingBatch({
   cpus,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   maxLogBytes = MAX_LOG_BYTES,
+  signal,
+  terminationGraceMs = 2_000,
 }) {
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > MAX_TIMEOUT_MS) {
     throw new TimingRunError('InvalidTimeout', 'Timing timeout is outside the supported range', 'Use a timeout from 1 second to 30 minutes.')
+  }
+  if (!Number.isInteger(terminationGraceMs) || terminationGraceMs < 50 || terminationGraceMs > 5_000) {
+    throw new TimingRunError('InvalidTerminationGrace', 'Timing termination grace is outside the supported range', 'Use a termination grace from 50 milliseconds to 5 seconds.')
+  }
+  if (signal?.aborted) {
+    throw new TimingRunError('TimingRunInterrupted', 'Timing run was interrupted before execution', 'Wait for cleanup readback, then start a new timing baseline.')
   }
   const runtimeDir = path.join(runDir, 'runtime')
   await mkdir(runtimeDir, { recursive: true, mode: 0o700 })
@@ -97,12 +105,33 @@ export async function executeTimingBatch({
       XYLON_OPENROAD_CPUS: String(cpus),
     }),
     stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
   })
   let timedOut = false
   let logLimitExceeded = false
-  const terminate = () => {
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
+  let interrupted = false
+  let killTimer = null
+  let terminationStarted = false
+  const signalBatch = (requestedSignal) => {
+    if (!child.pid || child.exitCode !== null || child.signalCode !== null) return
+    try {
+      process.kill(-child.pid, requestedSignal)
+    } catch (error) {
+      if (error?.code !== 'ESRCH') child.kill(requestedSignal)
+    }
   }
+  const terminate = () => {
+    if (terminationStarted) return
+    terminationStarted = true
+    signalBatch('SIGTERM')
+    killTimer = setTimeout(() => signalBatch('SIGKILL'), terminationGraceMs)
+    killTimer.unref?.()
+  }
+  const handleAbort = () => {
+    interrupted = true
+    terminate()
+  }
+  signal?.addEventListener('abort', handleAbort, { once: true })
   const timer = setTimeout(() => {
     timedOut = true
     terminate()
@@ -127,7 +156,11 @@ export async function executeTimingBatch({
   const exit = await new Promise((resolve, reject) => {
     child.once('error', reject)
     child.once('close', (code, signal) => resolve({ code, signal }))
-  }).finally(() => clearTimeout(timer))
+  }).finally(() => {
+    clearTimeout(timer)
+    if (killTimer) clearTimeout(killTimer)
+    signal?.removeEventListener('abort', handleAbort)
+  })
   const [stdoutCapture, stderrCapture] = await Promise.all([stdoutPromise, stderrPromise])
   const captureError = stdoutCapture.error ?? stderrCapture.error
   if (captureError && !logLimitExceeded) throw captureError
@@ -137,6 +170,7 @@ export async function executeTimingBatch({
     ...exit,
     child_pid: child.pid ?? null,
     timed_out: timedOut,
+    interrupted,
     log_limit_exceeded: logLimitExceeded,
     stdout_bytes: stdout.bytes,
     stderr_bytes: stderr.bytes,
@@ -146,6 +180,12 @@ export async function executeTimingBatch({
 }
 
 export function classifyTimingFailure(runtimeResult) {
+  if (runtimeResult.interrupted) {
+    return {
+      code: 'TimingRunInterrupted',
+      recovery: 'The local application stopped this run. Wait for cleanup verification, then start a new timing baseline.',
+    }
+  }
   if (runtimeResult.timed_out) {
     return {
       code: 'TimingRunTimeout',
@@ -210,6 +250,7 @@ export async function runTimingDesign(rawInput, {
   sourceRevision = process.env.XYLON_SOURCE_REVISION ?? null,
   runContext,
   runId,
+  signal,
 } = {}) {
   if (!repoRoot) throw new TimingRunError('RepositoryRequired', 'Repository root is required', 'Run the timing command from a Xylon checkout.')
   const canonicalRepoRoot = await realpath(path.resolve(repoRoot))
@@ -252,6 +293,7 @@ export async function runTimingDesign(rawInput, {
       repoId,
       cpus,
       timeoutMs,
+      signal,
     })
   } catch (error) {
     runtime = runtime ?? { error: error instanceof Error ? error.message : String(error) }

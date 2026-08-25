@@ -25,26 +25,32 @@ function assertExcludesPatterns(source: string, patterns: RegExp[], label: strin
   }
 }
 
-test('README documents a bounded OpenROAD execution record instead of a full timing journey', () => {
+test('README documents the bounded setup-timing journey and its unsupported boundaries', () => {
   assertIncludesAnchors(
     readme,
     [
-      'OpenROAD',
-      'does not yet import a complete RTL/SDC/PDK design',
-      'does not yet',
-      'worst timing path',
-      'timing improvement',
+      'Setup-timing assistant',
+      'real RTL and SDC',
+      'built-in `sky130hd`',
+      'WNS, TNS, and the worst setup path',
+      'PLACE_DENSITY 0.60 → 0.65',
+      'Remote BYOK endpoints or stored API keys',
+      'not physical signoff or tape-out readiness',
     ],
     'README.md',
   )
   assertIncludesAnchors(
     readmeZhTw,
     [
-      'OpenROAD',
-      '還不能匯入完整的 RTL／SDC／PDK 設計',
-      '最差時序路徑',
-      '時序改善',
-      '尚未可用',
+      'Setup 時序助理',
+      '真實 RTL、SDC',
+      '內建 `sky130hd`',
+      'WNS、TNS 與最差 setup 路徑',
+      'PLACE_DENSITY 0.60 → 0.65',
+      '遠端 BYOK 服務網址或保存 API key',
+      '不等於 timing closure',
+      '不代表實體設計',
+      '可以投片',
     ],
     'README.zh-TW.md',
   )
@@ -57,6 +63,8 @@ test('README truthfulness contract rejects old dragon and fake-complete position
       /\bdragon\b/i,
       /\bfake[- ]?complete\b/i,
       /\btape-?out-?ready\b/i,
+      /does not yet import a complete RTL\/SDC\/PDK design/i,
+      /next product slice/i,
     ],
     'README.md',
   )
@@ -67,6 +75,8 @@ test('README truthfulness contract rejects old dragon and fake-complete position
       /dragon/i,
       /fake[- ]?complete/i,
       /tape-?out-?ready/i,
+      /還不能匯入完整的 RTL／SDC／PDK 設計/i,
+      /下一個產品切片/i,
     ],
     'README.zh-TW.md',
   )
