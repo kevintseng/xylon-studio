@@ -27,6 +27,18 @@ function dependencies(overrides = {}) {
   }
 }
 
+test('floorplan failure preserves the first bounded OpenROAD blocking line', () => {
+  const failure = classifyTimingFailure({
+    stderr_tail: '[ERROR PDN-0185] Insufficient width to add straps on layer met4\nError: pdn.tcl, 6 PDN-0185',
+    stdout_tail: 'later output that must not replace the first blocker',
+  })
+  assert.equal(failure.code, 'TimingFloorplanCapacityExceeded')
+  assert.deepEqual(failure.evidence, {
+    source: 'stderr',
+    detail: '[ERROR PDN-0185] Insufficient width to add straps on layer met4',
+  })
+})
+
 async function writeFakeBaseline(runDir) {
   const prefix = path.join('sky130hd', 'demo', 'base')
   await mkdir(path.join(runDir, 'reports', prefix), { recursive: true })

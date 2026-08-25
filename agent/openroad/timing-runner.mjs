@@ -182,54 +182,74 @@ export async function executeTimingBatch({
   }
 }
 
-export function classifyTimingFailure(runtimeResult) {
-  if (runtimeResult.interrupted) {
-    if (runtimeResult.interruption_reason === 'user_cancelled') {
+function firstBlockingEvidence(runtimeResult) {
+  const sources = [
+    ['stderr', runtimeResult.stderr_tail],
+    ['stdout', runtimeResult.stdout_tail],
+  ]
+  for (const [source, raw] of sources) {
+    if (typeof raw !== 'string') continue
+    const match = raw.match(/^\s*(?:\[ERROR\s+[A-Z]+-\d+\][^\n]*|Error:\s+[^\n]*)/m)
+    if (match) {
       return {
-        code: 'TimingRunCancelled',
-        recovery: 'The requested timing run stopped and Xylon verified owned cleanup. Review the saved input, then start a new baseline when ready.',
+        source,
+        detail: match[0].trim().replaceAll(/\s+/g, ' ').slice(0, 512),
       }
     }
-    return {
+  }
+  return null
+}
+
+export function classifyTimingFailure(runtimeResult) {
+  const evidence = firstBlockingEvidence(runtimeResult)
+  const withEvidence = (failure) => (evidence ? { ...failure, evidence } : failure)
+  if (runtimeResult.interrupted) {
+    if (runtimeResult.interruption_reason === 'user_cancelled') {
+      return withEvidence({
+        code: 'TimingRunCancelled',
+        recovery: 'The requested timing run stopped and Xylon verified owned cleanup. Review the saved input, then start a new baseline when ready.',
+      })
+    }
+    return withEvidence({
       code: 'TimingRunInterrupted',
       recovery: 'The local application stopped this run. Wait for cleanup verification, then start a new timing baseline.',
-    }
+    })
   }
   if (runtimeResult.timed_out) {
-    return {
+    return withEvidence({
       code: 'TimingRunTimeout',
       recovery: 'Reduce the design to the failing timing block or increase the bounded phase timeout, then rerun after scripts/xylon-openroad doctor reports enough headroom.',
-    }
+    })
   }
   if (runtimeResult.log_limit_exceeded) {
-    return {
+    return withEvidence({
       code: 'TimingLogLimitExceeded',
       recovery: 'Inspect the bounded runtime log for a repeated tool error, correct the input, and rerun; Xylon stopped the run to protect local disk and memory.',
-    }
+    })
   }
   const diagnostic = `${runtimeResult.stderr_tail ?? ''}\n${runtimeResult.stdout_tail ?? ''}`
   if (/module .*not found|can't find module|hierarchy.*top/i.test(diagnostic)) {
-    return { code: 'TimingTopModuleInvalid', recovery: 'Set top_module to the single synthesizable module declared by the imported RTL.' }
+    return withEvidence({ code: 'TimingTopModuleInvalid', recovery: 'Set top_module to the single synthesizable module declared by the imported RTL.' })
   }
   if (/no clocks|clock .*not found|create_clock|sdc.*error/i.test(diagnostic)) {
-    return { code: 'TimingClockConstraintInvalid', recovery: 'Provide one supported create_clock constraint whose port exists as an RTL input.' }
+    return withEvidence({ code: 'TimingClockConstraintInvalid', recovery: 'Provide one supported create_clock constraint whose port exists as an RTL input.' })
   }
   if (/illegal instruction|SIGILL/i.test(diagnostic)) {
-    return {
+    return withEvidence({
       code: 'TimingRuntimeCpuIncompatible',
       recovery: 'Use a runner compatible with the pinned OpenROAD image, or update the pinned image only after the same sky130hd smoke recipe passes on the target CPU.',
-    }
+    })
   }
-  if (/GPL-0301|utilization\s+[\d.]+\s*%\s+exceeds\s+100%|floorplan|core area|placeable area|pdn.*(fail|error)|design is too small/i.test(diagnostic)) {
-    return {
+  if (/GPL-0301|PDN-\d+|utilization\s+[\d.]+\s*%\s+exceeds\s+100%|floorplan|core area|placeable area|pdn.*(fail|error)|design is too small/i.test(diagnostic)) {
+    return withEvidence({
       code: 'TimingFloorplanCapacityExceeded',
-      recovery: 'Analyze a smaller timing block or reduce duplicated logic, then rerun; this bounded slice will not silently expand beyond its controlled automatic floorplan recipe.',
-    }
+      recovery: 'The design core is too narrow for the pinned OpenROAD power straps. Start a fresh baseline with Xylon’s wider bounded floorplan recipe; if it still fails, reduce duplicated logic or reduce the timing block and rerun.',
+    })
   }
-  return {
+  return withEvidence({
     code: 'TimingRuntimeFailed',
     recovery: 'Open the bounded runtime stderr log, fix the first OpenROAD or ORFS error, and rerun this exact design and constraint set.',
-  }
+  })
 }
 
 async function persistBlocked(runDir, identity, failure, runtime, cleanup) {
@@ -239,6 +259,7 @@ async function persistBlocked(runDir, identity, failure, runtime, cleanup) {
     failed_at: new Date().toISOString(),
     error: failure.code,
     recovery: failure.recovery,
+    blocking_evidence: failure.evidence ?? null,
     runtime,
     cleanup,
   }

@@ -33,6 +33,13 @@ function boundedPublicText(value, fallback, maximum = 2048) {
   return message.length <= maximum ? message : `${message.slice(0, maximum - 1)}…`
 }
 
+function publicBlockingEvidence(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const source = value.source === 'stderr' || value.source === 'stdout' ? value.source : null
+  if (!source || typeof value.detail !== 'string' || value.detail.trim().length === 0) return null
+  return { source, detail: boundedPublicText(value.detail, 'The runtime returned a bounded blocking diagnostic.', 512) }
+}
+
 function requireObject(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw timingApiError('TimingApiInputInvalid', `${label} must be an object`)
@@ -166,11 +173,13 @@ export function publicTimingState({ manifest, proposal = null, comparison = null
       message: candidateFailure.message,
       recovery: candidateFailure.recovery,
       candidate_run_id: candidateFailure.candidate_run_id ?? null,
+      blocking_evidence: publicBlockingEvidence(candidateFailure.blocking_evidence),
     } : manifest.state === 'blocked' ? {
       code: manifest.error ?? 'TimingRunBlocked',
       message: 'OpenROAD timing analysis did not produce a verified result.',
       recovery: manifest.recovery ?? 'Review the timing evidence and rerun after correcting the first blocker.',
       candidate_run_id: null,
+      blocking_evidence: publicBlockingEvidence(manifest.blocking_evidence),
     } : null,
   }
 }

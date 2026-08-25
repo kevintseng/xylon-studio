@@ -52,7 +52,7 @@ test('stages private immutable timing inputs and a deterministic ORFS config', a
   assert.match(config, /NUM_CORES = 1/)
   assert.match(config, /CORE_UTILIZATION = 35/)
   assert.match(config, /CORE_ASPECT_RATIO = 1\.0/)
-  assert.match(config, /CORE_MARGIN = 10/)
+  assert.match(config, /CORE_MARGIN = 2/)
   assert.match(config, /SKIP_CTS_REPAIR_TIMING = 1/)
   assert.match(config, /LEC_CHECK = 0/)
   assert.doesNotMatch(config, /DIE_AREA|CORE_AREA/)

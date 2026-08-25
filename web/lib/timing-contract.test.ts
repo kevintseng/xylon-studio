@@ -40,6 +40,23 @@ test('timing contract preserves measured setup evidence without filling missing 
   assert.throws(() => normalizeTimingState(baseline({ evidence: null })), /missing metrics or evidence/)
 })
 
+test('timing contract preserves the bounded first blocking evidence', () => {
+  const state = normalizeTimingState(baseline({
+    phase: 'blocked',
+    metrics: null,
+    evidence: { report_sha256: null, checkpoint_sha256: null, cleanup_verified: true },
+    failure: {
+      code: 'TimingFloorplanCapacityExceeded',
+      message: 'OpenROAD timing analysis did not produce a verified result.',
+      recovery: 'Adjust the bounded floorplan recipe, then rerun after review.',
+      candidate_run_id: null,
+      blocking_evidence: { source: 'stderr', detail: '[ERROR PDN-0185] Insufficient width to add straps' },
+    },
+  }))
+  assert.equal(state.failure?.blockingEvidence?.source, 'stderr')
+  assert.match(state.failure?.blockingEvidence?.detail ?? '', /PDN-0185/)
+})
+
 test('timing contract rejects unverified cleanup and an unbounded proposal action', () => {
   assert.throws(
     () => normalizeTimingState(baseline({ evidence: { report_sha256: 'b'.repeat(64), checkpoint_sha256: 'c'.repeat(64), cleanup_verified: false } })),

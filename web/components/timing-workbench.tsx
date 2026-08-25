@@ -52,18 +52,19 @@ interface VisibleError {
   code: string
   message: string
   recovery: string
+  blockingEvidence: string | null
 }
 
 const STAGE_KEYS: StageKey[] = ['input', 'baseline', 'proposal', 'confirm', 'compare']
 
 function displayError(error: unknown): VisibleError {
   if (error instanceof TimingApiError) {
-    return { code: error.code, message: error.message, recovery: error.recovery }
+    return { code: error.code, message: error.message, recovery: error.recovery, blockingEvidence: null }
   }
   if (error instanceof Error) {
-    return { code: error.name, message: error.message, recovery: 'Run scripts/xylon doctor, check the design inputs, then retry.' }
+    return { code: error.name, message: error.message, recovery: 'Run scripts/xylon doctor, check the design inputs, then retry.', blockingEvidence: null }
   }
-  return { code: 'TimingUnknownError', message: 'The timing task did not return a readable result.', recovery: 'Run scripts/xylon doctor, then start a new baseline.' }
+  return { code: 'TimingUnknownError', message: 'The timing task did not return a readable result.', recovery: 'Run scripts/xylon doctor, then start a new baseline.', blockingEvidence: null }
 }
 
 function localizeError(error: VisibleError, locale: 'en' | 'zh-TW', t: (key: string) => string): VisibleError {
@@ -76,7 +77,7 @@ function localizeError(error: VisibleError, locale: 'en' | 'zh-TW', t: (key: str
     'TimingProposalExpired', 'TimingRunCancelled', 'TimingRunCancelledBeforeStart',
   ])
   const key = supportedCodes.has(error.code) ? error.code : 'generic'
-  return { code: error.code, message: t(`timing.error.${key}.message`), recovery: t(`timing.error.${key}.recovery`) }
+  return { code: error.code, message: t(`timing.error.${key}.message`), recovery: t(`timing.error.${key}.recovery`), blockingEvidence: error.blockingEvidence }
 }
 
 function formatNs(value: number): string {
@@ -143,7 +144,12 @@ export function TimingWorkbench() {
   const edaActionAvailable = edaCanStart || edaCanQueue
 
   const localizedTimingFailure = useCallback((state: TimingState): VisibleError | null => (
-    state.failure ? localizeError(state.failure, locale, t) : null
+    state.failure ? localizeError({
+      code: state.failure.code,
+      message: state.failure.message,
+      recovery: state.failure.recovery,
+      blockingEvidence: state.failure.blockingEvidence?.detail ?? null,
+    }, locale, t) : null
   ), [locale, t])
 
   const acceptActionState = (state: TimingState) => {
@@ -311,7 +317,7 @@ export function TimingWorkbench() {
     event.target.value = ''
     if (!file) return
     if (file.size < 1 || file.size > maximumBytes) {
-      setError({ code: 'TimingInputFileSizeInvalid', message: t('timing.file.invalid'), recovery: t('timing.file.recovery') })
+      setError({ code: 'TimingInputFileSizeInvalid', message: t('timing.file.invalid'), recovery: t('timing.file.recovery'), blockingEvidence: null })
       return
     }
     changeInput(setter)(await file.text())
@@ -321,12 +327,12 @@ export function TimingWorkbench() {
     const selected = Array.from(event.target.files ?? [])
     event.target.value = ''
     if (selected.length < 1 || selected.length > MAX_PROJECT_FILES) {
-      setError({ code: 'ProjectImportInvalid', message: t('timing.project.fileCount'), recovery: t('timing.project.fileRecovery') })
+      setError({ code: 'ProjectImportInvalid', message: t('timing.project.fileCount'), recovery: t('timing.project.fileRecovery'), blockingEvidence: null })
       return
     }
     const oversized = selected.find((file) => file.size < 1 || file.size > MAX_PROJECT_FILE_BYTES)
     if (oversized) {
-      setError({ code: 'ProjectImportInvalid', message: t('timing.project.fileSize'), recovery: t('timing.project.fileRecovery') })
+      setError({ code: 'ProjectImportInvalid', message: t('timing.project.fileSize'), recovery: t('timing.project.fileRecovery'), blockingEvidence: null })
       return
     }
     const files = await Promise.all(selected.map(async (file) => ({
@@ -619,7 +625,7 @@ export function TimingWorkbench() {
               <div className={`mt-5 rounded-2xl border p-4 text-sm leading-6 ${timing.comparison.timingClean ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100' : 'border-amber-500/30 bg-amber-500/10 text-amber-100'}`}><p className="font-semibold">{t(`timing.outcome.${timing.comparison.outcome}`)}</p><p className="mt-1">{timing.comparison.timingClean ? t('timing.comparison.clean') : t('timing.comparison.stillViolating')}</p></div>
             </section> : null}
 
-            {error ? <section role="alert" className="rounded-3xl border border-red-500/40 bg-red-500/10 p-5 text-red-100"><h3 className="text-lg font-semibold">{t('timing.failure.title')}</h3><p className="mt-3 text-sm leading-6">{error.message}</p><p className="mt-4 text-sm font-semibold">{t('timing.failure.next')}</p><p className="mt-1 text-sm leading-6">{error.recovery}</p>{error.code === 'TimingCleanupUnverified' ? <pre className="mt-4 overflow-x-auto rounded-xl border border-red-400/20 bg-slate-950/60 px-3 py-2 text-xs"><code>scripts/xylon-openroad doctor</code></pre> : null}<details className="mt-4 text-xs text-red-200"><summary className="cursor-pointer font-semibold">{t('timing.failure.details')}</summary><code className="mt-2 block break-all font-mono">{error.code}</code></details></section> : null}
+            {error ? <section role="alert" className="rounded-3xl border border-red-500/40 bg-red-500/10 p-5 text-red-100"><h3 className="text-lg font-semibold">{t('timing.failure.title')}</h3><p className="mt-3 text-sm leading-6">{error.message}</p>{error.blockingEvidence ? <div className="mt-4 rounded-2xl border border-amber-300/30 bg-amber-300/10 p-3"><p className="text-xs font-semibold uppercase tracking-wide text-amber-100">{t('timing.failure.evidence')}</p><code className="mt-2 block break-words font-mono text-xs leading-5 text-amber-50">{error.blockingEvidence}</code></div> : null}<p className="mt-4 text-sm font-semibold">{t('timing.failure.next')}</p><p className="mt-1 text-sm leading-6">{error.recovery}</p>{error.code === 'TimingCleanupUnverified' ? <pre className="mt-4 overflow-x-auto rounded-xl border border-red-400/20 bg-slate-950/60 px-3 py-2 text-xs"><code>scripts/xylon-openroad doctor</code></pre> : null}<details className="mt-4 text-xs text-red-200"><summary className="cursor-pointer font-semibold">{t('timing.failure.details')}</summary><code className="mt-2 block break-all font-mono">{error.code}</code></details></section> : null}
           </div>
         </div>
       </div>

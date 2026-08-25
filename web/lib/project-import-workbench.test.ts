@@ -25,6 +25,7 @@ test('timing workbench exposes a bounded project-import journey with preflight g
 
   assert.match(copy, /timing\.project\.preflightBlocked/)
   assert.match(copy, /timing\.project\.preflightRecovery/)
+  assert.match(workbench, /timing\.failure\.evidence/)
 })
 
 test('project import journey keeps the recovery path visible for invalid browser files', () => {
