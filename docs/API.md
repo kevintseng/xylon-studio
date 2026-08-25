@@ -185,6 +185,20 @@ Unsupported fields return an error without starting EDA work:
 }
 ```
 
+## Project preflight (v0.6 foundation)
+
+`POST /api/openroad/project-preflight` checks a normalized `xylon-project/v1`
+manifest before any heavy EDA work. The manifest names a project directory inside
+the local Xylon workspace, multiple `.v`/`.sv` sources, an SDC, top module, clocks,
+include directories, and optional macro names. Preflight rejects path traversal,
+escaping symlinks, missing files, unsupported platforms/HDL, duplicate tops,
+missing clocks, invalid SDC units, and undeclared macros. It returns `ready`,
+`needs_correction`, or `cannot_run` with one plain-language action. This endpoint
+does not acquire the OpenROAD resource lease or start a container.
+
+This is the first v0.6 import boundary; it does not yet replace the existing
+inline timing request or claim a complete LibreLane flow.
+
 ## Setup-timing journey
 
 The timing API accepts bounded inline RTL and SDC, one top module, and the

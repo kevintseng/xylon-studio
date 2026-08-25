@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
+
+from agent.openroad.project_manifest import preflight_project_manifest
 
 router = APIRouter(tags=["openroad"])
 
@@ -22,6 +25,27 @@ EMPTY_SNAPSHOT = {
     "sessions": [],
     "last_error": None,
 }
+
+
+class ProjectClockRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=128)
+    port: str = Field(min_length=1, max_length=128)
+    period_ns: float
+
+
+class ProjectPreflightRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    root: str = Field(min_length=1, max_length=512)
+    top: str = Field(min_length=1, max_length=128)
+    platform: str = Field(min_length=1, max_length=32)
+    rtl: list[str] = Field(min_length=1)
+    include_dirs: list[str] = Field(default_factory=list)
+    sdc: str = Field(min_length=1, max_length=512)
+    clocks: list[ProjectClockRequest] = Field(min_length=1)
+    macros: list[str] = Field(default_factory=list)
 
 
 def _path_within_repo(candidate: Path) -> bool:
@@ -156,3 +180,11 @@ def _load_snapshot() -> dict[str, Any]:
 async def get_openroad_snapshot() -> dict[str, Any]:
     """Return the canonical local OpenROAD snapshot contract."""
     return _load_snapshot()
+
+
+@router.post("/openroad/project-preflight")
+async def post_openroad_project_preflight(
+    request: ProjectPreflightRequest,
+) -> dict[str, Any]:
+    """Validate an imported multi-file project manifest before any heavy EDA work."""
+    return preflight_project_manifest(REPO_ROOT, request.model_dump())
