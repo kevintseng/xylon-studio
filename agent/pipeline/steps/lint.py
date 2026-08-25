@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from collections.abc import Callable
 
 from agent.pipeline.models import FailureKind, StepResult, StepStatus
 from agent.sandbox.manager import SandboxManager
@@ -12,6 +13,7 @@ logger = logging.getLogger(__name__)
 async def run_lint_step(
     rtl_file: str,
     sandbox: SandboxManager | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> StepResult:
     """
     Run Verilator lint check on RTL file.
@@ -36,7 +38,8 @@ async def run_lint_step(
 
         result = await asyncio.to_thread(
             sandbox.lint_verilog_string,
-            rtl_code
+            rtl_code,
+            cancel_requested=cancel_requested,
         )
 
         # Parse warnings vs errors
@@ -53,7 +56,10 @@ async def run_lint_step(
             failure_kind = FailureKind.CONFIGURATION
         status = StepStatus.PASSED if not errors else StepStatus.FAILED
         recovery_code = None
-        if failure_kind == FailureKind.INFRASTRUCTURE:
+        if failure_kind == FailureKind.CANCELLATION:
+            status = StepStatus.SKIPPED
+            recovery_code = "rerun_when_ready"
+        elif failure_kind == FailureKind.INFRASTRUCTURE:
             recovery_code = "repair_toolchain"
         elif failure_kind == FailureKind.UNSUPPORTED:
             recovery_code = "use_supported_hdl"

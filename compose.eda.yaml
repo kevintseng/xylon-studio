@@ -10,6 +10,7 @@ x-eda-service: &eda-service
       YOSYS_VERSION: ${YOSYS_VERSION:?Run through scripts/eda-runtime}
       YOSYS_COMMIT: ${YOSYS_COMMIT:?Run through scripts/eda-runtime}
   command: ["sleep", "infinity"]
+  init: true
   network_mode: none
   read_only: true
   tmpfs:

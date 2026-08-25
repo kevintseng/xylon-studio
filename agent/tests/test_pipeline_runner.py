@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import threading
 from unittest.mock import patch
 
 import pytest
@@ -169,6 +170,50 @@ async def test_pipeline_blocks_before_writing_or_starting_tools_when_resources_a
     assert resource.recovery_code == "wait_for_resources"
     assert any("memory available 4.0 GiB" in error for error in resource.errors)
     mock_sandbox_manager.lint_verilog_string.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_resource_check_uses_existing_parent_on_first_run(
+    tmp_path,
+    mock_sandbox_manager,
+):
+    artifact_root = tmp_path / ".xylon" / "runs"
+    safe = ResourceSnapshot(
+        logical_cpus=12,
+        load_one_minute=1.0,
+        memory_free_percent=80,
+        disk_free_bytes=100 * 1024**3,
+        memory_available_bytes=16 * 1024**3,
+    )
+    mock_sandbox_manager.lint_verilog_string.return_value = {
+        "success": True,
+        "warnings": [],
+        "errors": [],
+        "stdout": "",
+        "stderr": "",
+        "duration_seconds": 0.1,
+    }
+
+    def collect_from_existing_path(probe_path):
+        assert probe_path.exists()
+        assert probe_path == tmp_path
+        return safe
+
+    with patch(
+        "agent.local_app.collect_resource_snapshot",
+        side_effect=collect_from_existing_path,
+    ):
+        result = await run_pipeline(
+            SIMPLE_RTL,
+            config=PipelineConfig(
+                resource_check_enabled=True,
+                artifact_root=str(artifact_root),
+            ),
+        )
+
+    assert result.outcome.value == "lint_only"
+    assert result.get_step("resource").status == StepStatus.PASSED
+    assert artifact_root.exists()
 
 
 @pytest.mark.asyncio
@@ -416,6 +461,84 @@ async def test_pipeline_cancellation_after_simulation_skips_coverage(
     assert result.get_step("simulate") is not None
     assert result.get_step("coverage") is None
     assert mock_sandbox_manager.run_verilator_sim_string.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_pipeline_cancellation_does_not_hide_unverified_cleanup_failure(
+    tmp_path,
+    mock_sandbox_manager,
+):
+    cancellation_event = asyncio.Event()
+
+    def cancellation_with_unverified_cleanup(
+        _rtl_code,
+        *,
+        cancel_requested,
+    ):
+        cancellation_event.set()
+        assert cancel_requested is not None
+        return {
+            "success": False,
+            "warnings": [],
+            "errors": ["cleanup could not be verified"],
+            "stdout": "",
+            "stderr": "cleanup could not be verified",
+            "duration_seconds": 0.1,
+            "failure_kind": "infrastructure",
+        }
+
+    mock_sandbox_manager.lint_verilog_string.side_effect = (
+        cancellation_with_unverified_cleanup
+    )
+    result = await run_pipeline(
+        SIMPLE_RTL,
+        config=PipelineConfig(artifact_root=str(tmp_path)),
+        cancellation_event=cancellation_event,
+    )
+
+    assert result.outcome.value == "infrastructure_error"
+    assert result.get_step("cancelled") is None
+    assert result.get_step("lint").failure_kind == FailureKind.INFRASTRUCTURE
+
+
+@pytest.mark.asyncio
+async def test_pipeline_relays_async_cancellation_into_active_worker_thread(
+    tmp_path,
+    mock_sandbox_manager,
+):
+    cancellation_event = asyncio.Event()
+    worker_started = threading.Event()
+
+    def wait_for_cancellation(_rtl_code, *, cancel_requested):
+        worker_started.set()
+        assert cancel_requested is not None
+        assert worker_started.wait(timeout=1)
+        while not cancel_requested():
+            threading.Event().wait(0.01)
+        return {
+            "success": False,
+            "warnings": [],
+            "errors": ["Execution cancelled"],
+            "stdout": "",
+            "stderr": "",
+            "duration_seconds": 0.1,
+            "failure_kind": "cancellation",
+        }
+
+    mock_sandbox_manager.lint_verilog_string.side_effect = wait_for_cancellation
+    task = asyncio.create_task(
+        run_pipeline(
+            SIMPLE_RTL,
+            config=PipelineConfig(artifact_root=str(tmp_path)),
+            cancellation_event=cancellation_event,
+        )
+    )
+    await asyncio.wait_for(asyncio.to_thread(worker_started.wait, 1), timeout=2)
+    cancellation_event.set()
+    result = await asyncio.wait_for(task, timeout=2)
+
+    assert result.outcome.value == "cancelled"
+    assert result.get_step("lint").status == StepStatus.SKIPPED
 
 
 @pytest.mark.asyncio

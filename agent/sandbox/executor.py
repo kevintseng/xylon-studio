@@ -13,6 +13,7 @@ import subprocess
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -39,6 +40,10 @@ class ExecutionError(Exception):
         self.exit_code = exit_code
         self.failure_kind = failure_kind
         super().__init__(self.message)
+
+
+class _ExecutionCancelled(Exception):
+    """Internal signal used to enter the verified interruption cleanup path."""
 
 
 # ==================== Data Models ====================
@@ -407,18 +412,18 @@ echo "process group $pid terminated"
             )
 
         try:
-            host_verified, host_detail = self._stop_host_process(process)
-        except Exception as error:  # Safety boundary: container cleanup must still run.
-            host_verified = False
-            host_detail = f"host cleanup raised: {error}"
-
-        try:
             container_verified, container_detail = (
                 self._cleanup_interrupted_execution(state_file)
             )
         except Exception as error:  # Safety boundary: aggregate unknown cleanup failures.
             container_verified = False
             container_detail = f"container cleanup raised: {error}"
+
+        try:
+            host_verified, host_detail = self._stop_host_process(process)
+        except Exception as error:  # Safety boundary: both cleanup results must survive.
+            host_verified = False
+            host_detail = f"host cleanup raised: {error}"
 
         verified = host_verified and container_verified
         detail = (
@@ -437,6 +442,7 @@ echo "process group $pid terminated"
         timeout: int | float | None = None,
         workdir: str | None = None,
         env: dict | None = None,
+        cancel_requested: Callable[[], bool] | None = None,
     ) -> ExecutionResult:
         """
         Execute command in sandbox container.
@@ -555,7 +561,17 @@ exit "$status"
             for reader in readers:
                 reader.start()
 
-            process.wait(timeout=timeout)
+            deadline = time.monotonic() + timeout
+            while process.returncode is None:
+                if cancel_requested is not None and cancel_requested():
+                    raise _ExecutionCancelled()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(docker_cmd, timeout)
+                try:
+                    process.wait(timeout=min(0.1, remaining))
+                except subprocess.TimeoutExpired:
+                    continue
             for reader in readers:
                 reader.join(timeout=2)
 
@@ -585,6 +601,30 @@ exit "$status"
                 failure_kind=None if success else self._classify_failure(stderr),
             )
 
+        except _ExecutionCancelled as error:
+            cleanup_verified, cleanup_detail = self._cleanup_after_interruption(
+                process, state_file
+            )
+            for reader in readers:
+                reader.join(timeout=2)
+            stdout = self._decode_bounded(stdout_bytes, stdout_truncated[0])
+            stderr = self._decode_bounded(stderr_bytes, stderr_truncated[0])
+            cleanup_status = (
+                f"cleanup verified: {cleanup_detail}"
+                if cleanup_verified
+                else f"cleanup NOT verified: {cleanup_detail}"
+            )
+            error_msg = f"Execution cancelled; {cleanup_status}"
+            logger.info(error_msg)
+            raise ExecutionError(
+                message=error_msg,
+                stdout=stdout,
+                stderr=stderr,
+                exit_code=-1,
+                failure_kind=(
+                    "cancellation" if cleanup_verified else "infrastructure"
+                ),
+            ) from error
         except subprocess.TimeoutExpired as error:
             if process is None:
                 cleanup_verified = True

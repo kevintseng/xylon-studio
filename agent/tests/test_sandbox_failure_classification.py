@@ -147,6 +147,55 @@ def test_executor_timeout_requires_verified_container_cleanup():
     cleanup.assert_called_once()
 
 
+def test_executor_cancellation_interrupts_active_container_execution():
+    executor = SandboxExecutor("xylon-verilator")
+    process = _FakePopen(times_out=True)
+
+    with (
+        patch("agent.sandbox.executor.subprocess.Popen", return_value=process),
+        patch.object(
+            executor,
+            "_terminate_container_execution",
+            return_value=(True, "process group 42 terminated"),
+        ) as cleanup,
+    ):
+        with pytest.raises(ExecutionError) as caught:
+            executor.execute(
+                ["tool"],
+                timeout=60,
+                cancel_requested=lambda: True,
+            )
+
+    assert caught.value.failure_kind == "cancellation"
+    assert process.terminated is True
+    assert "Execution cancelled" in str(caught.value)
+    assert "cleanup verified" in str(caught.value)
+    cleanup.assert_called_once()
+
+
+def test_executor_cancellation_fails_closed_when_cleanup_is_unverified():
+    executor = SandboxExecutor("xylon-verilator")
+    process = _FakePopen(times_out=True)
+
+    with (
+        patch("agent.sandbox.executor.subprocess.Popen", return_value=process),
+        patch.object(
+            executor,
+            "_cleanup_after_interruption",
+            return_value=(False, "container process still running"),
+        ),
+    ):
+        with pytest.raises(ExecutionError) as caught:
+            executor.execute(
+                ["tool"],
+                timeout=60,
+                cancel_requested=lambda: True,
+            )
+
+    assert caught.value.failure_kind == "infrastructure"
+    assert "cleanup NOT verified" in str(caught.value)
+
+
 def test_executor_timeout_fails_closed_when_cleanup_cannot_be_proven():
     executor = SandboxExecutor("xylon-verilator")
     process = _FakePopen(times_out=True)
@@ -314,6 +363,39 @@ def test_cleanup_coordinator_continues_when_host_cleanup_raises_unexpectedly():
     assert "host cleanup raised: unexpected host cleanup error" in detail
     assert "container cleanup verified" in detail
     assert "Automatic continuation is blocked" in detail
+
+
+def test_cleanup_coordinator_reaps_container_process_before_stopping_host_client():
+    executor = SandboxExecutor("xylon-verilator")
+    process = MagicMock()
+    process.returncode = None
+    cleanup_order = []
+
+    with (
+        patch.object(
+            executor,
+            "_cleanup_interrupted_execution",
+            side_effect=lambda _state: (
+                cleanup_order.append("container") or True,
+                "process group 42 terminated",
+            ),
+        ),
+        patch.object(
+            executor,
+            "_stop_host_process",
+            side_effect=lambda _process: (
+                cleanup_order.append("host") or True,
+                "host client exited",
+            ),
+        ),
+    ):
+        verified, _detail = executor._cleanup_after_interruption(
+            process,
+            "/tmp/xylon-exec-test.state",
+        )
+
+    assert verified is True
+    assert cleanup_order == ["container", "host"]
 
 
 def test_cleanup_coordinator_fails_closed_when_container_cleanup_raises():

@@ -56,6 +56,7 @@ def test_compose_caps_local_eda_resources_and_does_not_auto_restart():
     assert "mem_limit: 4g" in compose
     assert "cpus: 2" in compose
     assert "pids_limit: 512" in compose
+    assert "init: true" in compose
     assert 'restart: "no"' in compose
 
 

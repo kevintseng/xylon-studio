@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 
 from agent.sandbox.executor import ExecutionError, SandboxExecutor
 from agent.sandbox.runtime import load_runtime_spec, runtime_container_name
@@ -85,7 +86,11 @@ class SandboxManager:
         logger.info(f"Verilator container: {self.verilator_container}")
         logger.info(f"Yosys container: {self.yosys_container}")
 
-    def lint_verilog(self, verilog_file: str) -> dict:
+    def lint_verilog(
+        self,
+        verilog_file: str,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> dict:
         """
         Lint Verilog file using Verilator.
 
@@ -106,7 +111,8 @@ class SandboxManager:
         try:
             result = self.verilator.execute(
                 ["verilator", "--lint-only", verilog_file],
-                timeout=self.lint_timeout
+                timeout=self.lint_timeout,
+                cancel_requested=cancel_requested,
             )
 
             # Parse Verilator output for warnings/errors
@@ -230,7 +236,11 @@ class SandboxManager:
             return self._merge_cleanup_failure(result, cleanup_error)
         return result
 
-    def lint_verilog_string(self, verilog_code: str) -> dict:
+    def lint_verilog_string(
+        self,
+        verilog_code: str,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> dict:
         """
         Lint Verilog from a code string.
 
@@ -251,7 +261,10 @@ class SandboxManager:
 
         try:
             self._write_to_container(self.verilator_container, container_path, verilog_code)
-            result = self.lint_verilog(container_path)
+            result = self.lint_verilog(
+                container_path,
+                cancel_requested=cancel_requested,
+            )
 
         except Exception as e:
             logger.error(f"Lint string failed: {e}")
@@ -270,7 +283,12 @@ class SandboxManager:
             result,
         )
 
-    def synthesize_verilog(self, verilog_file: str, output_file: str = None) -> dict:
+    def synthesize_verilog(
+        self,
+        verilog_file: str,
+        output_file: str = None,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> dict:
         """
         Synthesize Verilog using Yosys.
 
@@ -307,7 +325,8 @@ class SandboxManager:
         try:
             result = self.yosys.execute(
                 ["yosys", "-p", yosys_script],
-                timeout=self.synthesis_timeout
+                timeout=self.synthesis_timeout,
+                cancel_requested=cancel_requested,
             )
 
             return {
@@ -328,7 +347,11 @@ class SandboxManager:
                 'failure_kind': e.failure_kind,
             }
 
-    def synthesize_verilog_string(self, verilog_code: str) -> dict:
+    def synthesize_verilog_string(
+        self,
+        verilog_code: str,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> dict:
         """
         Synthesize Verilog from a code string using Yosys.
 
@@ -348,7 +371,10 @@ class SandboxManager:
 
         try:
             self._write_to_container(self.yosys_container, container_path, verilog_code)
-            result = self.synthesize_verilog(container_path)
+            result = self.synthesize_verilog(
+                container_path,
+                cancel_requested=cancel_requested,
+            )
 
         except Exception as e:
             logger.error(f"Synthesis string failed: {e}")
@@ -369,6 +395,7 @@ class SandboxManager:
         self, rtl_file: str, tb_file: str,
         timeout: int = 60, coverage: bool = False,
         workdir: str = None,
+        cancel_requested: Callable[[], bool] | None = None,
     ) -> dict:
         """
         Run Verilator simulation with testbench.
@@ -428,6 +455,7 @@ class SandboxManager:
                 timeout=remaining_timeout(),
                 workdir=workdir,
                 env={"CCACHE_DISABLE": "1"},
+                cancel_requested=cancel_requested,
             )
 
             # Verilator returns exit code 1 for warnings (not just errors).
@@ -452,6 +480,7 @@ class SandboxManager:
                 [exe_path],
                 timeout=remaining_timeout(),
                 workdir=workdir,
+                cancel_requested=cancel_requested,
             )
 
             # Step 3: Collect coverage data if enabled
@@ -461,6 +490,7 @@ class SandboxManager:
                     module_name,
                     remaining_timeout,
                     workdir=workdir,
+                    cancel_requested=cancel_requested,
                 )
 
             coverage_duration = (
@@ -505,6 +535,7 @@ class SandboxManager:
     def run_verilator_sim_string(
         self, rtl_code: str, tb_code: str,
         timeout: int = 60, coverage: bool = False,
+        cancel_requested: Callable[[], bool] | None = None,
     ) -> dict:
         """
         Run Verilator simulation from code strings.
@@ -546,6 +577,7 @@ class SandboxManager:
                 timeout=timeout,
                 coverage=coverage,
                 workdir=container_dir,
+                cancel_requested=cancel_requested,
             )
 
         except Exception as e:
@@ -565,7 +597,13 @@ class SandboxManager:
             result,
         )
 
-    def _collect_coverage_data(self, module_name: str, remaining_timeout, workdir: str = None) -> dict:
+    def _collect_coverage_data(
+        self,
+        module_name: str,
+        remaining_timeout,
+        workdir: str = None,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> dict:
         """
         Collect and parse Verilator coverage data after simulation.
 
@@ -587,6 +625,7 @@ class SandboxManager:
                  "coverage.dat"],
                 timeout=remaining_timeout(),
                 workdir=workdir,
+                cancel_requested=cancel_requested,
             )
 
             raw_report = cov_result.stdout + "\n" + cov_result.stderr
@@ -597,6 +636,7 @@ class SandboxManager:
                 ["sh", "-c", f"cat {annotated_dir}/*.v 2>/dev/null || echo ''"],
                 timeout=remaining_timeout(),
                 workdir=workdir,
+                cancel_requested=cancel_requested,
             )
 
             return {
