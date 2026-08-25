@@ -331,17 +331,11 @@ def _read_linux_memory() -> tuple[int | None, int | None]:
 def _read_macos_memory() -> tuple[int | None, int | None, int | None]:
     memory_pressure = shutil.which("memory_pressure")
     sysctl = shutil.which("sysctl")
-    if memory_pressure is None or sysctl is None:
+    if memory_pressure is None:
         return None, None, None
     try:
         pressure_result = subprocess.run(
             [memory_pressure, "-Q"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        total_result = subprocess.run(
-            [sysctl, "-n", "hw.memsize"],
             capture_output=True,
             text=True,
             check=False,
@@ -352,13 +346,46 @@ def _read_macos_memory() -> tuple[int | None, int | None, int | None]:
         r"System-wide memory free percentage:\s*(\d+)%",
         f"{pressure_result.stdout}\n{pressure_result.stderr}",
     )
-    if pressure_result.returncode != 0 or total_result.returncode != 0 or match is None:
+    if pressure_result.returncode != 0 or match is None:
         return None, None, None
     try:
-        total = int(total_result.stdout.strip())
         percent = int(match.group(1))
     except ValueError:
         return None, None, None
+
+    total: int | None = None
+    if sysctl is not None:
+        try:
+            total_result = subprocess.run(
+                [sysctl, "-n", "hw.memsize"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            total_result = None
+        if total_result is not None and total_result.returncode == 0:
+            try:
+                total = int(total_result.stdout.strip())
+            except ValueError:
+                total = None
+
+    # Sandboxed macOS processes may not be allowed to read hw.memsize.  The
+    # first line of memory_pressure -Q still reports the same host total, so
+    # use it as a bounded fallback instead of turning a measurable state into
+    # an opaque probe failure.
+    if total is None:
+        total_match = re.search(
+            r"The system has\s+(\d+)\s+\(",
+            f"{pressure_result.stdout}\n{pressure_result.stderr}",
+        )
+        if total_match is None:
+            return None, None, None
+        try:
+            total = int(total_match.group(1))
+        except ValueError:
+            return None, None, None
+
     return total, total * percent // 100, percent
 
 
