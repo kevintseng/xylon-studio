@@ -80,6 +80,7 @@ async def bound_pipeline_request_body(request: Request, call_next):
         request.url.path.startswith("/api/timing/")
         or request.url.path == "/api/assistant/timing"
     )
+    # Keep the import envelope bounded before JSON validation allocates file text.
     project_import_request = request.method == "POST" and request.url.path == "/api/openroad/projects"
     pipeline_request = request.method == "POST" and request.url.path == "/api/pipeline/run"
     if pipeline_request or timing_request or project_import_request:
