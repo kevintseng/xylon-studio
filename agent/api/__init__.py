@@ -2,7 +2,7 @@
 
 import os
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 
 def local_web_origins(web_port: int) -> tuple[str, str]:
