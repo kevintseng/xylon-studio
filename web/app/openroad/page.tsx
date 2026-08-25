@@ -1,6 +1,7 @@
 'use client'
 
 import { CircuitBackground } from '@/components/circuit-bg'
+import { LibreLaneReadinessCard } from '@/components/librelane-readiness-card'
 import { OpenroadActivityLog } from '@/components/openroad-activity-log'
 import { TimingWorkbench } from '@/components/timing-workbench'
 import { useI18n } from '@/lib/i18n'
@@ -25,6 +26,7 @@ export default function OpenroadPage() {
         </div>
       </section>
 
+      <LibreLaneReadinessCard />
       <TimingWorkbench />
       <OpenroadActivityLog />
     </div>

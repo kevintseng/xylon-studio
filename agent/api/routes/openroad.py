@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent.openroad.librelane_readiness import collect_librelane_readiness
 from agent.openroad.project_manifest import preflight_project_manifest
 from agent.openroad.project_store import ProjectStoreError, store_project_bundle
 
@@ -203,6 +205,12 @@ def _load_snapshot() -> dict[str, Any]:
 async def get_openroad_snapshot() -> dict[str, Any]:
     """Return the canonical local OpenROAD snapshot contract."""
     return _load_snapshot()
+
+
+@router.get("/openroad/librelane-readiness")
+async def get_librelane_readiness() -> dict[str, object]:
+    """Return measured pinned-LibreLane readiness without starting or pulling anything."""
+    return await asyncio.to_thread(collect_librelane_readiness, REPO_ROOT)
 
 
 @router.post("/openroad/project-preflight")

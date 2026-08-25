@@ -17,6 +17,7 @@ function sourceSection(source: string, start: string, end: string): string {
 }
 
 test('OpenROAD page makes the timing journey primary and MCP records explicitly secondary', () => {
+  assert.match(pageSource, /<LibreLaneReadinessCard \/>/)
   assert.match(pageSource, /<TimingWorkbench \/>/)
   assert.match(pageSource, /<OpenroadActivityLog \/>/)
   assert.match(activitySource, /<details/)
