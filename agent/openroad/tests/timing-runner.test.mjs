@@ -99,6 +99,32 @@ test('imported project content revisions are accepted as provenance bindings', a
   assert.equal(result.timing_result.source_revision, projectRevision)
 })
 
+test('blocked runtime persists the first OpenROAD evidence in the manifest', async (context) => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'xylon-timing-runner-'))
+  context.after(() => rm(repoRoot, { recursive: true, force: true }))
+  await assert.rejects(
+    runTimingDesign({}, {
+      repoRoot,
+      runId: 'a'.repeat(32),
+      ...dependencies({
+        executeBatch: async () => ({
+          code: 1,
+          timed_out: false,
+          log_limit_exceeded: false,
+          stderr_tail: '[ERROR PDN-0185] Insufficient width to add straps on layer met4\nError: pdn.tcl, 6 PDN-0185',
+          stdout_tail: 'later output',
+        }),
+      }),
+    }),
+    (error) => error.code === 'TimingFloorplanCapacityExceeded',
+  )
+  const manifest = JSON.parse(await readFile(path.join(repoRoot, '.xylon', 'timing', 'runs', 'a'.repeat(32), 'manifest.json'), 'utf8'))
+  assert.deepEqual(manifest.blocking_evidence, {
+    source: 'stderr',
+    detail: '[ERROR PDN-0185] Insufficient width to add straps on layer met4',
+  })
+})
+
 test('successful tool exit remains blocked when exact cleanup is unverified', async (context) => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'xylon-timing-runner-'))
   context.after(() => rm(repoRoot, { recursive: true, force: true }))
