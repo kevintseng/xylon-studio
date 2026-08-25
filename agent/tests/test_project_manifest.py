@@ -81,6 +81,23 @@ def test_invalid_sdc_units_fail_before_execution(tmp_path: Path):
     assert result["failure"]["code"] == "INVALID_SDC_UNIT"
 
 
+def test_manifest_clock_must_match_sdc_declaration(tmp_path: Path):
+    _root, payload = _project(tmp_path)
+    payload["clocks"] = [{"name": "clk", "port": "clk", "period_ns": 5}]
+    result = preflight_project_manifest(tmp_path, payload)
+    assert result["failure"]["code"] == "CLOCK_MISMATCH"
+
+
+def test_clock_port_must_be_a_top_level_input(tmp_path: Path):
+    root, payload = _project(tmp_path)
+    (root / "constraints" / "counter.sdc").write_text(
+        "create_clock -name data -period 10 [get_ports q]\n", encoding="utf-8"
+    )
+    payload["clocks"] = [{"name": "data", "port": "q", "period_ns": 10}]
+    result = preflight_project_manifest(tmp_path, payload)
+    assert result["failure"]["code"] == "CLOCK_PORT_NOT_INPUT"
+
+
 def test_duplicate_top_fails(tmp_path: Path):
     root, payload = _project(tmp_path)
     (root / "rtl" / "duplicate.sv").write_text(
