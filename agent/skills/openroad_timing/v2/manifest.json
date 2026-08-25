@@ -1,0 +1,7 @@
+{
+  "schema_version": "xylon-product-skill/v1",
+  "id": "openroad-setup-timing",
+  "version": "2",
+  "entrypoint": "SKILL.md",
+  "knowledge": "facts.jsonl"
+}

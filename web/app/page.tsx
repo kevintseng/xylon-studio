@@ -1,8 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, type KeyboardEvent } from 'react'
 import { CircuitBackground } from '@/components/circuit-bg'
 import { useI18n } from '@/lib/i18n'
+import { getRovingTabTargetIndex } from '@/lib/roving-tab-index'
 import {
   HOME_AGENT_STAGES,
   PRODUCT_SCOPE,
@@ -21,12 +22,26 @@ export default function Home() {
   const [selectedKey, setSelectedKey] = useState<(typeof HOME_AGENT_STAGES)[number]['key']>('execute')
   const selected = HOME_AGENT_STAGES.find((stage) => stage.key === selectedKey) ?? HOME_AGENT_STAGES[0]
 
+  const selectStageAt = (index: number) => {
+    const normalizedIndex = (index + HOME_AGENT_STAGES.length) % HOME_AGENT_STAGES.length
+    const nextStage = HOME_AGENT_STAGES[normalizedIndex]
+    setSelectedKey(nextStage.key)
+    requestAnimationFrame(() => document.getElementById(`home-flow-tab-${nextStage.key}`)?.focus())
+  }
+
+  const handleStageKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const nextIndex = getRovingTabTargetIndex(index, event.key, HOME_AGENT_STAGES.length)
+    if (nextIndex === null) return
+    event.preventDefault()
+    selectStageAt(nextIndex)
+  }
+
   return (
     <div className="relative overflow-hidden">
       <section className="relative border-b border-slate-800">
         <CircuitBackground />
         <div className="pointer-events-none absolute -right-40 -top-40 h-96 w-96 rounded-full bg-blue-600/10 blur-3xl" />
-        <div className="container relative mx-auto grid gap-12 px-4 py-20 lg:grid-cols-[1.05fr_.95fr] lg:px-8 lg:py-28">
+        <div className="container relative mx-auto grid gap-8 px-4 py-12 lg:grid-cols-[1.05fr_.95fr] lg:px-8 lg:py-20">
           <div className="self-center">
             <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" aria-hidden="true" />
@@ -43,45 +58,49 @@ export default function Home() {
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <a
-                href="/pipeline"
+                href="/openroad"
                 className="inline-flex min-h-11 items-center justify-center rounded-lg bg-blue-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
               >
                 {t('home.cta.primary')} <span className="ml-2" aria-hidden="true">→</span>
               </a>
               <a
-                href="#agent-flow"
-                className="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-700 bg-slate-900/60 px-6 py-3 text-sm font-semibold text-slate-200 transition hover:border-slate-500 hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+                href="/pipeline"
+                className="inline-flex min-h-11 items-center justify-center rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-6 py-3 text-sm font-semibold text-cyan-100 transition hover:border-cyan-400 hover:bg-cyan-500/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
               >
-                {t('home.cta.secondary')}
+                {t('home.cta.secondary')} <span className="ml-2" aria-hidden="true">→</span>
               </a>
             </div>
           </div>
 
-          <div className="rounded-2xl border border-slate-700/80 bg-slate-950/80 p-5 shadow-2xl shadow-black/30 backdrop-blur sm:p-7">
-            <div className="flex items-center justify-between gap-4 border-b border-slate-800 pb-4">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-400">{t('home.preview.eyebrow')}</p>
-                <h2 className="mt-1 text-lg font-semibold">{t('home.preview.title')}</h2>
-              </div>
-              <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-300">
-                {t('home.preview.outcome')}
-              </span>
+          <div className="rounded-2xl border border-slate-700/80 bg-slate-950/80 p-4 shadow-2xl shadow-black/30 backdrop-blur sm:p-6">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">{t('home.scope.implemented')}</p>
+              <h2 className="mt-2 text-xl font-semibold text-slate-50">{t('home.capabilities.title')}</h2>
             </div>
-            <ol className="mt-5 space-y-3" aria-label={t('home.preview.title')}>
-              {['runtime', 'lint', 'simulate', 'coverage', 'artifacts'].map((gate, index) => (
-                <li key={gate} className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-3">
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-xs font-bold text-emerald-300" aria-hidden="true">✓</span>
-                  <span className="flex-1 text-sm text-slate-200">{t(`home.preview.gate.${gate}`)}</span>
-                  <span className="text-xs text-slate-500">0{index + 1}</span>
+            <ul className="mt-4 space-y-2" aria-label={t('home.scope.implemented')}>
+              {PRODUCT_SCOPE.implemented.map((item) => (
+                <li key={item.key} className="flex gap-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-2.5">
+                  <span className="text-emerald-300" aria-hidden="true">✓</span>
+                  <span className="text-sm leading-6 text-slate-200">{t(`home.scope.implemented.${item.key}`)}</span>
                 </li>
               ))}
-            </ol>
-            <p className="mt-4 text-xs leading-5 text-slate-400">{t('home.preview.note')}</p>
+            </ul>
+            <div className="mt-4 border-t border-slate-800 pt-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-300">{t('home.scope.notYet')}</p>
+              <ul className="mt-3 space-y-2" aria-label={t('home.scope.notYet')}>
+                {PRODUCT_SCOPE.notYet.map((item) => (
+                  <li key={item.key} className="flex gap-3 text-sm leading-6 text-slate-400">
+                    <span className="text-amber-300" aria-hidden="true">○</span>
+                    {t(`home.scope.notYet.${item.key}`)}
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
         </div>
       </section>
 
-      <section id="agent-flow" className="border-b border-slate-800 py-20">
+      <section id="verification-flow" className="py-16 sm:py-20">
         <div className="container mx-auto px-4 lg:px-8">
           <div className="max-w-3xl">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-400">{t('home.flow.eyebrow')}</p>
@@ -91,15 +110,20 @@ export default function Home() {
 
           <div className="mt-10 grid gap-6 xl:grid-cols-[1.45fr_.55fr]">
             <div className="rounded-2xl border border-slate-700 bg-slate-900/30 p-4 sm:p-6">
-              <ol className="grid gap-3 md:grid-cols-5" aria-label={t('home.flow.title')}>
+              <ol className="grid gap-3 md:grid-cols-5" role="tablist" aria-label={t('home.flow.title')}>
                 {HOME_AGENT_STAGES.map((stage, index) => {
                   const active = stage.key === selected.key
                   return (
                     <li key={stage.key} className="relative">
                       <button
                         type="button"
+                        id={`home-flow-tab-${stage.key}`}
+                        role="tab"
                         onClick={() => setSelectedKey(stage.key)}
-                        aria-pressed={active}
+                        onKeyDown={(event) => handleStageKeyDown(event, index)}
+                        tabIndex={active ? 0 : -1}
+                        aria-selected={active}
+                        aria-controls="home-flow-panel"
                         className={`h-full w-full rounded-xl border p-4 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 ${active ? 'border-blue-400 bg-blue-500/10 shadow-lg shadow-blue-950/40' : 'border-slate-700 bg-slate-950/60 hover:border-slate-500'}`}
                       >
                         <span className="text-xs text-slate-500">0{index + 1}</span>
@@ -117,7 +141,13 @@ export default function Home() {
               </ol>
             </div>
 
-            <aside className="rounded-2xl border border-blue-500/30 bg-blue-500/5 p-6" aria-live="polite">
+            <aside
+              id="home-flow-panel"
+              role="tabpanel"
+              aria-labelledby={`home-flow-tab-${selected.key}`}
+              className="rounded-2xl border border-blue-500/30 bg-blue-500/5 p-6"
+              aria-live="polite"
+            >
               <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs ${OWNER_STYLES[selected.owner]}`}>
                 {t(`home.owner.${selected.owner}`)}
               </span>
@@ -137,28 +167,6 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="py-20">
-        <div className="container mx-auto px-4 lg:px-8">
-          <div className="text-center">
-            <h2 className="text-3xl font-bold sm:text-4xl">{t('home.scope.title')}</h2>
-            <p className="mx-auto mt-4 max-w-2xl leading-7 text-slate-400">{t('home.scope.subtitle')}</p>
-          </div>
-          <div className="mx-auto mt-10 grid max-w-5xl gap-6 md:grid-cols-2">
-            <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-6">
-              <h3 className="flex items-center gap-2 font-semibold text-emerald-300"><span aria-hidden="true">✓</span>{t('home.scope.proven')}</h3>
-              <ul className="mt-5 space-y-3">
-                {PRODUCT_SCOPE.proven.map((item) => <li key={item.key} className="text-sm leading-6 text-slate-300">{t(`home.scope.proven.${item.key}`)}</li>)}
-              </ul>
-            </div>
-            <div className="rounded-2xl border border-slate-700 bg-slate-900/30 p-6">
-              <h3 className="flex items-center gap-2 font-semibold text-slate-200"><span aria-hidden="true">○</span>{t('home.scope.notYet')}</h3>
-              <ul className="mt-5 space-y-3">
-                {PRODUCT_SCOPE.notYet.map((item) => <li key={item.key} className="text-sm leading-6 text-slate-400">{t(`home.scope.notYet.${item.key}`)}</li>)}
-              </ul>
-            </div>
-          </div>
-        </div>
-      </section>
     </div>
   )
 }

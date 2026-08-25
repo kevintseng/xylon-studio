@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
-  AGENT_WORKFLOW_STAGES,
   buildPipelineFlow,
   getFirstFailingSelfCheck,
   getOutcomePresentation,
@@ -39,8 +38,9 @@ test('first failing self-check promotes the actionable simulator counterexample'
 
 test('interactive flow renders only requested canonical gates from one state source', () => {
   const flow = buildPipelineFlow(
-    ['runtime', 'lint', 'simulate', 'coverage', 'artifacts'],
+    ['resource', 'runtime', 'lint', 'simulate', 'coverage', 'artifacts'],
     [
+      { step_name: 'resource', status: 'passed', required: true, output: { resource: { logical_cpus: 8 } } },
       { step_name: 'runtime', status: 'passed', required: true, output: { verified: true } },
       { step_name: 'lint', status: 'passed', required: true },
       { step_name: 'unknown_noncanonical_gate', status: 'passed', required: true },
@@ -50,6 +50,7 @@ test('interactive flow renders only requested canonical gates from one state sou
   )
 
   assert.deepEqual(flow.map((node) => node.step_name), [
+    'resource',
     'runtime',
     'lint',
     'simulate',
@@ -57,24 +58,10 @@ test('interactive flow renders only requested canonical gates from one state sou
     'artifacts',
   ])
   assert.equal(flow[0].has_evidence, true)
-  assert.equal(flow[1].has_evidence, false)
-  assert.equal(flow[2].status, 'running')
-  assert.equal(flow[3].status, 'pending')
-})
-
-test('agent workflow distinguishes human intent, orchestration, tool evidence, and decision', () => {
-  assert.deepEqual(
-    AGENT_WORKFLOW_STAGES.map((stage) => stage.boundary),
-    ['human', 'orchestrator', 'tool', 'decision', 'human'],
-  )
-  assert.deepEqual(
-    AGENT_WORKFLOW_STAGES.map((stage) => stage.key),
-    ['intent', 'plan', 'execute', 'outcome', 'recover'],
-  )
-  assert.equal(
-    AGENT_WORKFLOW_STAGES.some((stage) => /openroad|tape.?out/i.test(JSON.stringify(stage))),
-    false,
-  )
+  assert.equal(flow[1].has_evidence, true)
+  assert.equal(flow[2].has_evidence, false)
+  assert.equal(flow[3].status, 'running')
+  assert.equal(flow[4].status, 'pending')
 })
 
 test('every canonical outcome has distinct, truthful presentation copy', () => {
@@ -92,7 +79,7 @@ test('every canonical outcome has distinct, truthful presentation copy', () => {
 
   const presentations = outcomes.map(getOutcomePresentation)
 
-  assert.equal(presentations[0].title, 'Verified')
+  assert.equal(presentations[0].title, 'Provided checks passed')
   assert.equal(presentations[0].tone, 'positive')
   assert.equal(presentations[1].title, 'Lint completed — not verified')
   assert.notEqual(presentations[2].title, presentations[3].title)
@@ -113,6 +100,10 @@ test('recovery presentation gives an executable next action', () => {
   const failingCheckRecovery = getRecoveryPresentation('inspect_failing_check')
   assert.ok(failingCheckRecovery)
   assert.equal(failingCheckRecovery.title, 'Inspect the failing self-check')
+  const resourceRecovery = getRecoveryPresentation('wait_for_resources')
+  assert.ok(resourceRecovery)
+  assert.equal(resourceRecovery.title, 'Wait for local resources')
+  assert.match(resourceRecovery.detail, /CPU, memory, and disk/)
   assert.equal(getRecoveryPresentation(null), null)
 })
 

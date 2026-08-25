@@ -36,11 +36,79 @@ jobs:
           agent/venv/bin/python -m pytest -q -m "not integration"
           --ignore=agent/tests/test_local_app.py agent/tests agent/pipeline/tests
       - name: Lint Python source
-        run: agent/venv/bin/python -m ruff check agent setup.py
+        run: agent/venv/bin/python -m ruff check agent
       - name: Audit resolved Python dependency graph
         run: agent/venv/bin/python -m pip_audit --strict -r requirements.lock
       - name: Check launcher syntax
-        run: bash -n scripts/xylon scripts/eda-runtime
+        run: >-
+          bash -n scripts/xylon scripts/eda-runtime scripts/xylon-openroad scripts/xylon-timing
+          runtime/openroad/bin/openroad runtime/openroad/bin/orfs-timing
+
+  openroad-foundation:
+    name: OpenROAD foundation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      XYLON_OPENROAD_CPUS: "1"
+      XYLON_SOURCE_REVISION: ${{ github.sha }}
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify artifact source identity
+        run: test "$(git rev-parse HEAD)" = "${XYLON_SOURCE_REVISION}"
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: agent/openroad/package-lock.json
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
+      - name: Prepare exact Python launcher environment
+        run: python -m venv agent/venv
+      - name: Install locked adapter and pinned OpenROAD runtime
+        run: scripts/xylon-openroad install
+      - name: Run OpenROAD adapter contracts
+        working-directory: agent/openroad
+        run: npm test
+      - name: Audit OpenROAD adapter dependencies
+        working-directory: agent/openroad
+        run: npm audit
+      - name: Exercise real OpenROAD MCP query, blocked change, exact prepared execution, and cleanup
+        run: scripts/xylon-openroad smoke
+      - name: Exercise real RTL and SDC through the pinned sky130hd timing baseline
+        run: scripts/xylon-timing smoke
+      - name: Retain real timing baseline evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: sky130hd-timing-baseline
+          path: |
+            .xylon/timing/runs/*/identity.json
+            .xylon/timing/runs/*/manifest.json
+            .xylon/timing/runs/*/baseline/*.json
+            .xylon/timing/runs/*/reports/**/5_global_route.rpt
+            .xylon/timing/runs/*/runtime/*.log
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+      - name: Exercise candidate mechanics with a protected-CI test principal (not human approval)
+        run: node agent/timing/ci-candidate-smoke.mjs
+      - name: Reject leaked OpenROAD containers
+        if: always()
+        run: |
+          if docker ps -a --filter label=io.xylon.owner=openroad-mcp --format '{{.ID}}' | grep -q .; then
+            docker ps -a --filter label=io.xylon.owner=openroad-mcp
+            exit 1
+          fi
+          if docker ps -a --filter label=io.xylon.owner=xylon-timing --format '{{.ID}}' | grep -q .; then
+            docker ps -a --filter label=io.xylon.owner=xylon-timing
+            exit 1
+          fi
 
   frontend:
     name: Frontend

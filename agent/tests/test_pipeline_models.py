@@ -136,6 +136,10 @@ class TestPipelineConfig:
         ):
             assert not hasattr(config, removed_field)
 
+    def test_zero_coverage_target_is_rejected_instead_of_bypassing_evidence(self):
+        with pytest.raises(ValueError, match="coverage_target must be in"):
+            PipelineConfig(coverage_target=0.0)
+
 
 class TestPipelineResult:
     def test_get_step(self):

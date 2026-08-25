@@ -2,6 +2,7 @@
 
 MAX_SOURCE_BYTES = 1024 * 1024
 MAX_PIPELINE_BODY_BYTES = 2 * MAX_SOURCE_BYTES + 64 * 1024
+MAX_PIPELINE_WS_MESSAGE_BYTES = MAX_PIPELINE_BODY_BYTES
 
 
 def validate_source_text(field_name: str, value: str | None) -> None:

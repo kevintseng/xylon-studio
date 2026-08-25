@@ -106,6 +106,16 @@ test('production build uses the constrained-environment compatible bundler', () 
   assert.equal(packageManifest.scripts?.build, 'next build --webpack')
 })
 
+test('production Web has one API base URL source and no unused rewrite proxy', () => {
+  const nextConfig = readFileSync(new URL('../next.config.js', import.meta.url), 'utf8')
+  const environmentExample = readFileSync(new URL('../.env.example', import.meta.url), 'utf8')
+
+  assert.doesNotMatch(nextConfig, /API_URL/)
+  assert.doesNotMatch(nextConfig, /rewrites\s*\(/)
+  assert.match(environmentExample, /NEXT_PUBLIC_API_URL=http:\/\/127\.0\.0\.1:5001/)
+  assert.doesNotMatch(environmentExample, /NEXT_PUBLIC_(?:DEV_MODE|DEBUG|GA_ID)/)
+})
+
 test('artifact rerun command uses the documented project environment', () => {
   const pipelinePage = readFileSync(
     new URL('../app/pipeline/page.tsx', import.meta.url),
@@ -117,6 +127,21 @@ test('artifact rerun command uses the documented project environment', () => {
     /agent\/venv\/bin\/python -m agent\.cli rerun/,
   )
   assert.doesNotMatch(pipelinePage, /`python3 -m agent\.cli rerun/)
+})
+
+test('pipeline exposes resource admission before any EDA step', () => {
+  const pipelinePage = readFileSync(
+    new URL('../app/pipeline/page.tsx', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(
+    pipelinePage,
+    /const PIPELINE_STEP_ORDER = \[\s*'resource',\s*'runtime',/,
+  )
+  assert.match(pipelinePage, /step\.status === 'failed' \|\| step\.status === 'error'/)
+  assert.match(pipelinePage, /pipeline\.detail\.resource\.memory/)
+  assert.match(pipelinePage, /pipeline\.detail\.resource\.disk/)
 })
 
 test('Traditional Chinese dictionary covers the complete outcome and recovery summary', () => {

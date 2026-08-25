@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+from agent.local_app import ResourceSnapshot
 from agent.pipeline.models import FailureKind, PipelineConfig, StepStatus
 from agent.pipeline.runner import run_pipeline
 
@@ -110,6 +111,67 @@ async def test_pipeline_lint_only(mock_sandbox_manager, mock_container_ops):
 
 
 @pytest.mark.asyncio
+async def test_pipeline_without_testbench_or_lint_fails_closed(
+    tmp_path,
+    mock_sandbox_manager,
+    mock_container_ops,
+):
+    """No evidence gate must never be described as lint-only evidence."""
+    result = await run_pipeline(
+        SIMPLE_RTL,
+        config=PipelineConfig(
+            lint_enabled=False,
+            runtime_check_enabled=False,
+            artifact_root=str(tmp_path),
+        ),
+    )
+
+    assert result.mode.value == "lint_only"
+    assert result.outcome.value == "configuration_error"
+    assert result.success is False
+    assert [step.step_name for step in result.steps] == [
+        "configuration",
+        "artifacts",
+    ]
+    configuration = result.get_step("configuration")
+    assert configuration.status == StepStatus.ERROR
+    assert configuration.failure_kind == FailureKind.CONFIGURATION
+    assert configuration.recovery_code == "enable_lint_or_provide_testbench"
+    mock_sandbox_manager.lint_verilog_string.assert_not_called()
+    mock_sandbox_manager.run_verilator_sim_string.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_blocks_before_writing_or_starting_tools_when_resources_are_unsafe(
+    tmp_path,
+    mock_sandbox_manager,
+):
+    unsafe = ResourceSnapshot(
+        logical_cpus=12,
+        load_one_minute=11.0,
+        memory_free_percent=20,
+        disk_free_bytes=20 * 1024**3,
+        memory_available_bytes=4 * 1024**3,
+    )
+    with patch("agent.local_app.collect_resource_snapshot", return_value=unsafe):
+        result = await run_pipeline(
+            SIMPLE_RTL,
+            config=PipelineConfig(
+                resource_check_enabled=True,
+                artifact_root=str(tmp_path),
+            ),
+        )
+
+    assert result.outcome.value == "infrastructure_error"
+    assert [step.step_name for step in result.steps] == ["resource", "artifacts"]
+    resource = result.get_step("resource")
+    assert resource.status == StepStatus.ERROR
+    assert resource.recovery_code == "wait_for_resources"
+    assert any("memory available 4.0 GiB" in error for error in resource.errors)
+    mock_sandbox_manager.lint_verilog_string.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_pipeline_classifies_missing_toolchain_as_infrastructure_error(
     mock_sandbox_manager,
     mock_container_ops,
@@ -130,6 +192,112 @@ async def test_pipeline_classifies_missing_toolchain_as_infrastructure_error(
     lint = result.get_step("lint")
     assert lint.failure_kind == FailureKind.INFRASTRUCTURE
     assert lint.recovery_code == "repair_toolchain"
+    assert result.outcome.value == "infrastructure_error"
+    assert result.success is False
+
+
+@pytest.mark.asyncio
+async def test_pipeline_classifies_lint_sandbox_exception_as_infrastructure_error(
+    tmp_path,
+    mock_sandbox_manager,
+    mock_container_ops,
+):
+    mock_sandbox_manager.lint_verilog_string.side_effect = OSError(
+        "docker transport failed"
+    )
+
+    result = await run_pipeline(
+        SIMPLE_RTL,
+        config=PipelineConfig(
+            runtime_check_enabled=False,
+            artifact_root=str(tmp_path),
+        ),
+    )
+
+    lint = result.get_step("lint")
+    assert lint.status == StepStatus.ERROR
+    assert lint.failure_kind == FailureKind.INFRASTRUCTURE
+    assert lint.recovery_code == "repair_toolchain"
+    assert result.outcome.value == "infrastructure_error"
+    assert result.success is False
+
+
+@pytest.mark.asyncio
+async def test_pipeline_classifies_simulation_sandbox_exception_as_infrastructure_error(
+    tmp_path,
+    mock_sandbox_manager,
+    mock_container_ops,
+):
+    mock_sandbox_manager.lint_verilog_string.return_value = {
+        "success": True,
+        "warnings": [],
+        "errors": [],
+        "stdout": "",
+        "stderr": "",
+        "duration_seconds": 0.1,
+    }
+    mock_sandbox_manager.run_verilator_sim_string.side_effect = OSError(
+        "docker transport failed"
+    )
+
+    result = await run_pipeline(
+        SIMPLE_RTL,
+        testbench_code=SIMPLE_TB,
+        config=PipelineConfig(
+            runtime_check_enabled=False,
+            artifact_root=str(tmp_path),
+        ),
+    )
+
+    simulation = result.get_step("simulate")
+    assert simulation.status == StepStatus.ERROR
+    assert simulation.failure_kind == FailureKind.INFRASTRUCTURE
+    assert simulation.recovery_code == "repair_toolchain"
+    assert result.outcome.value == "infrastructure_error"
+    assert result.success is False
+
+
+@pytest.mark.asyncio
+async def test_pipeline_workspace_cleanup_failure_blocks_verified_outcome(
+    tmp_path,
+    mock_sandbox_manager,
+    mock_container_ops,
+):
+    mock_sandbox_manager.lint_verilog_string.return_value = {
+        "success": True,
+        "warnings": [],
+        "errors": [],
+        "stdout": "",
+        "stderr": "",
+        "duration_seconds": 0.1,
+    }
+    mock_sandbox_manager.run_verilator_sim_string.return_value = {
+        "success": False,
+        "stdout": "PASS\n",
+        "stderr": (
+            "Container workspace cleanup failed. "
+            "Run ./scripts/eda-runtime down, up, and verify before retrying."
+        ),
+        "vcd_file": None,
+        "coverage_data": None,
+        "duration_seconds": 0.2,
+        "failure_kind": "infrastructure",
+        "recovery_code": "repair_toolchain",
+    }
+
+    result = await run_pipeline(
+        SIMPLE_RTL,
+        testbench_code=SIMPLE_TB,
+        config=PipelineConfig(
+            runtime_check_enabled=False,
+            artifact_root=str(tmp_path),
+        ),
+    )
+
+    simulation = result.get_step("simulate")
+    assert simulation.output["test_passed"] is False
+    assert simulation.failure_kind == FailureKind.INFRASTRUCTURE
+    assert simulation.recovery_code == "repair_toolchain"
     assert result.outcome.value == "infrastructure_error"
     assert result.success is False
 

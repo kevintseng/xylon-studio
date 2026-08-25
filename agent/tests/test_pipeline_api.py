@@ -53,7 +53,7 @@ def test_websocket_final_result_uses_canonical_pipeline_contract():
     with patch(
         "agent.api.routes.pipeline.run_pipeline",
         new=AsyncMock(return_value=result),
-    ):
+    ) as runner:
         with TestClient(app) as client:
             with client.websocket_connect("/api/pipeline/ws") as websocket:
                 websocket.send_json({
@@ -68,6 +68,7 @@ def test_websocket_final_result_uses_canonical_pipeline_contract():
     assert message["result"]["final_coverage"]["metric_sources"] == {
         "score": "computed_verilator_point_counts"
     }
+    assert runner.await_args.kwargs["config"].resource_check_enabled is True
 
 
 def test_websocket_cancel_message_returns_canonical_cancelled_result():
@@ -162,7 +163,7 @@ def test_rest_run_returns_the_same_canonical_result_contract():
     with patch(
         "agent.api.routes.pipeline.run_pipeline",
         new=AsyncMock(return_value=result),
-    ):
+    ) as runner:
         with TestClient(app) as client:
             response = client.post(
                 "/api/pipeline/run",
@@ -171,6 +172,7 @@ def test_rest_run_returns_the_same_canonical_result_contract():
 
     assert response.status_code == 200
     assert response.json() == result.to_dict()
+    assert runner.await_args.kwargs["config"].resource_check_enabled is True
 
 
 def test_removed_dragon_endpoints_are_not_public_api_surfaces():
@@ -230,6 +232,7 @@ def test_rest_rejects_removed_generated_testbench_configuration():
 @pytest.mark.parametrize(
     "payload, field_name",
     [
+        ({"rtl_code": "module m; endmodule", "coverage_target": 0.0}, "coverage_target"),
         ({"rtl_code": "module m; endmodule", "coverage_target": 1.01}, "coverage_target"),
         ({"rtl_code": "module m; endmodule", "simulation_timeout": 0}, "simulation_timeout"),
         ({"rtl_code": "   "}, "rtl_code"),
@@ -318,6 +321,22 @@ def test_websocket_uses_the_same_bounded_request_validation_as_rest():
     assert message["type"] == "error"
     assert message["message"].startswith("Invalid pipeline request:")
     assert "simulation_timeout" in message["message"]
+    runner.assert_not_awaited()
+
+
+def test_websocket_rejects_an_oversized_message_before_starting_eda():
+    runner = AsyncMock()
+
+    with patch("agent.api.routes.pipeline.run_pipeline", new=runner):
+        with TestClient(app) as client:
+            with client.websocket_connect("/api/pipeline/ws") as websocket:
+                websocket.send_text("x" * (2 * 1024 * 1024 + 64 * 1024 + 1))
+                message = websocket.receive_json()
+
+    assert message == {
+        "type": "error",
+        "message": "Pipeline request body is too large",
+    }
     runner.assert_not_awaited()
 
 

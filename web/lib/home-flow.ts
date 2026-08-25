@@ -35,14 +35,13 @@ export const HOME_AGENT_STAGES: HomeAgentStage[] = [
 ]
 
 export const PRODUCT_SCOPE = {
-  proven: [
-    { key: 'runtime', label: 'Pinned local runtime' },
-    { key: 'verification', label: 'RTL lint and optional self-checking simulation' },
-    { key: 'evidence', label: 'Coverage provenance and checksummed rerun artifacts' },
+  implemented: [
+    { key: 'timingJourney', label: 'Bounded RTL/SDC setup-timing journey on built-in sky130hd' },
+    { key: 'rtlVerification', label: 'Real local RTL verification with reproducible evidence' },
+    { key: 'openroadFoundation', label: 'Restricted real OpenROAD MCP execution record' },
   ],
   notYet: [
-    { key: 'openroad', label: 'OpenROAD physical design' },
-    { key: 'generation', label: 'AI-generated RTL or testbenches' },
-    { key: 'tapeout', label: 'Tape-out readiness' },
+    { key: 'arbitraryPdk', label: 'Arbitrary PDK/library import or remote BYOK model endpoints' },
+    { key: 'tapeout', label: 'Physical sign-off or tape-out readiness' },
   ],
 } as const

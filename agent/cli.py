@@ -4,9 +4,9 @@ XylonStudio CLI.
 Run verification pipeline from the command line.
 
 Usage:
-    python -m agent.cli run examples/adder/adder_8bit.v
-    python -m agent.cli run design.v --testbench tb.cpp
-    python -m agent.cli run design.v --synthesis
+    agent/venv/bin/python -m agent.cli run examples/adder/adder_8bit.v
+    agent/venv/bin/python -m agent.cli run design.v --testbench tb.cpp
+    agent/venv/bin/python -m agent.cli run design.v --synthesis
 """
 
 import argparse
@@ -37,6 +37,14 @@ RECOVERY_GUIDANCE = {
     "inspect_synthesis_report": "Inspect the raw Yosys report for format or tool drift.",
     "repair_artifact_storage": "Repair artifact storage permissions or capacity.",
     "rerun_when_ready": "Rerun when you are ready.",
+    "add_explicit_result_marker": (
+        "Make the self-checking testbench print PASS only after every check succeeds "
+        "or FAIL when any check fails."
+    ),
+    "use_supported_hdl": "Rewrite the input using the supported Verilog subset, then rerun.",
+    "enable_lint_or_provide_testbench": (
+        "Enable Verilator lint or provide an independent self-checking C++ testbench."
+    ),
 }
 
 
@@ -64,7 +72,12 @@ def main():
     run_parser = sub.add_parser("run", help="Run verification pipeline on RTL file")
     run_parser.add_argument("rtl_file", help="Path to Verilog RTL file")
     run_parser.add_argument("--testbench", "-t", help="Path to C++ testbench file")
-    run_parser.add_argument("--coverage-target", type=float, default=0.80, help="Coverage target (0.0-1.0)")
+    run_parser.add_argument(
+        "--coverage-target",
+        type=float,
+        default=0.80,
+        help="Coverage target (greater than 0.0, up to 1.0)",
+    )
     run_parser.add_argument("--synthesis", action="store_true", help="Run Yosys synthesis after verification")
     run_parser.add_argument("--timeout", type=int, default=300, help="Simulation timeout in seconds")
 
@@ -119,6 +132,7 @@ async def run_command(args):
         coverage_target=args.coverage_target,
         simulation_timeout=args.timeout,
         synthesis_enabled=args.synthesis,
+        resource_check_enabled=True,
     )
 
     # Progress callback
@@ -138,7 +152,7 @@ async def run_command(args):
                 f"score={_format_coverage_value(step.output.get('score'))}"
             )
         elif step.step_name == "synthesis" and step.output:
-            total = step.output.get("gate_count")
+            total = step.output.get("cell_count")
             print(f"    {total} cells, {step.output.get('wires', '?')} wires")
 
     # Run pipeline

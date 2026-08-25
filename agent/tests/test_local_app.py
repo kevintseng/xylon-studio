@@ -13,6 +13,8 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.request import urlopen
 
+import pytest
+
 import agent.local_app as local_app
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -24,12 +26,38 @@ def test_doctor_accepts_the_current_prebuilt_workspace_without_starting_services
     while web_port == api_port:
         web_port = _unused_port()
 
-    assert local_app.doctor(api_port=api_port, web_port=web_port) == 0
+    with patch(
+        "agent.local_app.collect_resource_snapshot",
+        return_value=_safe_resource_probe(),
+    ):
+        assert local_app.doctor(api_port=api_port, web_port=web_port) == 0
     output = capsys.readouterr().out
     assert "READY: local prerequisites are available" in output
     assert "RESOURCE READY:" in output or "RESOURCE BLOCKED:" in output
-    assert f"STOPPED: API http://127.0.0.1:{api_port}" in output
-    assert f"STOPPED: Web http://127.0.0.1:{web_port}" in output
+    assert f"PORT AVAILABLE: API http://127.0.0.1:{api_port}" in output
+    assert f"PORT AVAILABLE: Web http://127.0.0.1:{web_port}" in output
+
+
+def test_doctor_fails_with_actionable_resource_and_port_blockers(capsys):
+    unsafe = local_app.ResourceSnapshot(
+        logical_cpus=12,
+        load_one_minute=12.0,
+        memory_free_percent=19,
+        disk_free_bytes=9 * 1024**3,
+        memory_available_bytes=6 * 1024**3,
+    )
+    with patch("agent.local_app.collect_resource_snapshot", return_value=unsafe), patch(
+        "agent.local_app._port_is_open",
+        side_effect=[False, True],
+    ):
+        assert local_app.doctor(api_port=5001, web_port=3000) == 1
+
+    output = capsys.readouterr().out
+    assert "RESOURCE BLOCKED:" in output
+    assert "PORT AVAILABLE: API http://127.0.0.1:5001" in output
+    assert "PORT IN USE: Web http://127.0.0.1:3000" in output
+    assert "rerun scripts/xylon start" in output
+    assert "LISTENING: Web" not in output
 
 
 def test_resource_preflight_allows_capacity_for_one_capped_local_run():
@@ -42,6 +70,7 @@ def test_resource_preflight_allows_capacity_for_one_capped_local_run():
         load_one_minute=8.0,
         memory_free_percent=61,
         disk_free_bytes=47 * 1024**3,
+        memory_available_bytes=10 * 1024**3,
     )
 
     assert evaluate(snapshot) == []
@@ -57,10 +86,12 @@ def test_resource_preflight_blocks_saturated_cpu_low_memory_and_low_disk():
         load_one_minute=12.0,
         memory_free_percent=19,
         disk_free_bytes=9 * 1024**3,
+        memory_available_bytes=6 * 1024**3,
     )
 
     assert evaluate(snapshot) == [
         "CPU load 12.00 has reached 12 logical CPUs",
+        "memory available 6.0 GiB is below the 8.0 GiB safety floor",
         "memory free 19% is below the 20% safety floor",
         "workspace disk free 9.0 GiB is below the 10.0 GiB safety floor",
     ]
@@ -72,6 +103,7 @@ def test_resource_preflight_classifies_blockers_for_ui_surfaces():
         load_one_minute=8.2,
         memory_free_percent=12,
         disk_free_bytes=6 * 1024**3,
+        memory_available_bytes=10 * 1024**3,
     )
 
     assert local_app.identify_resource_blockers(snapshot) == [
@@ -87,7 +119,7 @@ def test_local_readiness_reports_ready_only_when_runtime_and_resources_are_both_
         load_one_minute=4.0,
         memory_free_percent=61,
         disk_free_bytes=47 * 1024**3,
-        memory_free_bytes=6 * 1024**3,
+        memory_available_bytes=10 * 1024**3,
         memory_total_bytes=16 * 1024**3,
         disk_total_bytes=128 * 1024**3,
     )
@@ -98,15 +130,17 @@ def test_local_readiness_reports_ready_only_when_runtime_and_resources_are_both_
     assert readiness.runtime_healthy is True
     assert readiness.resource_blocker_codes == ()
     assert readiness.policy["max_heavy_jobs"] == 1
-    assert readiness.snapshot.to_dict()["memory_free_bytes"] == 6 * 1024**3
+    assert readiness.snapshot.to_dict()["memory_free_bytes"] == 10 * 1024**3
 
 
 def test_local_readiness_reports_runtime_unavailable_without_fabricating_resource_failures():
     snapshot = local_app.ResourceSnapshot(
         logical_cpus=12,
         load_one_minute=4.0,
-        memory_free_percent=None,
+        memory_free_percent=61,
         disk_free_bytes=47 * 1024**3,
+        memory_available_bytes=10 * 1024**3,
+        memory_total_bytes=16 * 1024**3,
         disk_total_bytes=128 * 1024**3,
     )
 
@@ -122,12 +156,106 @@ def test_local_readiness_prioritizes_blocked_status_when_host_capacity_is_unsafe
         load_one_minute=12.0,
         memory_free_percent=19,
         disk_free_bytes=47 * 1024**3,
+        memory_available_bytes=10 * 1024**3,
     )
 
     readiness = local_app.summarize_local_readiness(snapshot, runtime_healthy=False)
 
     assert readiness.status == "blocked"
     assert readiness.resource_blocker_codes == ("cpu_saturated", "memory_low")
+@pytest.mark.parametrize("error", [OSError("unreadable"), ValueError("invalid")])
+def test_resource_integer_probe_returns_unknown_on_io_or_format_failure(
+    tmp_path: Path,
+    error: Exception,
+):
+    memory_value = tmp_path / "memory.current"
+    memory_value.write_text("123", encoding="utf-8")
+
+    with patch.object(Path, "read_text", side_effect=error):
+        assert local_app._read_integer(memory_value) is None
+
+
+def test_linux_memory_probe_returns_unknown_when_proc_meminfo_is_unreadable():
+    with patch.object(Path, "read_text", side_effect=OSError("proc unavailable")):
+        assert local_app._read_linux_memory() == (None, None)
+
+
+def test_linux_memory_probe_tolerates_absent_cgroup_limit_without_hiding_host_data():
+    def read_text(path: Path, **_kwargs) -> str:
+        if path == Path("/proc/meminfo"):
+            return "MemTotal: 16777216 kB\nMemAvailable: 10485760 kB\n"
+        if path in {
+            Path("/sys/fs/cgroup/memory.max"),
+            Path("/sys/fs/cgroup/memory.current"),
+        }:
+            raise OSError("not cgroup v2")
+        raise AssertionError(f"unexpected read: {path}")
+
+    with patch.object(Path, "read_text", autospec=True, side_effect=read_text):
+        assert local_app._read_linux_memory() == (
+            16 * 1024**3,
+            10 * 1024**3,
+        )
+
+
+def test_linux_memory_probe_fails_closed_on_invalid_cgroup_limit():
+    def read_text(path: Path, **_kwargs) -> str:
+        if path == Path("/proc/meminfo"):
+            return "MemTotal: 16777216 kB\nMemAvailable: 10485760 kB\n"
+        if path == Path("/sys/fs/cgroup/memory.max"):
+            return "not-a-limit"
+        if path == Path("/sys/fs/cgroup/memory.current"):
+            return "1024"
+        raise AssertionError(f"unexpected read: {path}")
+
+    with patch.object(Path, "read_text", autospec=True, side_effect=read_text):
+        assert local_app._read_linux_memory() == (None, None)
+
+
+def test_macos_memory_probe_returns_unknown_when_system_command_fails():
+    with (
+        patch("agent.local_app.shutil.which", side_effect=lambda command: f"/usr/bin/{command}"),
+        patch("agent.local_app.subprocess.run", side_effect=OSError("spawn failed")),
+    ):
+        assert local_app._read_macos_memory() == (None, None, None)
+
+
+def test_macos_memory_probe_returns_unknown_for_invalid_total_memory():
+    pressure = subprocess.CompletedProcess(
+        ["memory_pressure", "-Q"],
+        0,
+        stdout="System-wide memory free percentage: 62%\n",
+        stderr="",
+    )
+    total = subprocess.CompletedProcess(
+        ["sysctl", "-n", "hw.memsize"],
+        0,
+        stdout="invalid\n",
+        stderr="",
+    )
+    with (
+        patch("agent.local_app.shutil.which", side_effect=lambda command: f"/usr/bin/{command}"),
+        patch("agent.local_app.subprocess.run", side_effect=[pressure, total]),
+    ):
+        assert local_app._read_macos_memory() == (None, None, None)
+
+
+def test_resource_snapshot_keeps_load_failures_visible_as_unknown(tmp_path: Path):
+    with (
+        patch("agent.local_app.os.getloadavg", side_effect=OSError("unavailable")),
+        patch(
+            "agent.local_app._read_linux_memory",
+            return_value=(16 * 1024**3, 10 * 1024**3),
+        ),
+    ):
+        snapshot = local_app.collect_resource_snapshot(tmp_path)
+
+    assert snapshot.load_one_minute is None
+    assert local_app.evaluate_resource_preflight(snapshot)[0].startswith(
+        "CPU load could not be measured safely"
+    )
+    assert snapshot.memory_free_percent == 62
+    assert snapshot.memory_available_bytes == 10 * 1024**3
 
 
 def test_runtime_version_preflight_accepts_supported_python_and_node():
@@ -143,7 +271,7 @@ def test_runtime_version_preflight_rejects_versions_below_supported_minimums():
 
     assert evaluate("Python 3.10.16", "v20.8.1") == [
         "Python 3.10.16 is below the required 3.11.0",
-        "Node.js 20.8.1 is below the required 20.9.0",
+        "Node.js 20.8.1 is below the required 22.0.0",
     ]
 
 
@@ -165,6 +293,16 @@ def test_runtime_project_identity_is_stable_and_checkout_specific(tmp_path: Path
     assert first == repeated
     assert first.startswith("xylon-")
     assert first != second
+
+
+def test_default_api_command_bounds_websocket_frames(tmp_path: Path):
+    app = local_app.LocalApplication(repo_root=tmp_path)
+
+    assert "--ws-max-size" in app.api_command
+    index = app.api_command.index("--ws-max-size")
+    assert app.api_command[index + 1] == str(
+        local_app.MAX_PIPELINE_WS_MESSAGE_BYTES
+    )
 
 
 def test_eda_runtime_health_replays_the_pinned_identity_check(tmp_path: Path):
@@ -314,14 +452,97 @@ def test_stop_preserves_a_live_process_when_identity_cannot_be_read(monkeypatch)
         _force_cleanup(child)
 
 
+def test_stop_reports_cleanup_unverified_when_process_survives_sigkill(monkeypatch):
+    record = local_app.ManagedProcess(
+        name="api",
+        pid=12345,
+        command_marker="xylon-test-api",
+        log_path="api.log",
+    )
+    signals: list[int] = []
+    monkeypatch.setattr(local_app, "_pid_exists", lambda _pid: True)
+    monkeypatch.setattr(
+        local_app,
+        "_process_command",
+        lambda _pid: "python xylon-test-api",
+    )
+    monkeypatch.setattr(local_app, "_process_state", lambda _pid: "S")
+    monkeypatch.setattr(local_app, "_process_is_running", lambda _pid: True)
+    monkeypatch.setattr(
+        local_app.os,
+        "killpg",
+        lambda _pid, sent_signal: signals.append(sent_signal),
+    )
+
+    assert (
+        local_app.terminate_managed_process(record, grace_seconds=0)
+        == "cleanup_unverified"
+    )
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
+
+
+def test_termination_verification_fails_closed_on_conflicting_liveness_reads(
+    monkeypatch,
+):
+    monkeypatch.setattr(local_app, "_process_is_running", lambda _pid: True)
+    monkeypatch.setattr(local_app, "_process_state", lambda _pid: "Z")
+    monkeypatch.setattr(local_app, "_pid_exists", lambda _pid: True)
+
+    assert local_app._termination_is_verified(12345) is False
+
+
+def test_termination_verification_fails_closed_when_existing_pid_is_unobservable(
+    monkeypatch,
+):
+    monkeypatch.setattr(local_app, "_process_is_running", lambda _pid: False)
+    monkeypatch.setattr(local_app, "_process_state", lambda _pid: None)
+    monkeypatch.setattr(local_app, "_pid_exists", lambda _pid: True)
+
+    assert local_app._termination_is_verified(12345) is False
+
+
+def test_stop_treats_a_missing_process_group_during_sigkill_as_not_running(
+    monkeypatch,
+):
+    record = local_app.ManagedProcess(
+        name="api",
+        pid=12345,
+        command_marker="xylon-test-api",
+        log_path="api.log",
+    )
+    signals: list[int] = []
+
+    def signal_process_group(_pid: int, sent_signal: int) -> None:
+        signals.append(sent_signal)
+        if sent_signal == signal.SIGKILL:
+            raise ProcessLookupError
+
+    monkeypatch.setattr(local_app, "_pid_exists", lambda _pid: True)
+    monkeypatch.setattr(
+        local_app,
+        "_process_command",
+        lambda _pid: "python xylon-test-api",
+    )
+    monkeypatch.setattr(local_app, "_process_state", lambda _pid: "S")
+    monkeypatch.setattr(local_app, "_process_is_running", lambda _pid: True)
+    monkeypatch.setattr(local_app.os, "killpg", signal_process_group)
+
+    assert (
+        local_app.terminate_managed_process(record, grace_seconds=0)
+        == "not_running"
+    )
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
+
+
 def _write_state(state_dir: Path, *, api_pid: int, api_marker: str, web_pid: int) -> Path:
     state_dir.mkdir(parents=True)
     state_path = state_dir / "state.json"
     state_path.write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "runtime_owned": False,
+                "runtime_mode": "deferred",
                 "api_port": 5001,
                 "web_port": 3000,
                 "api": {
@@ -396,12 +617,14 @@ def test_stop_keeps_state_when_a_saved_pid_belongs_to_an_unrelated_process(tmp_p
 class _TestRuntime:
     def __init__(self) -> None:
         self.running = False
+        self.actions: list[str] = []
 
     def is_running(self) -> bool:
         return self.running
 
     def run(self, action: str, *, timeout: float) -> bool:
         del timeout
+        self.actions.append(action)
         if action in {"up", "verify"}:
             self.running = True
             return True
@@ -417,7 +640,123 @@ def _safe_resource_probe() -> local_app.ResourceSnapshot:
         load_one_minute=4.0,
         memory_free_percent=60,
         disk_free_bytes=40 * 1024**3,
+        memory_available_bytes=12 * 1024**3,
     )
+
+
+def _managed_state(
+    *,
+    runtime_owned: bool = True,
+    runtime_mode: str = "managed",
+) -> local_app.LocalState:
+    return local_app.LocalState(
+        schema_version=3,
+        runtime_owned=runtime_owned,
+        runtime_mode=runtime_mode,
+        api_port=5001,
+        web_port=3000,
+        api=local_app.ManagedProcess("api", 1001, "xylon-test-api", "api.log"),
+        web=local_app.ManagedProcess("web", 1002, "xylon-test-web", "web.log"),
+    )
+
+
+def test_stop_keeps_runtime_and_state_when_service_cleanup_is_unverified(
+    tmp_path: Path,
+    capsys,
+):
+    runtime = _TestRuntime()
+    runtime.running = True
+    app = local_app.LocalApplication(
+        repo_root=REPO_ROOT,
+        state_dir=tmp_path / "local",
+        runtime=runtime,
+    )
+    app._write_state(_managed_state())
+
+    with patch(
+        "agent.local_app.terminate_managed_process",
+        side_effect=["cleanup_unverified", "stopped"],
+    ):
+        assert app.stop(grace_seconds=0) == 1
+
+    assert app.state_path.exists()
+    assert runtime.running is True
+    assert "down" not in runtime.actions
+    output = capsys.readouterr().out
+    assert "EDA runtime shutdown was intentionally skipped" in output
+    assert "rerun scripts/xylon stop" in output
+
+
+def test_rollback_writes_state_and_keeps_runtime_when_identity_is_unavailable(
+    tmp_path: Path,
+    capsys,
+):
+    runtime = _TestRuntime()
+    runtime.running = True
+    app = local_app.LocalApplication(
+        repo_root=REPO_ROOT,
+        state_dir=tmp_path / "local",
+        runtime=runtime,
+    )
+
+    with patch(
+        "agent.local_app.terminate_managed_process",
+        side_effect=["identity_unavailable", "not_running"],
+    ):
+        assert app._rollback(_managed_state(), grace_seconds=0) is False
+
+    assert app.state_path.exists()
+    assert runtime.running is True
+    assert "down" not in runtime.actions
+    output = capsys.readouterr().out
+    assert "identity_unavailable" in output
+    assert "EDA runtime shutdown was intentionally skipped" in output
+
+
+def test_rollback_removes_state_after_services_and_runtime_are_stopped(tmp_path: Path):
+    runtime = _TestRuntime()
+    runtime.running = True
+    app = local_app.LocalApplication(
+        repo_root=REPO_ROOT,
+        state_dir=tmp_path / "local",
+        runtime=runtime,
+    )
+    app._write_state(_managed_state())
+
+    with patch(
+        "agent.local_app.terminate_managed_process",
+        side_effect=["stopped", "not_running"],
+    ):
+        assert app._rollback(_managed_state(), grace_seconds=0) is True
+
+    assert app.state_path.exists() is False
+    assert runtime.running is False
+    assert runtime.actions == ["down"]
+
+
+def test_rollback_keeps_state_when_runtime_shutdown_fails(tmp_path: Path, capsys):
+    runtime = _TestRuntime()
+    runtime.running = True
+    app = local_app.LocalApplication(
+        repo_root=REPO_ROOT,
+        state_dir=tmp_path / "local",
+        runtime=runtime,
+    )
+    app._write_state(_managed_state())
+
+    with (
+        patch(
+            "agent.local_app.terminate_managed_process",
+            side_effect=["stopped", "not_running"],
+        ),
+        patch.object(runtime, "run", return_value=False) as runtime_run,
+    ):
+        assert app._rollback(_managed_state(), grace_seconds=0) is False
+
+    runtime_run.assert_called_once_with("down", timeout=60)
+    assert app.state_path.exists()
+    assert runtime.running is True
+    assert "restore Docker" in capsys.readouterr().out
 
 
 def _unused_port() -> int:
@@ -428,7 +767,7 @@ def _unused_port() -> int:
 
 def _http_service_command(port: int, marker: str, *, api: bool) -> list[str]:
     response = (
-        b'{"status":"healthy","service":"xylonstudio-api","version":"1.0.0"}'
+        b'{"status":"healthy","service":"xylonstudio-api","version":"0.4.0"}'
         if api
         else b"XylonStudio"
     )
@@ -538,7 +877,7 @@ def test_start_injects_the_selected_web_port_into_the_api_origin_policy(tmp_path
         app.stop(grace_seconds=0.1)
 
 
-def test_start_blocks_before_runtime_or_services_when_host_resources_are_unsafe(tmp_path: Path):
+def test_start_opens_safe_mode_without_runtime_when_host_resources_are_unsafe(tmp_path: Path):
     api_port = _unused_port()
     web_port = _unused_port()
     runtime = _TestRuntime()
@@ -547,6 +886,7 @@ def test_start_blocks_before_runtime_or_services_when_host_resources_are_unsafe(
         load_one_minute=12.5,
         memory_free_percent=15,
         disk_free_bytes=8 * 1024**3,
+        memory_available_bytes=4 * 1024**3,
     )
     app = local_app.LocalApplication(
         repo_root=REPO_ROOT,
@@ -561,11 +901,18 @@ def test_start_blocks_before_runtime_or_services_when_host_resources_are_unsafe(
         resource_probe=lambda: unsafe,
     )
 
-    assert app.start(health_timeout=0.5) == 1
-    assert runtime.running is False
-    assert local_app._port_is_open(api_port) is False
-    assert local_app._port_is_open(web_port) is False
-    assert app.state_path.exists() is False
+    try:
+        assert app.start(health_timeout=2) == 0
+        assert runtime.running is False
+        assert runtime.actions == []
+        assert local_app._port_is_open(api_port) is True
+        assert local_app._port_is_open(web_port) is True
+        state = json.loads(app.state_path.read_text(encoding="utf-8"))
+        assert state["runtime_owned"] is False
+        assert state["runtime_mode"] == "deferred"
+        assert app.status() == 0
+    finally:
+        app.stop(grace_seconds=0.1)
 
 
 def test_web_health_requires_starting_the_process_from_its_configured_workspace(tmp_path: Path):
@@ -651,7 +998,7 @@ def test_logs_prints_a_bounded_tail_and_the_full_log_location(tmp_path: Path, ca
     assert str(app.state_dir / "api.log") in output
 
 
-def test_scripts_xylon_is_the_supported_doctor_entry_point():
+def test_scripts_xylon_doctor_reports_real_readiness_at_the_supported_entry_point():
     result = subprocess.run(
         [str(REPO_ROOT / "scripts" / "xylon"), "doctor"],
         cwd=REPO_ROOT,
@@ -660,8 +1007,12 @@ def test_scripts_xylon_is_the_supported_doctor_entry_point():
         check=False,
     )
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode in (0, 1), result.stderr
+    assert "Python 3.9" not in result.stderr
     assert "READY: local prerequisites are available" in result.stdout
+    if result.returncode == 1:
+        assert "RESOURCE BLOCKED:" in result.stdout or "PORT IN USE:" in result.stdout
+        assert "RECOVERY:" in result.stdout
 
 
 def test_scripts_xylon_doctor_reports_a_custom_web_port():
@@ -674,8 +1025,8 @@ def test_scripts_xylon_doctor_reports_a_custom_web_port():
         check=False,
     )
 
-    assert result.returncode == 0, result.stderr
-    assert f"STOPPED: Web http://127.0.0.1:{port}" in result.stdout
+    assert result.returncode in (0, 1), result.stderr
+    assert f"PORT AVAILABLE: Web http://127.0.0.1:{port}" in result.stdout
 
 
 def test_prepare_standalone_copies_public_and_static_assets_into_the_runtime(tmp_path: Path):

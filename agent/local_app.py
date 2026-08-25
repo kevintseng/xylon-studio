@@ -19,12 +19,15 @@ from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
+from agent.pipeline.limits import MAX_PIPELINE_WS_MESSAGE_BYTES
 from agent.sandbox.runtime import runtime_project_name as runtime_project_name
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROC_ROOT = Path("/proc")
 MINIMUM_PYTHON_VERSION = (3, 11, 0)
-MINIMUM_NODE_VERSION = (20, 9, 0)
+MINIMUM_NODE_VERSION = (22, 0, 0)
+RESOLVED_TERMINATION_OUTCOMES = frozenset({"stopped", "not_running"})
+MINIMUM_MEMORY_AVAILABLE_BYTES = 8 * 1024**3
 
 
 def _is_valid_port(value: object) -> bool:
@@ -99,10 +102,10 @@ class ManagedProcess:
 @dataclass(frozen=True)
 class ResourceSnapshot:
     logical_cpus: int
-    load_one_minute: float
+    load_one_minute: float | None
     memory_free_percent: int | None
     disk_free_bytes: int
-    memory_free_bytes: int | None = None
+    memory_available_bytes: int | None = None
     memory_total_bytes: int | None = None
     disk_total_bytes: int | None = None
 
@@ -111,7 +114,7 @@ class ResourceSnapshot:
             "logical_cpus": self.logical_cpus,
             "load_one_minute": self.load_one_minute,
             "memory_free_percent": self.memory_free_percent,
-            "memory_free_bytes": self.memory_free_bytes,
+            "memory_free_bytes": self.memory_available_bytes,
             "memory_total_bytes": self.memory_total_bytes,
             "disk_free_bytes": self.disk_free_bytes,
             "disk_total_bytes": self.disk_total_bytes,
@@ -140,12 +143,17 @@ class LocalReadiness:
 
 def identify_resource_blockers(snapshot: ResourceSnapshot) -> list[str]:
     blockers: list[str] = []
-    if snapshot.load_one_minute >= snapshot.logical_cpus:
+    if snapshot.load_one_minute is None:
+        blockers.append("cpu_probe_unavailable")
+    elif snapshot.load_one_minute >= snapshot.logical_cpus:
         blockers.append("cpu_saturated")
-    if (
-        snapshot.memory_free_percent is not None
-        and snapshot.memory_free_percent < 20
-    ):
+    if snapshot.memory_available_bytes is None:
+        blockers.append("memory_probe_unavailable")
+    elif snapshot.memory_available_bytes < MINIMUM_MEMORY_AVAILABLE_BYTES:
+        blockers.append("memory_available_low")
+    if snapshot.memory_free_percent is None:
+        blockers.append("memory_percent_unavailable")
+    elif snapshot.memory_free_percent < 20:
         blockers.append("memory_low")
     disk_free_gib = snapshot.disk_free_bytes / 1024**3
     if disk_free_gib < 10:
@@ -154,10 +162,28 @@ def identify_resource_blockers(snapshot: ResourceSnapshot) -> list[str]:
 
 
 def _resource_blocker_message(code: str, snapshot: ResourceSnapshot) -> str:
+    if code == "cpu_probe_unavailable":
+        return "CPU load could not be measured safely; retry after restoring the host probe"
     if code == "cpu_saturated":
         return (
             f"CPU load {snapshot.load_one_minute:.2f} has reached "
             f"{snapshot.logical_cpus} logical CPUs"
+        )
+    if code == "memory_probe_unavailable":
+        return (
+            "available memory could not be measured safely; "
+            "retry after restoring the host or container memory probe"
+        )
+    if code == "memory_available_low":
+        memory_available_gib = (snapshot.memory_available_bytes or 0) / 1024**3
+        return (
+            f"memory available {memory_available_gib:.1f} GiB is below the "
+            "8.0 GiB safety floor"
+        )
+    if code == "memory_percent_unavailable":
+        return (
+            "memory availability percentage could not be measured safely; "
+            "retry after restoring the host or container memory probe"
         )
     if code == "memory_low":
         return (
@@ -258,36 +284,109 @@ def _read_memory_bytes() -> tuple[int | None, int | None]:
     return (available_pages * page_size, total_bytes)
 
 
-def collect_resource_snapshot(repo_root: Path) -> ResourceSnapshot:
-    logical_cpus = max(os.cpu_count() or 1, 1)
+def _read_integer(path: Path) -> int | None:
     try:
-        load_one_minute = os.getloadavg()[0]
-    except (AttributeError, OSError):
-        load_one_minute = 0.0
+        return int(path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
 
-    memory_free_percent: int | None = None
+
+def _read_linux_memory() -> tuple[int | None, int | None]:
+    """Return host total/available bytes, bounded by cgroup v2 when present."""
+    try:
+        fields = {
+            key.rstrip(":"): int(value) * 1024
+            for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines()
+            if len(parts := line.split()) >= 2
+            for key, value in [parts[:2]]
+        }
+    except (OSError, ValueError):
+        return None, None
+
+    total = fields.get("MemTotal")
+    available = fields.get("MemAvailable")
+    cgroup_root = Path("/sys/fs/cgroup")
+    try:
+        memory_max = (cgroup_root / "memory.max").read_text(encoding="utf-8").strip()
+    except OSError:
+        memory_max = "max"
+    memory_current = _read_integer(cgroup_root / "memory.current")
+    if memory_max != "max":
+        try:
+            cgroup_limit = int(memory_max)
+        except ValueError:
+            return None, None
+        if memory_current is None:
+            return None, None
+        cgroup_available = max(cgroup_limit - memory_current, 0)
+        total = min(total, cgroup_limit) if total is not None else cgroup_limit
+        available = (
+            min(available, cgroup_available)
+            if available is not None
+            else cgroup_available
+        )
+    return total, available
+
+
+def _read_macos_memory() -> tuple[int | None, int | None, int | None]:
     memory_pressure = shutil.which("memory_pressure")
-    if memory_pressure is not None:
-        result = subprocess.run(
+    sysctl = shutil.which("sysctl")
+    if memory_pressure is None or sysctl is None:
+        return None, None, None
+    try:
+        pressure_result = subprocess.run(
             [memory_pressure, "-Q"],
             capture_output=True,
             text=True,
             check=False,
         )
-        match = re.search(
-            r"System-wide memory free percentage:\s*(\d+)%",
-            f"{result.stdout}\n{result.stderr}",
+        total_result = subprocess.run(
+            [sysctl, "-n", "hw.memsize"],
+            capture_output=True,
+            text=True,
+            check=False,
         )
-        if result.returncode == 0 and match is not None:
-            memory_free_percent = int(match.group(1))
+    except OSError:
+        return None, None, None
+    match = re.search(
+        r"System-wide memory free percentage:\s*(\d+)%",
+        f"{pressure_result.stdout}\n{pressure_result.stderr}",
+    )
+    if pressure_result.returncode != 0 or total_result.returncode != 0 or match is None:
+        return None, None, None
+    try:
+        total = int(total_result.stdout.strip())
+        percent = int(match.group(1))
+    except ValueError:
+        return None, None, None
+    return total, total * percent // 100, percent
 
-    memory_free_bytes, memory_total_bytes = _read_memory_bytes()
+
+def collect_resource_snapshot(repo_root: Path) -> ResourceSnapshot:
+    logical_cpus = max(os.cpu_count() or 1, 1)
+    try:
+        load_one_minute = os.getloadavg()[0]
+    except (AttributeError, OSError):
+        load_one_minute = None
+
+    memory_total_bytes, memory_available_bytes = _read_linux_memory()
+    memory_free_percent: int | None = None
+    if memory_total_bytes is None or memory_available_bytes is None:
+        (
+            memory_total_bytes,
+            memory_available_bytes,
+            memory_free_percent,
+        ) = _read_macos_memory()
     if (
         memory_free_percent is None
-        and memory_free_bytes is not None
-        and memory_total_bytes not in (None, 0)
+        and memory_total_bytes is not None
+        and memory_total_bytes > 0
+        and memory_available_bytes is not None
     ):
-        memory_free_percent = int((memory_free_bytes / memory_total_bytes) * 100)
+        memory_free_percent = min(
+            100,
+            max(0, round(memory_available_bytes * 100 / memory_total_bytes)),
+        )
 
     disk_usage = shutil.disk_usage(repo_root)
 
@@ -296,7 +395,7 @@ def collect_resource_snapshot(repo_root: Path) -> ResourceSnapshot:
         load_one_minute=load_one_minute,
         memory_free_percent=memory_free_percent,
         disk_free_bytes=disk_usage.free,
-        memory_free_bytes=memory_free_bytes,
+        memory_available_bytes=memory_available_bytes,
         memory_total_bytes=memory_total_bytes,
         disk_total_bytes=disk_usage.total,
     )
@@ -353,6 +452,7 @@ def collect_local_readiness(
 class LocalState:
     schema_version: int
     runtime_owned: bool
+    runtime_mode: str
     api_port: int
     web_port: int
     api: ManagedProcess
@@ -360,25 +460,31 @@ class LocalState:
 
     @classmethod
     def from_dict(cls, payload: object) -> LocalState:
-        if not isinstance(payload, dict) or payload.get("schema_version") != 2:
+        if not isinstance(payload, dict) or payload.get("schema_version") != 3:
             raise ValueError("unsupported or invalid local state")
         try:
             api = ManagedProcess(**payload["api"])
             web = ManagedProcess(**payload["web"])
             runtime_owned = payload["runtime_owned"]
+            runtime_mode = payload["runtime_mode"]
             api_port = payload["api_port"]
             web_port = payload["web_port"]
         except (KeyError, TypeError) as exc:
             raise ValueError("incomplete local state") from exc
         if not isinstance(runtime_owned, bool):
             raise ValueError("runtime_owned must be boolean")
+        if runtime_mode not in {"managed", "deferred"}:
+            raise ValueError("runtime_mode must be managed or deferred")
+        if runtime_mode == "deferred" and runtime_owned:
+            raise ValueError("a deferred runtime cannot be launcher-owned")
         if not _is_valid_port(api_port) or not _is_valid_port(web_port):
             raise ValueError("local ports must be between 1 and 65535")
         if api_port == web_port:
             raise ValueError("API and Web ports must be different")
         return cls(
-            schema_version=2,
+            schema_version=3,
             runtime_owned=runtime_owned,
+            runtime_mode=runtime_mode,
             api_port=api_port,
             web_port=web_port,
             api=api,
@@ -389,6 +495,7 @@ class LocalState:
         return {
             "schema_version": self.schema_version,
             "runtime_owned": self.runtime_owned,
+            "runtime_mode": self.runtime_mode,
             "api_port": self.api_port,
             "web_port": self.web_port,
             "api": self.api.__dict__,
@@ -494,6 +601,26 @@ def _pid_exists(pid: int) -> bool:
     return True
 
 
+def _termination_is_verified(pid: int) -> bool:
+    if _process_is_running(pid):
+        return False
+    state = _process_state(pid)
+    if state is not None:
+        return state.startswith("Z")
+    return not _pid_exists(pid)
+
+
+def _wait_for_verified_exit(pid: int, *, timeout: float) -> bool:
+    deadline = time.monotonic() + max(timeout, 0.0)
+    while True:
+        if _termination_is_verified(pid):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.05, remaining))
+
+
 def terminate_managed_process(
     process: ManagedProcess,
     *,
@@ -515,18 +642,16 @@ def terminate_managed_process(
     except ProcessLookupError:
         return "not_running"
 
-    deadline = time.monotonic() + grace_seconds
-    while time.monotonic() < deadline:
-        if not _process_is_running(process.pid):
-            return "stopped"
-        time.sleep(0.05)
+    if _wait_for_verified_exit(process.pid, timeout=grace_seconds):
+        return "stopped"
 
-    if _process_is_running(process.pid):
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    return "stopped"
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return "not_running"
+    if _wait_for_verified_exit(process.pid, timeout=grace_seconds):
+        return "stopped"
+    return "cleanup_unverified"
 
 
 class LocalApplication:
@@ -566,6 +691,8 @@ class LocalApplication:
             str(api_port),
             "--workers",
             "1",
+            "--ws-max-size",
+            str(MAX_PIPELINE_WS_MESSAGE_BYTES),
         ]
         self.web_command = web_command or [
             shutil.which("node") or "node",
@@ -657,12 +784,34 @@ class LocalApplication:
             time.sleep(0.05)
         return False
 
-    def _rollback(self, state: LocalState, *, grace_seconds: float = 1.0) -> None:
+    def _rollback(self, state: LocalState, *, grace_seconds: float = 1.0) -> bool:
+        unresolved: list[str] = []
         for process in (state.web, state.api):
-            terminate_managed_process(process, grace_seconds=grace_seconds)
-        if state.runtime_owned:
-            self.runtime.run("down", timeout=60)
+            outcome = terminate_managed_process(
+                process,
+                grace_seconds=grace_seconds,
+            )
+            print(f"rollback {process.name}: {outcome}")
+            if outcome not in RESOLVED_TERMINATION_OUTCOMES:
+                unresolved.append(f"{process.name}: {outcome}")
+
+        if unresolved:
+            self._write_state(state)
+            print(f"RECOVERY: inspect ownership state at {self.state_path}")
+            print(
+                "RECOVERY: resolve the listed service cleanup, then rerun "
+                "scripts/xylon stop; EDA runtime shutdown was intentionally skipped"
+            )
+            return False
+
+        if state.runtime_owned and not self.runtime.run("down", timeout=60):
+            self._write_state(state)
+            print(f"RECOVERY: inspect ownership state at {self.state_path}")
+            print("RECOVERY: restore Docker, then rerun scripts/xylon stop")
+            return False
+
         self.state_path.unlink(missing_ok=True)
+        return True
 
     def start(self, *, health_timeout: float = 15.0) -> int:
         try:
@@ -674,7 +823,7 @@ class LocalApplication:
             if self.status() == 0:
                 print(
                     "ALREADY RUNNING: XylonStudio "
-                    f"http://127.0.0.1:{existing.web_port}/pipeline"
+                    f"http://127.0.0.1:{existing.web_port}/openroad"
                 )
                 return 0
             print(f"ERROR: launcher state already exists at {self.state_path}")
@@ -689,16 +838,21 @@ class LocalApplication:
         if resource_blockers:
             for blocker in resource_blockers:
                 print(f"RESOURCE BLOCKED: {blocker}")
-            print("RECOVERY: wait for load to fall or free local capacity, then rerun start")
-            return 1
-
-        runtime_owned = not self.runtime.is_running()
-        if runtime_owned and not self.runtime.run("up", timeout=900):
-            return 1
-        if not self.runtime.run("verify", timeout=60):
-            if runtime_owned:
-                self.runtime.run("down", timeout=60)
-            return 1
+            print(
+                "SAFE MODE: starting the UI and API without the EDA runtime; "
+                "heavy EDA work remains blocked until capacity recovers"
+            )
+            runtime_owned = False
+            runtime_mode = "deferred"
+        else:
+            runtime_owned = not self.runtime.is_running()
+            if runtime_owned and not self.runtime.run("up", timeout=900):
+                return 1
+            if not self.runtime.run("verify", timeout=60):
+                if runtime_owned:
+                    self.runtime.run("down", timeout=60)
+                return 1
+            runtime_mode = "managed"
 
         api_log = self.state_dir / "api.log"
         web_log = self.state_dir / "web.log"
@@ -732,8 +886,9 @@ class LocalApplication:
                 environment=web_environment,
             )
             state = LocalState(
-                schema_version=2,
+                schema_version=3,
                 runtime_owned=runtime_owned,
+                runtime_mode=runtime_mode,
                 api_port=self.api_port,
                 web_port=self.web_port,
                 api=ManagedProcess("api", api_process.pid, self.api_command_marker, str(api_log)),
@@ -751,8 +906,9 @@ class LocalApplication:
             print(f"ERROR: local start failed: {exc}")
             if state is None:
                 state = LocalState(
-                    schema_version=2,
+                    schema_version=3,
                     runtime_owned=runtime_owned,
+                    runtime_mode=runtime_mode,
                     api_port=self.api_port,
                     web_port=self.web_port,
                     api=ManagedProcess("api", api_process.pid if api_process else -1, self.api_command_marker, str(api_log)),
@@ -761,7 +917,7 @@ class LocalApplication:
             self._rollback(state)
             return 1
 
-        print(f"READY: XylonStudio {self.web_url}/pipeline")
+        print(f"READY: XylonStudio {self.web_url}/openroad")
         print(f"HEALTHY: API {self.api_url}/health")
         print(f"LOGS: {self.state_dir}")
         return 0
@@ -789,6 +945,9 @@ class LocalApplication:
         print(f"{'HEALTHY' if api_healthy else 'UNHEALTHY'}: API {api_url}")
         print(f"{'HEALTHY' if web_healthy else 'UNHEALTHY'}: Web {web_url}")
         runtime_healthy = self.runtime.is_running()
+        if state.runtime_mode == "deferred" and not runtime_healthy:
+            print("DEFERRED: pinned EDA runtime was not started in safe mode")
+            return 0 if api_healthy and web_healthy else 1
         print(f"{'HEALTHY' if runtime_healthy else 'UNHEALTHY'}: pinned EDA runtime")
         return 0 if api_healthy and web_healthy and runtime_healthy else 1
 
@@ -825,23 +984,27 @@ class LocalApplication:
             print("STOPPED: no launcher-owned local services")
             return 0
 
-        unresolved = False
+        unresolved: list[str] = []
         for process in (state.web, state.api):
             outcome = terminate_managed_process(
                 process,
                 grace_seconds=grace_seconds,
             )
             print(f"{process.name}: {outcome}")
-            unresolved = unresolved or outcome in {
-                "identity_mismatch",
-                "identity_unavailable",
-            }
-
-        if state.runtime_owned and not self.runtime.run("down", timeout=60):
-            unresolved = True
+            if outcome not in RESOLVED_TERMINATION_OUTCOMES:
+                unresolved.append(f"{process.name}: {outcome}")
 
         if unresolved:
             print(f"RECOVERY: inspect ownership state at {self.state_path}")
+            print(
+                "RECOVERY: resolve the listed service cleanup, then rerun "
+                "scripts/xylon stop; EDA runtime shutdown was intentionally skipped"
+            )
+            return 1
+
+        if state.runtime_owned and not self.runtime.run("down", timeout=60):
+            print(f"RECOVERY: inspect ownership state at {self.state_path}")
+            print("RECOVERY: restore Docker, then rerun scripts/xylon stop")
             return 1
 
         self.state_path.unlink(missing_ok=True)
@@ -857,7 +1020,12 @@ def _port_is_open(port: int) -> bool:
         return False
 
 
-def doctor(*, api_port: int = 5001, web_port: int = 3000) -> int:
+def doctor(
+    *,
+    api_port: int = 5001,
+    web_port: int = 3000,
+    check_eda_capacity: bool = True,
+) -> int:
     required_paths = {
         "Python API environment": REPO_ROOT / "agent" / "venv" / "bin" / "python",
         "Uvicorn": REPO_ROOT / "agent" / "venv" / "bin" / "uvicorn",
@@ -889,36 +1057,49 @@ def doctor(*, api_port: int = 5001, web_port: int = 3000) -> int:
         for blocker in version_blockers:
             print(f"INCOMPATIBLE: {blocker}")
         print(
-            "RECOVERY: install Python 3.11+ and Node.js 20.9+, "
+            "RECOVERY: install Python 3.11+ and Node.js 22+, "
             "then recreate dependencies and the Web build"
         )
         return 1
 
     print("READY: local prerequisites are available")
-    resources = collect_resource_snapshot(REPO_ROOT)
-    resource_blockers = evaluate_resource_preflight(resources)
-    if resource_blockers:
-        for blocker in resource_blockers:
-            print(f"RESOURCE BLOCKED: {blocker}")
-    else:
-        memory = (
-            f"{resources.memory_free_percent}%"
-            if resources.memory_free_percent is not None
-            else "Unavailable"
-        )
-        print(
-            "RESOURCE READY: "
-            f"load={resources.load_one_minute:.2f}/{resources.logical_cpus} CPUs "
-            f"memory_free={memory} "
-            f"disk_free={resources.disk_free_bytes / 1024**3:.1f} GiB"
-        )
+    resource_blockers: list[str] = []
+    if check_eda_capacity:
+        resources = collect_resource_snapshot(REPO_ROOT)
+        resource_blockers = evaluate_resource_preflight(resources)
+        if resource_blockers:
+            for blocker in resource_blockers:
+                print(f"RESOURCE BLOCKED: {blocker}")
+            print(
+                "RECOVERY: wait for load to fall or free local capacity, "
+                "then rerun this check; scripts/xylon start can still open the UI in safe mode"
+            )
+        else:
+            memory = (
+                f"{resources.memory_free_percent}%/"
+                f"{resources.memory_available_bytes / 1024**3:.1f}GiB"
+                if resources.memory_free_percent is not None
+                and resources.memory_available_bytes is not None
+                else "Unavailable"
+            )
+            print(
+                "RESOURCE READY: "
+                f"load={resources.load_one_minute:.2f}/{resources.logical_cpus} CPUs "
+                f"memory_free={memory} "
+                f"disk_free={resources.disk_free_bytes / 1024**3:.1f} GiB"
+            )
     api_url = f"http://127.0.0.1:{api_port}"
     web_url = f"http://127.0.0.1:{web_port}"
-    api_state = "LISTENING" if _port_is_open(api_port) else "STOPPED"
-    web_state = "LISTENING" if _port_is_open(web_port) else "STOPPED"
-    print(f"{api_state}: API {api_url}")
-    print(f"{web_state}: Web {web_url}")
-    return 0
+    api_in_use = _port_is_open(api_port)
+    web_in_use = _port_is_open(web_port)
+    print(f"{'PORT IN USE' if api_in_use else 'PORT AVAILABLE'}: API {api_url}")
+    print(f"{'PORT IN USE' if web_in_use else 'PORT AVAILABLE'}: Web {web_url}")
+    if api_in_use or web_in_use:
+        print(
+            f"RECOVERY: select unused local ports or free 127.0.0.1:{api_port} "
+            f"and 127.0.0.1:{web_port}, then rerun scripts/xylon start"
+        )
+    return 1 if resource_blockers or api_in_use or web_in_use else 0
 
 
 def main() -> int:
@@ -937,7 +1118,7 @@ def main() -> int:
         return doctor(web_port=args.web_port)
     app = LocalApplication(web_port=args.web_port)
     if args.command == "start":
-        if doctor(web_port=args.web_port) != 0:
+        if doctor(web_port=args.web_port, check_eda_capacity=False) != 0:
             return 1
         return app.start()
     if args.command == "status":

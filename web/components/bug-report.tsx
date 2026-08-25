@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { usePathname } from 'next/navigation'
 import { consoleCollector } from '@/lib/console-collector'
 import { useI18n } from '@/lib/i18n'
 
@@ -66,6 +67,7 @@ export function BugReportButton() {
 
 function BugReportDialog({ onClose }: { onClose: () => void }) {
   const { t } = useI18n()
+  const pagePath = usePathname()
   const [description, setDescription] = useState('')
   const [steps, setSteps] = useState('')
   const [severity, setSeverity] = useState<BugReportData['severity']>('medium')
@@ -76,6 +78,12 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
   const [showLogs, setShowLogs] = useState(false)
   const dialogRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const stepsPlaceholder = pagePath.startsWith('/openroad')
+    ? t('bugReport.stepsPlaceholder.timing')
+    : pagePath.startsWith('/pipeline')
+      ? t('bugReport.stepsPlaceholder.pipeline')
+      : t('bugReport.stepsPlaceholder')
 
   useEffect(() => {
     const dialog = dialogRef.current
@@ -179,31 +187,31 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
 
     // Also open GitHub issue (pre-filled) if possible
     const issueTitle = encodeURIComponent(
-      `[Bug] ${description.slice(0, 80)}`
+      `[${t('bugReport.issuePrefix')}] ${description.slice(0, 80)}`
     )
     const issueBody = encodeURIComponent(
       [
-        `## Description`,
+        `## ${t('bugReport.whatHappened')}`,
         description,
         '',
-        `## Steps to Reproduce`,
-        steps || '_Not provided_',
+        `## ${t('bugReport.steps')}`,
+        steps || `_${t('bugReport.notProvided')}_`,
         '',
-        `## Severity`,
-        severity,
+        `## ${t('bugReport.severity')}`,
+        t(`bugReport.severity.${severity}`),
         '',
-        `## Environment`,
+        `## ${t('bugReport.environment')}`,
         '```',
         getBrowserInfo(),
         '```',
         '',
-        `## Console Logs`,
+        `## ${t('bugReport.consoleLogs')}`,
         consoleLogs
-          ? `<details><summary>Console output (${consoleLogs.split('\n').length} entries)</summary>\n\n\`\`\`\n${consoleLogs.slice(-3000)}\n\`\`\`\n</details>`
-          : '_No console logs captured_',
+          ? `<details><summary>${t('bugReport.consoleOutput')} (${consoleLogs.split('\n').length} ${t('bugReport.entries')})</summary>\n\n\`\`\`\n${consoleLogs.slice(-3000)}\n\`\`\`\n</details>`
+          : `_${t('bugReport.noLogs')}_`,
         '',
-        `_Report generated at ${new Date().toISOString()}_`,
-        '_Screenshot attached in downloaded JSON report_',
+        `_${t('bugReport.reportGenerated')} ${new Date().toISOString()}_`,
+        `_${t('bugReport.screenshotNote')}_`,
       ].join('\n')
     )
     window.open(
@@ -233,7 +241,7 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
           </p>
           <button
             onClick={onClose}
-            className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90"
+            className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
           >
             {t('common.close')}
           </button>
@@ -257,7 +265,7 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
           </h2>
           <button
             onClick={onClose}
-            className="text-muted-foreground hover:text-foreground p-1"
+            className="text-muted-foreground hover:text-foreground p-1 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
             aria-label={t('common.close')}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -292,7 +300,7 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
               id="bug-steps"
               value={steps}
               onChange={(e) => setSteps(e.target.value)}
-              placeholder={t('bugReport.stepsPlaceholder')}
+              placeholder={stepsPlaceholder}
               className="w-full min-h-[80px] px-3 py-2 border rounded-md text-sm"
             />
           </div>
@@ -307,7 +315,7 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
                   type="button"
                   onClick={() => setSeverity(s)}
                   aria-pressed={severity === s}
-                  className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${
+                  className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
                     severity === s
                       ? s === 'critical'
                         ? 'bg-red-100 border-red-300 text-red-800'
@@ -335,14 +343,14 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
                 type="button"
                 onClick={captureScreenshot}
                 disabled={capturingScreenshot}
-                className="px-3 py-1.5 border rounded-md text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50"
+                className="px-3 py-1.5 border rounded-md text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
               >
                 {capturingScreenshot ? t('bugReport.capturing') : t('bugReport.autoCapture')}
               </button>
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="px-3 py-1.5 border rounded-md text-xs font-medium hover:bg-muted transition-colors"
+                className="px-3 py-1.5 border rounded-md text-xs font-medium hover:bg-muted transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
               >
                 {t('bugReport.upload')}
               </button>
@@ -358,7 +366,7 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
                 <button
                   type="button"
                   onClick={() => setScreenshot(null)}
-                  className="px-3 py-1.5 text-xs text-red-600 hover:text-red-800"
+                  className="px-3 py-1.5 text-xs text-red-600 hover:text-red-800 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                 >
                   {t('bugReport.remove')}
                 </button>
@@ -385,7 +393,7 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
               <button
                 type="button"
                 onClick={() => setShowLogs(!showLogs)}
-                className="text-xs text-muted-foreground hover:text-foreground"
+                className="text-xs text-muted-foreground hover:text-foreground rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
               >
                 {showLogs ? t('bugReport.hide') : t('bugReport.preview')}
               </button>
@@ -411,14 +419,14 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
           <div className="flex gap-3 pt-2">
             <button
               type="submit"
-              className="flex-1 bg-primary text-primary-foreground px-4 py-2.5 rounded-md text-sm font-medium hover:opacity-90"
+              className="flex-1 bg-primary text-primary-foreground px-4 py-2.5 rounded-md text-sm font-medium hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
             >
               {t('bugReport.submit')}
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2.5 border rounded-md text-sm font-medium hover:bg-muted transition-colors"
+              className="px-4 py-2.5 border rounded-md text-sm font-medium hover:bg-muted transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
             >
               {t('common.cancel')}
             </button>

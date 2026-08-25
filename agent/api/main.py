@@ -4,17 +4,23 @@ XylonStudio FastAPI Application.
 Main API server for the reproducible RTL verification pipeline.
 
 Run:
-    uvicorn agent.api.main:app --host 127.0.0.1 --port 5000
+    uvicorn agent.api.main:app --host 127.0.0.1 --port 5001
 """
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from agent.api import LOCAL_WEB_ORIGINS
-from agent.api.routes import local, pipeline
+from agent.api.routes import assistant, local, openroad, pipeline, timing
+from agent.api.routes.timing import (
+    MAX_TIMING_BODY_BYTES,
+    cancel_active_timing_jobs,
+    reconcile_interrupted_timing_jobs,
+)
 from agent.pipeline.limits import MAX_PIPELINE_BODY_BYTES
 
 # Configure logging
@@ -24,13 +30,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    if not await reconcile_interrupted_timing_jobs():
+        logger.error("Local API startup could not verify all interrupted timing job cleanup")
+    yield
+    if not await cancel_active_timing_jobs(shutdown=True):
+        logger.error("Local API shutdown could not verify all timing job cleanup")
+
+
 # Create FastAPI app
 app = FastAPI(
     title="XylonStudio API",
     description="Local Verilator and Yosys verification with reproducible evidence",
-    version="1.0.0",
+    version="0.4.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # CORS middleware
@@ -45,24 +61,34 @@ app.add_middleware(
 # Include routers
 app.include_router(pipeline.router, prefix="/api", tags=["pipeline"])
 app.include_router(local.router, prefix="/api", tags=["local"])
+app.include_router(openroad.router, prefix="/api", tags=["openroad"])
+app.include_router(timing.router, prefix="/api", tags=["timing"])
+app.include_router(assistant.router, prefix="/api", tags=["assistant"])
 
 
-def _payload_too_large() -> JSONResponse:
+def _payload_too_large(label: str = "Pipeline") -> JSONResponse:
     return JSONResponse(
         status_code=413,
-        content={"detail": "Pipeline request body is too large"},
+        content={"detail": f"{label} request body is too large"},
     )
 
 
 @app.middleware("http")
 async def bound_pipeline_request_body(request: Request, call_next):
     """Bound the live REST body before FastAPI allocates or validates JSON."""
-    if request.method == "POST" and request.url.path == "/api/pipeline/run":
+    timing_request = request.method == "POST" and (
+        request.url.path.startswith("/api/timing/")
+        or request.url.path == "/api/assistant/timing"
+    )
+    pipeline_request = request.method == "POST" and request.url.path == "/api/pipeline/run"
+    if pipeline_request or timing_request:
+        body_limit = MAX_TIMING_BODY_BYTES if timing_request else MAX_PIPELINE_BODY_BYTES
+        label = "Timing" if timing_request else "Pipeline"
         content_length = request.headers.get("content-length")
         if content_length is not None:
             try:
-                if int(content_length) > MAX_PIPELINE_BODY_BYTES:
-                    return _payload_too_large()
+                if int(content_length) > body_limit:
+                    return _payload_too_large(label)
             except ValueError:
                 return JSONResponse(
                     status_code=400,
@@ -72,8 +98,8 @@ async def bound_pipeline_request_body(request: Request, call_next):
         body = bytearray()
         async for chunk in request.stream():
             body.extend(chunk)
-            if len(body) > MAX_PIPELINE_BODY_BYTES:
-                return _payload_too_large()
+            if len(body) > body_limit:
+                return _payload_too_large(label)
         request._body = bytes(body)
 
     return await call_next(request)
@@ -84,7 +110,7 @@ async def root():
     """Root endpoint."""
     return {
         "name": "XylonStudio API",
-        "version": "1.0.0",
+        "version": "0.4.0",
         "status": "running",
         "docs": "/docs"
     }
@@ -96,7 +122,7 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "xylonstudio-api",
-        "version": "1.0.0"
+        "version": "0.4.0"
     }
 
 
@@ -112,4 +138,4 @@ async def global_exception_handler(request, exc):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=5000)
+    uvicorn.run(app, host="127.0.0.1", port=5001)

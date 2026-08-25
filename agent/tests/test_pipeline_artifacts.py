@@ -1,6 +1,8 @@
 """Durable pipeline artifact contract tests."""
 
 import json
+import stat
+from unittest.mock import patch
 
 import pytest
 
@@ -46,7 +48,11 @@ def _verified_result(pipeline_id: str = "run-123") -> PipelineResult:
 
 def test_persisted_manifest_is_complete_integrity_checked_and_rerunnable(tmp_path):
     result = _verified_result()
-    config = PipelineConfig(coverage_target=0.9, artifact_root=str(tmp_path))
+    config = PipelineConfig(
+        coverage_target=0.9,
+        resource_check_enabled=True,
+        artifact_root=str(tmp_path),
+    )
 
     bundle = persist_pipeline_artifacts(
         result=result,
@@ -71,6 +77,7 @@ def test_persisted_manifest_is_complete_integrity_checked_and_rerunnable(tmp_pat
     assert manifest["result"] == result.to_dict()
     assert manifest["result"]["outcome"] == "verified"
     assert manifest["config"]["coverage_target"] == 0.9
+    assert manifest["config"]["resource_check_enabled"] is True
     assert manifest["rerun"]["replay_kind"] == "frozen_inputs"
     assert manifest["rerun"]["argv"] == [
         "agent/venv/bin/python", "-m", "agent.cli", "rerun", "manifest.json",
@@ -85,10 +92,17 @@ def test_persisted_manifest_is_complete_integrity_checked_and_rerunnable(tmp_pat
     }
     verify_artifact_manifest(manifest_path)
 
+    assert stat.S_IMODE(tmp_path.stat().st_mode) == 0o700
+    assert stat.S_IMODE(run_dir.stat().st_mode) == 0o700
+    for path in run_dir.rglob("*"):
+        expected_mode = 0o700 if path.is_dir() else 0o600
+        assert stat.S_IMODE(path.stat().st_mode) == expected_mode
+
     replay = load_rerun_manifest(manifest_path)
     assert replay.rtl_code == "module adder; endmodule\n"
     assert replay.testbench_code == 'int main() { puts("PASS"); }\n'
     assert replay.config.coverage_target == 0.9
+    assert replay.config.resource_check_enabled is True
     assert replay.expected_outcome == PipelineOutcome.VERIFIED
 
 
@@ -107,6 +121,92 @@ def test_manifest_verification_detects_modified_frozen_input(tmp_path):
 
     with pytest.raises(ArtifactIntegrityError, match="inputs/design.v"):
         verify_artifact_manifest(manifest_path)
+
+
+def test_passed_synthesis_report_is_saved_with_descriptor_and_checksum(tmp_path):
+    yosys_stdout = "=== adder ===\n2 cells\n1 $_AND_\n1 $_XOR_\n"
+    result = _verified_result("synthesis-evidence")
+    result.steps.append(
+        StepResult(
+            "synthesis",
+            StepStatus.PASSED,
+            0.2,
+            output={"cell_count": 2, "report": yosys_stdout},
+        )
+    )
+
+    bundle = persist_pipeline_artifacts(
+        result=result,
+        rtl_code="module adder; endmodule\n",
+        testbench_code='int main() { puts("PASS"); }\n',
+        config=PipelineConfig(
+            synthesis_enabled=True,
+            artifact_root=str(tmp_path),
+        ),
+    )
+
+    run_dir = tmp_path / result.pipeline_id
+    report_path = run_dir / "reports/synthesis.txt"
+    assert report_path.read_text() == yosys_stdout
+    descriptor = next(
+        item for item in bundle.files if item.role == "synthesis_report"
+    )
+    assert descriptor.path == "reports/synthesis.txt"
+    checksums = (run_dir / bundle.checksums_path).read_text()
+    assert f"{descriptor.sha256}  reports/synthesis.txt\n" in checksums
+    verify_artifact_manifest(run_dir / bundle.manifest_path)
+
+
+def test_persistence_fails_closed_when_final_readback_cannot_be_verified(tmp_path):
+    result = _verified_result("readback-failure")
+
+    with patch(
+        "agent.pipeline.artifacts.verify_artifact_manifest",
+        side_effect=ArtifactIntegrityError("seeded final readback failure"),
+    ):
+        with pytest.raises(
+            ArtifactIntegrityError,
+            match="seeded final readback failure",
+        ):
+            persist_pipeline_artifacts(
+                result=result,
+                rtl_code="module original; endmodule\n",
+                testbench_code="PASS\n",
+                config=PipelineConfig(artifact_root=str(tmp_path)),
+            )
+
+    assert result.artifacts is None
+    assert not (tmp_path / result.pipeline_id).exists()
+    assert not list(tmp_path.glob(".*.staging-*"))
+
+
+def test_publish_race_preserves_a_bundle_created_by_another_owner(tmp_path):
+    result = _verified_result("concurrent-run")
+    final_dir = tmp_path / result.pipeline_id
+
+    def create_competing_bundle_and_fail(_source, _destination):
+        final_dir.mkdir()
+        (final_dir / "existing-evidence.txt").write_text(
+            "preserve me\n",
+            encoding="utf-8",
+        )
+        raise FileExistsError("seeded concurrent publisher")
+
+    with patch(
+        "agent.pipeline.artifacts.os.replace",
+        side_effect=create_competing_bundle_and_fail,
+    ):
+        with pytest.raises(FileExistsError, match="seeded concurrent publisher"):
+            persist_pipeline_artifacts(
+                result=result,
+                rtl_code="module replacement; endmodule\n",
+                testbench_code="PASS\n",
+                config=PipelineConfig(artifact_root=str(tmp_path)),
+            )
+
+    assert result.artifacts is None
+    assert (final_dir / "existing-evidence.txt").read_text(encoding="utf-8") == "preserve me\n"
+    assert not list(tmp_path.glob(".*.staging-*"))
 
 
 @pytest.mark.parametrize("pipeline_id", ["../escape", "nested/run", "..", "."])

@@ -134,6 +134,8 @@ async def run_simulate_step_with_evidence(
                 duration_seconds=0,
                 output={},
                 errors=[str(e)],
+                failure_kind=FailureKind.INFRASTRUCTURE,
+                recovery_code="repair_toolchain",
             ),
             None,
         )

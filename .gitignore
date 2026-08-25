@@ -114,6 +114,7 @@ eda-scripts/output/
 *.odb
 *.db
 *.sdc
+!examples/timing/sky130hd/constraints.sdc
 
 # Verification outputs
 *.vcd
@@ -308,6 +309,8 @@ htmlcov/
 # lifecycle entry points below.
 scripts/*
 !scripts/xylon
+!scripts/xylon-openroad
+!scripts/xylon-timing
 !scripts/eda-runtime
 !scripts/deploy-vpc2.sh
 requirements-test.txt
@@ -355,6 +358,7 @@ WORKLOG.md
 
 # Browser automation temp data
 .playwright-mcp/
+.playwright-cli/
 output/playwright/
 output/adoption/
 

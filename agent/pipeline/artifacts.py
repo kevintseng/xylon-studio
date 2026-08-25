@@ -20,6 +20,7 @@ from agent.pipeline.models import (
     PipelineConfig,
     PipelineOutcome,
     PipelineResult,
+    StepStatus,
 )
 
 SCHEMA_VERSION = 1
@@ -59,10 +60,12 @@ def _sha256(path: Path) -> str:
 
 def _atomic_write_text(path: Path, content: str) -> None:
     """Publish a complete file without exposing a partial write."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
     temporary = path.with_name(f".{path.name}.tmp-{uuid.uuid4().hex}")
     try:
         with temporary.open("x", encoding="utf-8", newline="\n") as handle:
+            os.fchmod(handle.fileno(), 0o600)
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
@@ -96,6 +99,7 @@ def _portable_config(config: PipelineConfig) -> dict:
         "lint_enabled": config.lint_enabled,
         "simulation_timeout": config.simulation_timeout,
         "synthesis_enabled": config.synthesis_enabled,
+        "resource_check_enabled": config.resource_check_enabled,
         "runtime_check_enabled": config.runtime_check_enabled,
     }
 
@@ -112,7 +116,8 @@ def persist_pipeline_artifacts(
     _validate_pipeline_id(result.pipeline_id)
 
     root = Path(config.artifact_root).expanduser().resolve()
-    root.mkdir(parents=True, exist_ok=True)
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(root, 0o700)
     final_dir = root / result.pipeline_id
     if final_dir.exists():
         raise FileExistsError(f"Artifact run already exists: {final_dir}")
@@ -123,6 +128,7 @@ def persist_pipeline_artifacts(
             dir=root,
         )
     )
+    published = False
     try:
         _atomic_write_text(staging / "inputs/design.v", rtl_code)
         files = [
@@ -172,6 +178,31 @@ def persist_pipeline_artifacts(
                 )
             )
 
+        synthesis_step = next(
+            (
+                step
+                for step in result.steps
+                if step.step_name == "synthesis"
+                and step.status == StepStatus.PASSED
+                and isinstance(step.output.get("report"), str)
+                and step.output["report"]
+            ),
+            None,
+        )
+        if synthesis_step is not None:
+            _atomic_write_text(
+                staging / "reports/synthesis.txt",
+                synthesis_step.output["report"],
+            )
+            files.append(
+                _descriptor(
+                    staging,
+                    "synthesis_report",
+                    "reports/synthesis.txt",
+                    "text/plain",
+                )
+            )
+
         rerun_argv = [
             "agent/venv/bin/python",
             "-m",
@@ -210,10 +241,14 @@ def persist_pipeline_artifacts(
         _atomic_write_text(staging / "checksums.sha256", checksum_text)
 
         os.replace(staging, final_dir)
+        published = True
+        verify_artifact_manifest(final_dir / "manifest.json")
         return bundle
     except Exception:
         if staging.exists():
             shutil.rmtree(staging)
+        if published and final_dir.exists():
+            shutil.rmtree(final_dir)
         result.artifacts = None
         raise
 
@@ -310,6 +345,7 @@ def load_rerun_manifest(manifest_path: str | Path) -> RerunRequest:
         lint_enabled=config_data.get("lint_enabled", True),
         simulation_timeout=config_data.get("simulation_timeout", 300),
         synthesis_enabled=config_data.get("synthesis_enabled", False),
+        resource_check_enabled=True,
         runtime_check_enabled=config_data.get("runtime_check_enabled", True),
         artifact_root=str(run_dir.parent),
     )
