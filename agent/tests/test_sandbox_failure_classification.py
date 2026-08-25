@@ -150,6 +150,7 @@ def test_executor_timeout_requires_verified_container_cleanup():
 def test_executor_cancellation_interrupts_active_container_execution():
     executor = SandboxExecutor("xylon-verilator")
     process = _FakePopen(times_out=True)
+    cancellation_checks = iter((False, True))
 
     with (
         patch("agent.sandbox.executor.subprocess.Popen", return_value=process),
@@ -163,7 +164,7 @@ def test_executor_cancellation_interrupts_active_container_execution():
             executor.execute(
                 ["tool"],
                 timeout=60,
-                cancel_requested=lambda: True,
+                cancel_requested=lambda: next(cancellation_checks),
             )
 
     assert caught.value.failure_kind == "cancellation"
@@ -173,9 +174,30 @@ def test_executor_cancellation_interrupts_active_container_execution():
     cleanup.assert_called_once()
 
 
+def test_executor_cancellation_before_launch_starts_no_sandbox_process():
+    executor = SandboxExecutor("xylon-verilator")
+
+    with (
+        patch("agent.sandbox.executor.subprocess.Popen") as popen,
+        patch.object(executor, "_cleanup_after_interruption") as cleanup,
+    ):
+        with pytest.raises(ExecutionError) as caught:
+            executor.execute(
+                ["tool"],
+                timeout=60,
+                cancel_requested=lambda: True,
+            )
+
+    assert caught.value.failure_kind == "cancellation"
+    assert "before launch" in str(caught.value)
+    popen.assert_not_called()
+    cleanup.assert_not_called()
+
+
 def test_executor_cancellation_fails_closed_when_cleanup_is_unverified():
     executor = SandboxExecutor("xylon-verilator")
     process = _FakePopen(times_out=True)
+    cancellation_checks = iter((False, True))
 
     with (
         patch("agent.sandbox.executor.subprocess.Popen", return_value=process),
@@ -189,7 +211,7 @@ def test_executor_cancellation_fails_closed_when_cleanup_is_unverified():
             executor.execute(
                 ["tool"],
                 timeout=60,
-                cancel_requested=lambda: True,
+                cancel_requested=lambda: next(cancellation_checks),
             )
 
     assert caught.value.failure_kind == "infrastructure"

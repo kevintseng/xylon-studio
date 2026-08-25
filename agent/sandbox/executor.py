@@ -470,6 +470,18 @@ echo "process group $pid terminated"
         if timeout is None:
             timeout = self.DEFAULT_TIMEOUT
 
+        if cancel_requested is not None and cancel_requested():
+            raise ExecutionError(
+                message=(
+                    "Execution cancelled before launch; "
+                    "no sandbox process was started"
+                ),
+                stdout="",
+                stderr="",
+                exit_code=-1,
+                failure_kind="cancellation",
+            )
+
         # Build docker exec command
         docker_cmd = ["docker", "exec"]
 
