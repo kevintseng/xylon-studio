@@ -1,192 +1,76 @@
 # Security Policy
 
-## Supported Versions
-
-We release security updates for the following versions:
-
-| Version | Supported          |
-| ------- | ------------------ |
-| 1.0.x   | :white_check_mark: |
-| < 1.0   | :x:                |
-
----
-
-## Reporting a Vulnerability
-
-**We take security seriously.** If you discover a security vulnerability in XylonStudio, please report it responsibly.
-
-### Where to Report
-
-**Email**: hello@xylonstud.io
-
-**DO NOT** open a public GitHub issue for security vulnerabilities.
-
-### What to Include
-
-Please provide:
-
-1. **Description**: What is the vulnerability?
-2. **Impact**: What could an attacker do?
-3. **Steps to reproduce**: How to trigger the vulnerability
-4. **Affected versions**: Which versions are vulnerable
-5. **Suggested fix** (optional): How might we fix it
-
-**Example**:
-```
-Subject: SQL Injection in API endpoint
-
-Description: The /api/design endpoint is vulnerable to SQL injection
-Impact: Attacker could read/modify database
-Steps: Send payload: {"spec": "'; DROP TABLE users--"}
-Affected: v1.0.0 - v1.0.5
-Suggested fix: Use parameterized queries
-```
-
----
-
-## Response Timeline
-
-| Timeframe | Action |
-|-----------|--------|
-| **Within 48 hours** | Initial response acknowledging receipt |
-| **Within 1 week** | Severity assessment and preliminary fix timeline |
-| **Within 2 weeks** | Patch development (for critical vulnerabilities) |
-| **Within 1 month** | Public disclosure (coordinated with reporter) |
-
-**Critical vulnerabilities** (RCE, data breach) are prioritized and fixed within 48-72 hours.
-
----
-
-## Disclosure Policy
-
-### Coordinated Disclosure
-
-We follow **coordinated disclosure**:
-
-1. **You report** the vulnerability privately
-2. **We acknowledge** within 48 hours
-3. **We develop** a fix
-4. **We release** the patch
-5. **We publicly disclose** (crediting you, if desired)
-
-**Typical timeline**: 30-90 days from report to public disclosure
-
-### Public Disclosure
-
-After the fix is released:
-- We publish a security advisory on GitHub
-- We update CHANGELOG.md with CVE (if assigned)
-- We credit the reporter (unless they prefer anonymity)
-
----
-
-## Security Best Practices
-
-### For Users
-
-1. **Keep XylonStudio updated** to the latest version
-2. **Use `.env` for secrets**, never hardcode API keys
-3. **Limit server access** to trusted networks only
-4. **Enable firewall** on production servers
-5. **Review code** before running untrusted designs
-
-### For Contributors
-
-1. **Never commit** secrets (API keys, passwords, tokens)
-2. **Use parameterized queries** for database access
-3. **Validate all user inputs** (see `agent/core/input_validator.py`)
-4. **Follow secure coding standards** (OWASP Top 10)
-5. **Run security tests** before submitting PR
-
----
-
-## Known Security Considerations
-
-### Design by Design
-
-**LLM-generated code is untrusted by default.**
-
-XylonStudio runs all generated RTL in sandboxed Docker containers:
-- No network access
-- Limited filesystem (read-only)
-- Resource limits (CPU, memory, time)
-
-See `agent/sandbox/` for implementation.
-
-### Customer Data
-
-**Customer designs are treated as secrets.**
-
-- Stored in `proprietary/customer-data/` (excluded from git)
-- Never used for LLM training without explicit consent
-- Encrypted at rest (if enterprise tier)
-- Deleted upon request (GDPR/CCPA compliance)
-
-### LLM Prompt Injection
-
-**Awareness**: Adversarial specs could attempt prompt injection.
-
-**Mitigation**:
-- Input validation (`agent/core/input_validator.py`)
-- Output sanitization (RTL linting before execution)
-- Cost limits (`agent/core/cost_limiter.py`)
-
-If you find a successful prompt injection, **please report it**!
-
----
-
-## Security Features
-
-### Implemented
-
-- ✅ **Input validation** (length, charset, rate limiting)
-- ✅ **Sandbox execution** (Docker isolation)
-- ✅ **Cost limiting** (prevent runaway LLM costs)
-- ✅ **Secrets management** (.env, never in git)
-- ✅ **Output sanitization** (Verilator linting)
-
-### Roadmap
-
-- [ ] **Formal verification** (prove RTL correctness)
-- [ ] **Differential testing** (compare against reference)
-- [ ] **Model watermarking** (detect stolen models)
-- [ ] **Rate limiting per IP** (DDoS prevention)
-
----
-
-## Hall of Fame
-
-We recognize security researchers who responsibly disclose vulnerabilities:
-
-*(No reports yet - be the first!)*
-
-**Reward**: Public acknowledgment + XylonStudio swag
-
----
-
-## Contact
-
-**Security Team**: hello@xylonstud.io
-
-**PGP Key** (for encrypted reports):
-```
------BEGIN PGP PUBLIC KEY BLOCK-----
-[To be added]
------END PGP PUBLIC KEY BLOCK-----
-```
-
-**Response time**: 48 hours maximum
-
----
-
-## Security Advisories
-
-**CVE Database**: [GitHub Security Advisories](https://github.com/kevintseng/xylon-studio/security/advisories)
-
-**Past advisories**: None yet (project launched 2026-04-01)
-
----
-
-**Thank you for helping keep XylonStudio secure! 🛡️**
-
-*Last updated: 2026-04-02*
+## Supported version
+
+Security fixes target the current `main` branch. No older version or compatibility
+surface is currently supported.
+
+## Report a vulnerability
+
+Report security issues privately to `hello@xylonstud.io`. Do not include private
+RTL, testbenches, credentials, or exploit details in a public GitHub issue.
+
+Include the affected revision, impact, minimum reproduction, and any suggested
+mitigation. Response timing depends on maintainer availability; this repository
+does not promise a fixed security-response SLA.
+
+## Current trust boundary
+
+XylonStudio is a single-user local RTL verifier, not a hosted or multi-tenant
+service. The supported launcher binds the API and Web application to
+`127.0.0.1`, starts one API worker, and serializes heavy EDA runs.
+
+Implemented controls:
+
+- REST, WebSocket, CLI, runner, and artifact publication enforce a 1 MiB UTF-8
+  byte limit for each RTL or testbench input. The REST body has an additional
+  bounded envelope and rejects oversized requests before JSON validation.
+- The WebSocket accepts only configured local browser origins when an `Origin`
+  header is present. Unexpected server exceptions are logged locally and are
+  not copied into REST or WebSocket responses.
+- Verilator and Yosys execute inside network-disabled, read-only containers with
+  dropped capabilities, `no-new-privileges`, PID, CPU, and memory limits.
+- Each checkout receives a distinct Compose project/container identity. Runtime
+  health replays image and tool-version verification instead of trusting a
+  globally named running container.
+- One wall-clock simulation timeout is shared across compile, execute, coverage
+  annotation, and coverage readback.
+- Terminal artifacts are checksummed and atomically published under
+  `.xylon/runs/`. They contain the submitted RTL/testbench and must be protected
+  as source material.
+
+Not implemented:
+
+- user authentication, authorization, tenant isolation, or per-user audit
+- network-facing deployment hardening, TLS termination, or IP rate limiting
+- encrypted artifact storage, retention automation, or remote deletion workflow
+- AI/LLM execution, prompt-injection controls, or model cost limiting
+- OpenROAD, PDK, DRC/LVS, physical-design, or tape-out security boundaries
+
+Do not expose the local API to a LAN or the public Internet. A non-browser client
+does not provide a trustworthy browser `Origin`, so origin checking is not an
+authentication boundary.
+
+## Runtime provenance limitations
+
+Python direct and transitive dependencies are hash-locked and vulnerability
+audited. The base image digest and Verilator/Yosys source commits are pinned and
+verified, and the verification gate retains a runtime SBOM. The Docker build
+still obtains Debian packages and Git sources from upstream services at build
+time. Until those packages and source archives are snapshot- or digest-pinned,
+identical image rebuild provenance is not guaranteed.
+
+Review `runtime/versions.env`, `runtime/Dockerfile`, `compose.eda.yaml`, and the
+protected CI result before trusting a rebuilt image. Run untrusted designs only
+on a disposable workstation or stronger isolation boundary.
+
+## Operator guidance
+
+- Run `scripts/xylon doctor` before starting work and stop the owned stack with
+  `scripts/xylon stop` when finished.
+- Keep `.xylon/` private and remove obsolete run bundles according to your own
+  retention policy.
+- Never place credentials in RTL, testbenches, screenshots, console logs, or bug
+  report JSON.
+- Review generated bug-report JSON before attaching it to GitHub; it can contain
+  console output, browser metadata, page URLs, and an optional screenshot.

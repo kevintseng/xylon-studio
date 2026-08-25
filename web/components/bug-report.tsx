@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { consoleCollector } from '@/lib/console-collector'
+import { useI18n } from '@/lib/i18n'
 
 interface BugReportData {
   description: string
@@ -23,14 +24,21 @@ function getBrowserInfo(): string {
 }
 
 export function BugReportButton() {
+  const { t } = useI18n()
   const [isOpen, setIsOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const handleClose = useCallback(() => {
+    setIsOpen(false)
+    requestAnimationFrame(() => triggerRef.current?.focus())
+  }, [])
 
   return (
     <>
       <button
+        ref={triggerRef}
         onClick={() => setIsOpen(true)}
         className="inline-flex items-center gap-1.5 text-sm text-blue-400 hover:text-blue-300 underline underline-offset-2 transition-colors"
-        aria-label="Report a bug"
+        aria-label={t('footer.reportIssue')}
       >
         <svg
           width="16"
@@ -46,31 +54,28 @@ export function BugReportButton() {
           <line x1="12" y1="8" x2="12" y2="12" />
           <line x1="12" y1="16" x2="12.01" y2="16" />
         </svg>
-        Report Issue
+        {t('footer.reportIssue')}
       </button>
 
       {isOpen && (
-        <BugReportDialog onClose={() => setIsOpen(false)} />
+        <BugReportDialog onClose={handleClose} />
       )}
     </>
   )
 }
 
 function BugReportDialog({ onClose }: { onClose: () => void }) {
+  const { t } = useI18n()
   const [description, setDescription] = useState('')
   const [steps, setSteps] = useState('')
   const [severity, setSeverity] = useState<BugReportData['severity']>('medium')
   const [screenshot, setScreenshot] = useState<string | null>(null)
   const [capturingScreenshot, setCapturingScreenshot] = useState(false)
-  const [consoleLogs, setConsoleLogs] = useState('')
+  const [consoleLogs] = useState(() => consoleCollector.getFormattedLog())
   const [submitted, setSubmitted] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
   const dialogRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    setConsoleLogs(consoleCollector.getFormattedLog())
-  }, [])
 
   useEffect(() => {
     const dialog = dialogRef.current
@@ -97,7 +102,7 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
     }
     dialog.addEventListener('keydown', handler)
     return () => dialog.removeEventListener('keydown', handler)
-  }, [onClose])
+  }, [onClose, submitted])
 
   // Prevent body scroll when dialog is open
   useEffect(() => {
@@ -212,18 +217,25 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
   if (submitted) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-        <div className="bg-background border rounded-lg p-8 max-w-md mx-4 text-center shadow-lg">
+        <div
+          ref={dialogRef}
+          className="bg-background border rounded-lg p-8 max-w-md mx-4 text-center shadow-lg"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bug-report-submitted-title"
+        >
           <div className="text-4xl mb-4">&#10003;</div>
-          <h3 className="text-lg font-semibold mb-2">Report Submitted</h3>
+          <h3 id="bug-report-submitted-title" tabIndex={-1} className="text-lg font-semibold mb-2">
+            {t('bugReport.submittedTitle')}
+          </h3>
           <p className="text-sm text-muted-foreground mb-4">
-            Bug report JSON has been downloaded. A GitHub issue page has been
-            opened for you to submit with additional details.
+            {t('bugReport.submittedDetail')}
           </p>
           <button
             onClick={onClose}
             className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90"
           >
-            Close
+            {t('common.close')}
           </button>
         </div>
       </div>
@@ -237,14 +249,16 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
         className="bg-background border rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto"
         role="dialog"
         aria-modal="true"
-        aria-label="Bug Report"
+        aria-labelledby="bug-report-title"
       >
         <div className="sticky top-0 bg-background border-b px-6 py-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Report an Issue</h2>
+          <h2 id="bug-report-title" className="text-lg font-semibold">
+            {t('bugReport.dialogTitle')}
+          </h2>
           <button
             onClick={onClose}
             className="text-muted-foreground hover:text-foreground p-1"
-            aria-label="Close"
+            aria-label={t('common.close')}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="18" y1="6" x2="6" y2="18" />
@@ -256,13 +270,14 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
         <form onSubmit={handleSubmit} className="p-6 space-y-5">
           {/* Description */}
           <div>
-            <label className="block text-sm font-medium mb-1.5">
-              What happened? *
+            <label htmlFor="bug-description" className="block text-sm font-medium mb-1.5">
+              {t('bugReport.whatHappened')} {t('common.required')}
             </label>
             <textarea
+              id="bug-description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Describe the issue you encountered..."
+              placeholder={t('bugReport.descriptionPlaceholder')}
               className="w-full min-h-[80px] px-3 py-2 border rounded-md text-sm"
               required
             />
@@ -270,26 +285,28 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
 
           {/* Steps */}
           <div>
-            <label className="block text-sm font-medium mb-1.5">
-              Steps to reproduce
+            <label htmlFor="bug-steps" className="block text-sm font-medium mb-1.5">
+              {t('bugReport.steps')}
             </label>
             <textarea
+              id="bug-steps"
               value={steps}
               onChange={(e) => setSteps(e.target.value)}
-              placeholder="1. Go to Design Dragon page&#10;2. Enter '8-bit counter'&#10;3. Click Generate RTL&#10;4. See error..."
+              placeholder={t('bugReport.stepsPlaceholder')}
               className="w-full min-h-[80px] px-3 py-2 border rounded-md text-sm"
             />
           </div>
 
           {/* Severity */}
-          <div>
-            <label className="block text-sm font-medium mb-1.5">Severity</label>
+          <fieldset>
+            <legend className="block text-sm font-medium mb-1.5">{t('bugReport.severity')}</legend>
             <div className="flex gap-2">
               {(['low', 'medium', 'high', 'critical'] as const).map((s) => (
                 <button
                   key={s}
                   type="button"
                   onClick={() => setSeverity(s)}
+                  aria-pressed={severity === s}
                   className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${
                     severity === s
                       ? s === 'critical'
@@ -302,17 +319,17 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
                       : 'bg-background hover:bg-muted'
                   }`}
                 >
-                  {s.charAt(0).toUpperCase() + s.slice(1)}
+                  {t(`bugReport.severity.${s}`)}
                 </button>
               ))}
             </div>
-          </div>
+          </fieldset>
 
           {/* Screenshot (optional) */}
-          <div>
-            <label className="block text-sm font-medium mb-1.5">
-              Screenshot <span className="text-muted-foreground font-normal">(optional)</span>
-            </label>
+          <fieldset>
+            <legend className="block text-sm font-medium mb-1.5">
+              {t('bugReport.screenshot')} <span className="text-muted-foreground font-normal">{t('bugReport.optional')}</span>
+            </legend>
             <div className="flex gap-2">
               <button
                 type="button"
@@ -320,19 +337,20 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
                 disabled={capturingScreenshot}
                 className="px-3 py-1.5 border rounded-md text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50"
               >
-                {capturingScreenshot ? 'Capturing...' : 'Auto Capture'}
+                {capturingScreenshot ? t('bugReport.capturing') : t('bugReport.autoCapture')}
               </button>
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 className="px-3 py-1.5 border rounded-md text-xs font-medium hover:bg-muted transition-colors"
               >
-                Upload Image
+                {t('bugReport.upload')}
               </button>
               <input
                 ref={fileInputRef}
                 type="file"
                 accept="image/*"
+                aria-label={t('bugReport.upload')}
                 className="hidden"
                 onChange={handleFileUpload}
               />
@@ -342,7 +360,7 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
                   onClick={() => setScreenshot(null)}
                   className="px-3 py-1.5 text-xs text-red-600 hover:text-red-800"
                 >
-                  Remove
+                  {t('bugReport.remove')}
                 </button>
               )}
             </div>
@@ -351,41 +369,41 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={screenshot}
-                  alt="Bug screenshot preview"
+                  alt={t('bugReport.previewAlt')}
                   className="w-full max-h-48 object-contain bg-muted"
                 />
               </div>
             )}
-          </div>
+          </fieldset>
 
           {/* Console Logs */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className="text-sm font-medium">
-                Console Logs ({consoleLogs.split('\n').filter(Boolean).length} entries)
-              </label>
+              <p className="text-sm font-medium">
+                {t('bugReport.consoleLogs')} ({consoleLogs.split('\n').filter(Boolean).length} {t('bugReport.entries')})
+              </p>
               <button
                 type="button"
                 onClick={() => setShowLogs(!showLogs)}
                 className="text-xs text-muted-foreground hover:text-foreground"
               >
-                {showLogs ? 'Hide' : 'Preview'}
+                {showLogs ? t('bugReport.hide') : t('bugReport.preview')}
               </button>
             </div>
             {showLogs && (
               <pre className="p-3 bg-muted rounded-md text-xs max-h-40 overflow-auto font-mono">
-                {consoleLogs || 'No console logs captured'}
+                {consoleLogs || t('bugReport.noLogs')}
               </pre>
             )}
             <p className="text-xs text-muted-foreground mt-1">
-              Console logs are automatically captured to help debug the issue.
+              {t('bugReport.logsHelp')}
             </p>
           </div>
 
           {/* Browser Info (auto-captured, shown as info) */}
           <div className="px-3 py-2 bg-muted/50 rounded-md">
             <p className="text-xs text-muted-foreground">
-              Auto-attached: Browser info, current page URL, timestamp
+              {t('bugReport.autoAttached')}
             </p>
           </div>
 
@@ -395,14 +413,14 @@ function BugReportDialog({ onClose }: { onClose: () => void }) {
               type="submit"
               className="flex-1 bg-primary text-primary-foreground px-4 py-2.5 rounded-md text-sm font-medium hover:opacity-90"
             >
-              Submit Report
+              {t('bugReport.submit')}
             </button>
             <button
               type="button"
               onClick={onClose}
               className="px-4 py-2.5 border rounded-md text-sm font-medium hover:bg-muted transition-colors"
             >
-              Cancel
+              {t('common.cancel')}
             </button>
           </div>
         </form>

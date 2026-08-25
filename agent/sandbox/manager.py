@@ -17,8 +17,10 @@ import logging
 import os
 import subprocess
 import sys
+import time
 
 from agent.sandbox.executor import ExecutionError, SandboxExecutor
+from agent.sandbox.runtime import load_runtime_spec, runtime_container_name
 
 # Configure logging
 # Environment-aware: use file logging in container, stdout-only in local dev
@@ -52,8 +54,14 @@ class SandboxManager:
     def __init__(self):
         """Initialize sandbox manager."""
         # Container names from environment
-        self.verilator_container = os.getenv('VERILATOR_CONTAINER', 'xylon-verilator')
-        self.yosys_container = os.getenv('YOSYS_CONTAINER', 'xylon-yosys')
+        self.verilator_container = os.getenv(
+            'VERILATOR_CONTAINER',
+            runtime_container_name('verilator'),
+        )
+        self.yosys_container = os.getenv(
+            'YOSYS_CONTAINER',
+            runtime_container_name('yosys'),
+        )
 
         # Host path that maps to /results inside containers (writable bind mount)
         self.host_results_dir = os.getenv(
@@ -108,6 +116,10 @@ class SandboxManager:
                 elif '%Error' in line:
                     errors.append(line)
 
+            failure_kind = result.failure_kind
+            if failure_kind and not errors:
+                errors.append(result.stderr.strip() or "EDA toolchain unavailable")
+
             return {
                 'success': result.success,
                 'warnings': warnings,
@@ -115,6 +127,7 @@ class SandboxManager:
                 'stdout': result.stdout,
                 'stderr': result.stderr,
                 'duration_seconds': result.duration_seconds,
+                'failure_kind': failure_kind,
             }
 
         except ExecutionError as e:
@@ -126,15 +139,17 @@ class SandboxManager:
                 'stdout': e.stdout,
                 'stderr': e.stderr,
                 'duration_seconds': 0,
+                'failure_kind': e.failure_kind,
             }
 
     def _write_to_container(self, container: str, container_path: str, content: str):
         """Write content to a file inside the container via docker exec + stdin."""
         container_dir = os.path.dirname(container_path)
+        source_content = content if content.endswith("\n") else f"{content}\n"
         subprocess.run(
             ["docker", "exec", "-i", container, "sh", "-c",
              f"mkdir -p {container_dir} && cat > {container_path}"],
-            input=content.encode("utf-8"),
+            input=source_content.encode("utf-8"),
             capture_output=True, timeout=10, check=True,
         )
 
@@ -178,6 +193,7 @@ class SandboxManager:
                 "stdout": "",
                 "stderr": str(e),
                 "duration_seconds": 0,
+                "failure_kind": "infrastructure",
             }
         finally:
             self._cleanup_container_dir(self.verilator_container, container_dir)
@@ -221,25 +237,22 @@ class SandboxManager:
                 timeout=self.synthesis_timeout
             )
 
-            # Parse synthesis statistics
-            gate_count = self._parse_gate_count(result.stdout)
-
             return {
                 'success': result.success,
-                'gate_count': gate_count,
                 'stdout': result.stdout,
                 'stderr': result.stderr,
                 'duration_seconds': result.duration_seconds,
+                'failure_kind': result.failure_kind,
             }
 
         except ExecutionError as e:
             logger.error(f"Synthesis failed: {e.message}")
             return {
                 'success': False,
-                'gate_count': 0,
                 'stdout': e.stdout,
                 'stderr': e.stderr,
                 'duration_seconds': 0,
+                'failure_kind': e.failure_kind,
             }
 
     def synthesize_verilog_string(self, verilog_code: str) -> dict:
@@ -269,10 +282,10 @@ class SandboxManager:
             logger.error(f"Synthesis string failed: {e}")
             return {
                 "success": False,
-                "gate_count": 0,
                 "stdout": "",
                 "stderr": str(e),
                 "duration_seconds": 0,
+                "failure_kind": "infrastructure",
             }
         finally:
             self._cleanup_container_dir(self.yosys_container, container_dir)
@@ -306,6 +319,16 @@ class SandboxManager:
                 print(result['coverage_data'])
         """
         logger.info(f"Running simulation: RTL={rtl_file}, TB={tb_file}, coverage={coverage}")
+        deadline = time.monotonic() + timeout
+
+        def remaining_timeout() -> float:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ExecutionError(
+                    f"Simulation timeout ({timeout}s exceeded)",
+                    failure_kind="infrastructure",
+                )
+            return remaining
 
         # Extract module name from RTL file
         module_name = os.path.splitext(os.path.basename(rtl_file))[0]
@@ -327,7 +350,7 @@ class SandboxManager:
 
             verilate_result = self.verilator.execute(
                 verilate_cmd,
-                timeout=timeout,
+                timeout=remaining_timeout(),
                 workdir=workdir,
                 env={"CCACHE_DISABLE": "1"},
             )
@@ -335,21 +358,24 @@ class SandboxManager:
             # Verilator returns exit code 1 for warnings (not just errors).
             # Treat as failure only if stderr contains %Error.
             has_errors = '%Error' in verilate_result.stderr
-            if not verilate_result.success and has_errors:
+            if verilate_result.failure_kind or (
+                not verilate_result.success and has_errors
+            ):
                 return {
                     'success': False,
                     'stdout': verilate_result.stdout,
                     'stderr': verilate_result.stderr,
                     'vcd_file': None,
                     'coverage_data': None,
-                    'duration_seconds': verilate_result.duration_seconds
+                    'duration_seconds': verilate_result.duration_seconds,
+                    'failure_kind': verilate_result.failure_kind,
                 }
 
             # Step 2: Run the simulation executable
             exe_path = f"./obj_dir/V{module_name}"
             run_result = self.verilator.execute(
                 [exe_path],
-                timeout=timeout // 2,
+                timeout=remaining_timeout(),
                 workdir=workdir,
             )
 
@@ -362,7 +388,17 @@ class SandboxManager:
             # Step 3: Collect coverage data if enabled
             coverage_data = None
             if coverage and run_result.success:
-                coverage_data = self._collect_coverage_data(module_name, timeout, workdir=workdir)
+                coverage_data = self._collect_coverage_data(
+                    module_name,
+                    remaining_timeout,
+                    workdir=workdir,
+                )
+
+            coverage_duration = (
+                coverage_data.get("duration_seconds", 0)
+                if coverage_data is not None
+                else 0
+            )
 
             return {
                 'success': run_result.success,
@@ -370,7 +406,12 @@ class SandboxManager:
                 'stderr': run_result.stderr,
                 'vcd_file': vcd_file,
                 'coverage_data': coverage_data,
-                'duration_seconds': run_result.duration_seconds
+                'duration_seconds': (
+                    verilate_result.duration_seconds
+                    + run_result.duration_seconds
+                    + coverage_duration
+                ),
+                'failure_kind': run_result.failure_kind,
             }
 
         except ExecutionError as e:
@@ -381,7 +422,8 @@ class SandboxManager:
                 'stderr': e.stderr,
                 'vcd_file': None,
                 'coverage_data': None,
-                'duration_seconds': 0
+                'duration_seconds': 0,
+                'failure_kind': e.failure_kind,
             }
 
     @staticmethod
@@ -447,11 +489,12 @@ class SandboxManager:
                 "vcd_file": None,
                 "coverage_data": None,
                 "duration_seconds": 0,
+                "failure_kind": "infrastructure",
             }
         finally:
             self._cleanup_container_dir(self.verilator_container, container_dir)
 
-    def _collect_coverage_data(self, module_name: str, timeout: int, workdir: str = None) -> dict:
+    def _collect_coverage_data(self, module_name: str, remaining_timeout, workdir: str = None) -> dict:
         """
         Collect and parse Verilator coverage data after simulation.
 
@@ -471,7 +514,7 @@ class SandboxManager:
             cov_result = self.verilator.execute(
                 ["verilator_coverage", "--annotate", "coverage_annotated",
                  "coverage.dat"],
-                timeout=timeout // 4,
+                timeout=remaining_timeout(),
                 workdir=workdir,
             )
 
@@ -481,7 +524,7 @@ class SandboxManager:
             annotated_dir = "coverage_annotated" if not workdir else f"{workdir}/coverage_annotated"
             ann_result = self.verilator.execute(
                 ["sh", "-c", f"cat {annotated_dir}/*.v 2>/dev/null || echo ''"],
-                timeout=timeout // 4,
+                timeout=remaining_timeout(),
                 workdir=workdir,
             )
 
@@ -489,6 +532,9 @@ class SandboxManager:
                 "raw_report": raw_report + "\n" + ann_result.stdout,
                 "summary": cov_result.stderr,
                 "success": True,
+                "duration_seconds": (
+                    cov_result.duration_seconds + ann_result.duration_seconds
+                ),
             }
 
         except ExecutionError as e:
@@ -498,27 +544,9 @@ class SandboxManager:
                 "summary": "",
                 "success": False,
                 "error": e.message,
+                "failure_kind": e.failure_kind,
+                "duration_seconds": 0,
             }
-
-    def _parse_gate_count(self, yosys_output: str) -> int:
-        """
-        Parse gate count from Yosys output.
-
-        Args:
-            yosys_output: stdout from Yosys
-
-        Returns:
-            Estimated gate count
-        """
-        # Look for "Number of cells:" line
-        for line in yosys_output.split('\n'):
-            if 'Number of cells:' in line:
-                try:
-                    return int(line.split(':')[1].strip())
-                except (ValueError, IndexError):
-                    pass
-
-        return 0
 
     def health_check(self) -> dict:
         """
@@ -530,6 +558,93 @@ class SandboxManager:
         return {
             'verilator': self.verilator.verify_container_running(),
             'yosys': self.yosys.verify_container_running(),
+        }
+
+    @staticmethod
+    def _inspect_container_image(container_name: str) -> tuple[str, str, str | None]:
+        """Return configured image tag, immutable image ID, and an error."""
+        try:
+            result = subprocess.run(
+                [
+                    "docker",
+                    "inspect",
+                    "--format",
+                    "{{.Config.Image}}|{{.Image}}",
+                    container_name,
+                ],
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+        except Exception as error:
+            return "", "", str(error)
+
+        stdout = result.stdout.decode("utf-8", errors="replace").strip()
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        if result.returncode != 0 or "|" not in stdout:
+            return "", "", stderr or f"Unable to inspect {container_name}"
+        image, image_id = stdout.split("|", 1)
+        return image, image_id, None
+
+    def get_tool_identity(self) -> dict:
+        """Observe and verify the exact runtime used for pipeline execution."""
+        spec = load_runtime_spec()
+        errors: list[str] = []
+        observed: dict[str, dict] = {}
+        probes = (
+            (
+                "verilator",
+                self.verilator_container,
+                self.verilator,
+                ["verilator", "--version"],
+                f"Verilator {spec.verilator_version}",
+            ),
+            (
+                "yosys",
+                self.yosys_container,
+                self.yosys,
+                ["yosys", "-V"],
+                f"Yosys {spec.yosys_version}",
+            ),
+        )
+
+        for tool, container, executor, command, expected_version in probes:
+            image, image_id, inspect_error = self._inspect_container_image(container)
+            if inspect_error:
+                errors.append(f"{container}: {inspect_error}")
+
+            version_output = ""
+            try:
+                probe = executor.execute(command, timeout=10)
+                version_output = (probe.stdout or probe.stderr).strip()
+                if not probe.success:
+                    errors.append(f"{tool} version probe failed")
+            except ExecutionError as error:
+                errors.append(f"{tool} version probe failed: {error.message}")
+
+            if image and image != spec.image:
+                errors.append(
+                    f"{container} expected image {spec.image}, observed {image}"
+                )
+            if expected_version not in version_output:
+                errors.append(
+                    f"{expected_version} expected, observed "
+                    f"{version_output or 'unavailable'}"
+                )
+
+            observed[tool] = {
+                "container": container,
+                "image": image or None,
+                "image_id": image_id or None,
+                "version_output": version_output or None,
+            }
+
+        return {
+            "schema_version": 1,
+            "verified": not errors,
+            "expected": spec.to_dict(),
+            "observed": observed,
+            "errors": errors,
         }
 
 

@@ -12,10 +12,10 @@ Defines the data structures for the verification pipeline:
 - PipelineResult: Final pipeline execution summary
 """
 
+import os
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Optional
 
 # ==================== Enums ====================
 
@@ -29,7 +29,81 @@ class StepStatus(StrEnum):
     ERROR = "error"
 
 
+class FailureKind(StrEnum):
+    """Stable category for a non-success step."""
+
+    CONFIGURATION = "configuration"
+    INFRASTRUCTURE = "infrastructure"
+    CANCELLATION = "cancellation"
+    UNSUPPORTED = "unsupported"
+    VERIFICATION = "verification"
+    INCONCLUSIVE = "inconclusive"
+
+
+class RunMode(StrEnum):
+    """How a pipeline run obtained its verification testbench."""
+
+    LINT_ONLY = "lint_only"
+    PROVIDED_TESTBENCH = "provided_testbench"
+
+
+class PipelineOutcome(StrEnum):
+    """Truthful terminal outcome of a pipeline run."""
+
+    VERIFIED = "verified"
+    LINT_ONLY = "lint_only"
+    TARGET_NOT_MET = "target_not_met"
+    INCONCLUSIVE = "inconclusive"
+    VERIFICATION_FAILED = "verification_failed"
+    INFRASTRUCTURE_ERROR = "infrastructure_error"
+    CONFIGURATION_ERROR = "configuration_error"
+    CANCELLED = "cancelled"
+    UNSUPPORTED = "unsupported"
+
+
 # ==================== Data Classes ====================
+
+
+@dataclass(frozen=True)
+class ArtifactFile:
+    """Integrity metadata for one portable file in a run bundle."""
+
+    role: str
+    path: str
+    sha256: str
+    size_bytes: int
+    media_type: str
+
+    def to_dict(self) -> dict:
+        return {
+            "role": self.role,
+            "path": self.path,
+            "sha256": self.sha256,
+            "size_bytes": self.size_bytes,
+            "media_type": self.media_type,
+        }
+
+
+@dataclass(frozen=True)
+class ArtifactBundle:
+    """Discoverable reference to a durable, integrity-checked run bundle."""
+
+    run_directory: str
+    manifest_path: str
+    checksums_path: str
+    files: list[ArtifactFile]
+    rerun_argv: list[str]
+    schema_version: int = 1
+
+    def to_dict(self) -> dict:
+        return {
+            "schema_version": self.schema_version,
+            "run_directory": self.run_directory,
+            "manifest_path": self.manifest_path,
+            "checksums_path": self.checksums_path,
+            "files": [item.to_dict() for item in self.files],
+            "rerun_argv": list(self.rerun_argv),
+        }
 
 
 @dataclass
@@ -38,7 +112,7 @@ class StepResult:
     Result of a single pipeline step execution.
 
     Attributes:
-        step_name: Step identifier ("lint", "simulate", "coverage", "test_plan", "testbench", "improve")
+        step_name: Step identifier ("runtime", "lint", "simulate", "coverage", "synthesis", "artifacts")
         status: Execution status (passed/failed/skipped/error)
         duration_seconds: Wall-clock execution time
         output: Step-specific output dict (varies by step type)
@@ -53,111 +127,25 @@ class StepResult:
     output: dict = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    failure_kind: FailureKind | None = None
+    recovery_code: str | None = None
+    required: bool = True
+    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
-
-@dataclass
-class TestPlanStepResult(StepResult):
-    """
-    Result of test plan generation step (Phase B).
-
-    Attributes:
-        test_plan: Generated test plan (in output['test_plan'])
-        step_name: Always "test_plan"
-    """
-
-    def __post_init__(self):
-        """Set step name to test_plan."""
-        self.step_name = "test_plan"
-
-    def get_test_plan(self) -> Optional["TestPlan"]:
-        """Extract TestPlan from output."""
-        return self.output.get("test_plan")
-
-
-@dataclass
-class TestbenchStepResult(StepResult):
-    """
-    Result of testbench generation step (Phase B).
-
-    Attributes:
-        testbench: Generated testbench code (in output['testbench'])
-        step_name: Always "testbench"
-    """
-
-    def __post_init__(self):
-        """Set step name to testbench."""
-        self.step_name = "testbench"
-
-    def get_testbench(self) -> str | None:
-        """Extract testbench code from output."""
-        return self.output.get("testbench")
-
-
-@dataclass
-class TestScenario:
-    """
-    Single test scenario in a test plan (Phase B).
-
-    Attributes:
-        name: Short scenario name
-        description: What this test checks and why
-        category: Type of test (functional, edge_case, boundary, reset, protocol)
-        priority: Test priority (critical, high, medium, low)
-        coverage_targets: Which signals/branches this scenario targets
-    """
-
-    name: str
-    description: str
-    category: str = "functional"
-    priority: str = "medium"
-    coverage_targets: list[str] = field(default_factory=list)
-    learning_tip: str = ""
-
-
-@dataclass
-class TestPlan:
-    """
-    Structured test plan from LLM analysis (Phase B).
-
-    Attributes:
-        module_name: Name of RTL module being tested
-        port_analysis: Analysis of module ports (inputs, outputs, clocks, resets)
-        scenarios: List of test scenarios
-        coverage_goals: Target coverage by type (line, toggle, branch)
-        education_notes: AI-generated educational context for the module
-        raw_llm_output: Raw LLM response for debugging
-    """
-
-    module_name: str
-    port_analysis: dict
-    scenarios: list[TestScenario]
-    coverage_goals: dict[str, float]
-    education_notes: dict = field(default_factory=dict)
-    raw_llm_output: str = ""
-
-    def __post_init__(self):
-        """Validate test plan structure."""
-        if not self.scenarios:
-            raise ValueError("TestPlan must have at least one scenario")
-        if not self.coverage_goals:
-            raise ValueError("TestPlan must specify coverage goals")
-
-        # Validate coverage goal values
-        for goal_type, target in self.coverage_goals.items():
-            if not (0.0 <= target <= 1.0):
-                raise ValueError(
-                    f"Coverage goal '{goal_type}' must be in [0.0, 1.0], got {target}"
-                )
-
-    @property
-    def scenario_count(self) -> int:
-        """Return number of scenarios."""
-        return len(self.scenarios)
-
-    def critical_scenarios(self) -> list[TestScenario]:
-        """Return only critical-priority scenarios."""
-        return [s for s in self.scenarios if s.priority == "critical"]
+    def to_dict(self) -> dict:
+        """Serialize the canonical live and persisted step contract."""
+        return {
+            "step_name": self.step_name,
+            "status": self.status.value,
+            "duration_seconds": self.duration_seconds,
+            "output": self.output,
+            "errors": self.errors,
+            "warnings": self.warnings,
+            "failure_kind": self.failure_kind.value if self.failure_kind else None,
+            "recovery_code": self.recovery_code,
+            "required": self.required,
+            "timestamp": self.timestamp,
+        }
 
 
 @dataclass
@@ -166,29 +154,31 @@ class CoverageReport:
     Coverage metrics from Verilator simulation.
 
     Attributes:
-        line_coverage: Fraction of lines covered (0.0-1.0)
-        toggle_coverage: Fraction of toggles covered (0.0-1.0)
-        branch_coverage: Fraction of branches covered (0.0-1.0)
-        score: Weighted average of coverage types
+        line_coverage: Fraction of lines covered, or None when unavailable
+        toggle_coverage: Fraction of toggles covered, or None when unavailable
+        branch_coverage: Fraction of branches covered, or None when unavailable
+        score: Aggregate/weighted coverage score, or None when unavailable
+        metric_sources: Provenance for each available metric
         uncovered_lines: List of uncovered source lines
         raw_output: Full coverage report from Verilator
     """
 
-    line_coverage: float
-    toggle_coverage: float
-    branch_coverage: float
-    score: float
+    line_coverage: float | None
+    toggle_coverage: float | None
+    branch_coverage: float | None
+    score: float | None
     uncovered_lines: list[str] = field(default_factory=list)
     raw_output: str = ""
+    metric_sources: dict[str, str] = field(default_factory=dict)
 
     # Default weights used by compute_score() — can be overridden per-call.
     DEFAULT_WEIGHTS = {"line": 0.4, "toggle": 0.3, "branch": 0.3}
 
     def __post_init__(self):
-        """Validate coverage values are in [0.0, 1.0]."""
+        """Validate every available coverage value is in [0.0, 1.0]."""
         for attr in ["line_coverage", "toggle_coverage", "branch_coverage", "score"]:
             val = getattr(self, attr)
-            if not (0.0 <= val <= 1.0):
+            if val is not None and not (0.0 <= val <= 1.0):
                 raise ValueError(f"{attr} must be in [0.0, 1.0], got {val}")
 
     @classmethod
@@ -227,43 +217,34 @@ class PipelineConfig:
 
     Attributes:
         coverage_target: Desired coverage score (0.0-1.0), default 0.8
-        max_iterations: Maximum iterations for coverage-driven loop (Phase B+)
         lint_enabled: Whether to run lint step
         simulation_timeout: Timeout for simulation in seconds
-        llm_provider: LLM provider configuration dict (Phase B)
-            - type: "openai", "anthropic", "vllm", or "ollama"
-            - endpoint: LLM server endpoint
-            - model: Model name or identifier
-            - timeout: Request timeout in seconds
-            - api_key: API key (if required)
-        generate_test_plan: Whether to generate test plan (Phase B)
-        generate_testbench: Whether to generate testbench (Phase B)
+        synthesis_enabled: Whether to run the optional Yosys report
     """
 
     coverage_target: float = 0.8
-    max_iterations: int = 5
     lint_enabled: bool = True
     simulation_timeout: int = 300
-    llm_provider: dict | None = None
-    generate_test_plan: bool = False
-    generate_testbench: bool = False
     synthesis_enabled: bool = False
+    runtime_check_enabled: bool = field(
+        default_factory=lambda: os.environ.get(
+            "XYLON_SKIP_RUNTIME_CHECK",
+            "0",
+        ) != "1"
+    )
+    artifact_root: str = field(
+        default_factory=lambda: os.environ.get(
+            "XYLON_ARTIFACT_ROOT",
+            ".xylon/runs",
+        )
+    )
 
     def __post_init__(self):
         """Validate configuration values."""
         if not (0.0 <= self.coverage_target <= 1.0):
             raise ValueError(f"coverage_target must be in [0.0, 1.0], got {self.coverage_target}")
-        if self.max_iterations < 1:
-            raise ValueError(f"max_iterations must be >= 1, got {self.max_iterations}")
         if self.simulation_timeout < 1:
             raise ValueError(f"simulation_timeout must be >= 1, got {self.simulation_timeout}")
-
-        # Validate Phase B config if enabled
-        if (self.generate_test_plan or self.generate_testbench) and not self.llm_provider:
-            raise ValueError(
-                "llm_provider config required when generate_test_plan or "
-                "generate_testbench is enabled"
-            )
 
 
 @dataclass
@@ -275,7 +256,6 @@ class PipelineResult:
         pipeline_id: Unique identifier for this pipeline run
         steps: List of step results in execution order
         final_coverage: Coverage report (None if no coverage step run)
-        test_plan: Test plan from Phase B (None if Phase A or plan generation skipped)
         iterations_used: Number of iterations completed
         total_duration_seconds: Total execution time
         success: Whether entire pipeline succeeded (all steps passed)
@@ -285,11 +265,13 @@ class PipelineResult:
     pipeline_id: str
     steps: list[StepResult]
     final_coverage: CoverageReport | None
-    test_plan: Optional["TestPlan"] = None
     iterations_used: int = 0
     total_duration_seconds: float = 0.0
     success: bool = False
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    mode: RunMode = RunMode.LINT_ONLY
+    outcome: PipelineOutcome = PipelineOutcome.LINT_ONLY
+    artifacts: ArtifactBundle | None = None
+    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def get_step(self, step_name: str) -> StepResult | None:
         """
@@ -304,8 +286,11 @@ class PipelineResult:
         return next((s for s in self.steps if s.step_name == step_name), None)
 
     def all_passed(self) -> bool:
-        """Check if all steps passed."""
-        return all(s.status == StepStatus.PASSED for s in self.steps)
+        """Check whether every required gate ran and passed."""
+        required_steps = [step for step in self.steps if step.required]
+        return bool(required_steps) and all(
+            step.status == StepStatus.PASSED for step in required_steps
+        )
 
     def to_dict(self) -> dict:
         """
@@ -322,25 +307,18 @@ class PipelineResult:
                 "branch_coverage": self.final_coverage.branch_coverage,
                 "score": self.final_coverage.score,
                 "uncovered_lines": list(self.final_coverage.uncovered_lines),
+                "metric_sources": dict(self.final_coverage.metric_sources),
             }
 
         return {
             "pipeline_id": self.pipeline_id,
-            "steps": [
-                {
-                    "step_name": s.step_name,
-                    "status": s.status.value,
-                    "duration_seconds": s.duration_seconds,
-                    "output": s.output,
-                    "errors": s.errors,
-                    "warnings": s.warnings,
-                    "timestamp": s.timestamp,
-                }
-                for s in self.steps
-            ],
+            "steps": [step.to_dict() for step in self.steps],
             "final_coverage": coverage_dict,
             "iterations_used": self.iterations_used,
             "total_duration_seconds": self.total_duration_seconds,
             "success": self.success,
+            "mode": self.mode.value,
+            "outcome": self.outcome.value,
+            "artifacts": self.artifacts.to_dict() if self.artifacts else None,
             "timestamp": self.timestamp,
         }

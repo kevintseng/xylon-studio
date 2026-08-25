@@ -36,4 +36,4 @@
 
 ## Notes
 
-Combinational logic. Testbench not yet included — good candidate for LLM-generated testbench via the pipeline.
+Combinational logic with an independent C++ Verilator testbench.

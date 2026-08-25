@@ -21,4 +21,4 @@
 
 ## Notes
 
-2-stage pipelined sequential design. Testbench not yet included — good candidate for LLM-generated testbench via the pipeline.
+2-stage pipelined sequential design with an independent C++ Verilator testbench.

@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 
-from agent.pipeline.models import StepResult, StepStatus
+from agent.pipeline.models import FailureKind, StepResult, StepStatus
 from agent.sandbox.manager import SandboxManager
 
 logger = logging.getLogger(__name__)
@@ -14,24 +14,19 @@ def _extract_test_result(stdout: str) -> bool:
     """
     Extract pass/fail from testbench output.
 
-    Looks for common Verilog testbench patterns:
-    - $display("PASS") or similar
-    - $finish with return code 0 = pass
+    An explicit failure marker always wins.  In the current harness contract,
+    successful self-checking testbenches must print an explicit PASS marker;
+    arbitrary or empty simulator output is inconclusive.
     """
-    # Check for explicit PASS string
-    if re.search(r'\bPASS\b', stdout, re.IGNORECASE):
-        return True
-
     # Check for explicit FAIL string
-    if re.search(r'\bFAIL\b', stdout, re.IGNORECASE):
+    if re.search(r'\bFAIL(?:ED|URE)?\b', stdout, re.IGNORECASE):
         return False
 
-    # If there's output and no FAIL, assume pass
-    if stdout.strip():
+    # Check for explicit PASS string only after ruling out any failure.
+    if re.search(r'\bPASS(?:ED)?\b', stdout, re.IGNORECASE):
         return True
 
-    # No output = unknown, treat as pass (caller will validate)
-    return True
+    return False
 
 
 async def run_simulate_step(
@@ -40,6 +35,22 @@ async def run_simulate_step(
     sandbox: SandboxManager | None = None,
     timeout: int = 300,
 ) -> StepResult:
+    """Run simulation and return only the public canonical step result."""
+    step_result, _ = await run_simulate_step_with_evidence(
+        rtl_file,
+        tb_file,
+        sandbox,
+        timeout,
+    )
+    return step_result
+
+
+async def run_simulate_step_with_evidence(
+    rtl_file: str,
+    tb_file: str,
+    sandbox: SandboxManager | None = None,
+    timeout: int = 300,
+) -> tuple[StepResult, dict | None]:
     """
     Run Verilator simulation with testbench.
 
@@ -76,6 +87,22 @@ async def run_simulate_step(
         stdout_passed = _extract_test_result(result.get('stdout', ''))
         test_passed = sim_success and stdout_passed
         status = StepStatus.PASSED if test_passed else StepStatus.FAILED
+        failure_kind = None
+        recovery_code = None
+        if status == StepStatus.FAILED:
+            raw_failure_kind = result.get('failure_kind')
+            if raw_failure_kind:
+                failure_kind = FailureKind(raw_failure_kind)
+                recovery_code = "repair_toolchain"
+            elif re.search(r'\bFAIL(?:ED|URE)?\b', result.get('stdout', ''), re.IGNORECASE):
+                failure_kind = FailureKind.VERIFICATION
+                recovery_code = "inspect_failing_check"
+            elif sim_success:
+                failure_kind = FailureKind.INCONCLUSIVE
+                recovery_code = "add_explicit_result_marker"
+            else:
+                failure_kind = FailureKind.CONFIGURATION
+                recovery_code = "correct_testbench"
 
         step_result = StepResult(
             step_name="simulate",
@@ -87,6 +114,8 @@ async def run_simulate_step(
                 'vcd_file': result.get('vcd_file'),
                 'test_passed': test_passed,
             },
+            failure_kind=failure_kind,
+            recovery_code=recovery_code,
         )
 
         if status == StepStatus.PASSED:
@@ -94,14 +123,17 @@ async def run_simulate_step(
         else:
             logger.error("[SIM] ❌ FAILED")
 
-        return step_result
+        return step_result, result
 
     except Exception as e:
         logger.error(f"[SIM] ❌ ERROR: {e}")
-        return StepResult(
-            step_name="simulate",
-            status=StepStatus.ERROR,
-            duration_seconds=0,
-            output={},
-            errors=[str(e)],
+        return (
+            StepResult(
+                step_name="simulate",
+                status=StepStatus.ERROR,
+                duration_seconds=0,
+                output={},
+                errors=[str(e)],
+            ),
+            None,
         )

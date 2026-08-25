@@ -219,6 +219,9 @@ dump.rdb
 # Cache
 cache/
 
+# Local verification evidence bundles (may contain customer RTL)
+.xylon/
+
 # ====================
 # MONITORING & TELEMETRY (May Contain PII)
 # ====================
@@ -301,8 +304,11 @@ pytest.ini
 .coverage
 htmlcov/
 
-# Development scripts
-scripts/
+# Development scripts are private by default. Track only the supported public
+# lifecycle entry points below.
+scripts/*
+!scripts/xylon
+!scripts/eda-runtime
 !scripts/deploy-vpc2.sh
 requirements-test.txt
 requirements-sandbox.txt
@@ -349,6 +355,8 @@ WORKLOG.md
 
 # Browser automation temp data
 .playwright-mcp/
+output/playwright/
+output/adoption/
 
 # Security audit reports (internal use only)
 SECURITY-AUDIT-REPORT.md
