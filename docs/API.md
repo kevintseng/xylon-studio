@@ -232,8 +232,11 @@ cleanup all fail closed.
 
 The public state uses `xylon-timing-api/v1` and may contain measured `metrics`,
 one `proposal`, a local `confirmation`, a `comparison`, or an actionable
-`failure`. Improvement remains separate from `timing_clean`; neither state is a
-signoff claim.
+`failure`. A successful run also exposes `evidence.stage_evidence` using
+`xylon-timing-stage-evidence/v1`: it names the OpenROAD stage that actually
+completed (`grt`) and the checksummed report, checkpoint, and effective SDC read
+back from that stage. Improvement remains separate from `timing_clean`; neither
+state is a signoff claim.
 
 ## Local timing assistant
 

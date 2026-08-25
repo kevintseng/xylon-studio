@@ -18,6 +18,7 @@ import {
   TIMING_CANDIDATE_FLOW_RECIPE,
   TIMING_FLOW_RECIPE,
 } from './timing-recipe.mjs'
+import { buildTimingStageEvidence } from './stage-evidence.mjs'
 
 export const TIMING_RUN_ID_PATTERN = /^[a-f0-9]{32}$/
 const INPUT_RTL_LIMIT = 2 * 1024 * 1024
@@ -297,7 +298,17 @@ export async function readBaselineArtifacts({ runDir, topModule }) {
   )
   const metrics = parseOrfsTimingReport(report.content)
   delete report.content
-  return { metrics, artifacts: { report, checkpoint, effective_sdc: effectiveSdc } }
+  const artifacts = { report, checkpoint, effective_sdc: effectiveSdc }
+  return {
+    metrics,
+    artifacts,
+    stage_evidence: buildTimingStageEvidence({
+      report,
+      checkpoint,
+      effectiveSdc,
+      metrics,
+    }),
+  }
 }
 
 function assertArtifactMatch(observed, expected, label) {
@@ -329,7 +340,7 @@ export async function verifyTimingBaselineArtifacts({ runDir, baseline }) {
       throw new Error(`TimingArtifactInvalid: current baseline ${field} no longer matches the frozen baseline`)
     }
   }
-  for (const field of ['clock', 'identities', 'metrics', 'artifacts', 'runtime', 'cleanup']) {
+  for (const field of ['clock', 'identities', 'metrics', 'artifacts', 'stage_evidence', 'runtime', 'cleanup']) {
     if (!isDeepStrictEqual(baseline[field], frozen[field])) {
       throw new Error(`TimingArtifactInvalid: current baseline ${field} no longer matches the frozen baseline`)
     }
@@ -413,6 +424,7 @@ export async function persistTimingResult({ runDir, identity, result, runtime, c
     identities: identity.identities,
     metrics: result.metrics,
     artifacts: result.artifacts,
+    stage_evidence: result.stage_evidence,
     runtime,
     cleanup,
   }

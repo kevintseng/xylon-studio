@@ -121,6 +121,7 @@ export function publicTimingState({ manifest, proposal = null, comparison = null
       cleanup_verified: cancelled
         ? cancellationCleanupVerified
         : manifest.cleanup?.verified === true && manifest.cleanup?.cleanup_verified === true,
+      stage_evidence: cancelled ? null : manifest.stage_evidence ?? null,
     } : null,
     proposal: proposal ? {
       proposal_id: proposal.proposal_id,

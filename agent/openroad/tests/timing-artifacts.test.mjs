@@ -140,6 +140,10 @@ test('reads checksummed ORFS baseline artifacts and parses metrics', async (cont
   assert.equal(result.metrics.wns, -0.1)
   assert.match(result.artifacts.report.sha256, /^[a-f0-9]{64}$/)
   assert.match(result.artifacts.checkpoint.sha256, /^[a-f0-9]{64}$/)
+  assert.equal(result.stage_evidence.schema_version, 'xylon-timing-stage-evidence/v1')
+  assert.equal(result.stage_evidence.completed_stage, 'grt')
+  assert.equal(result.stage_evidence.stages[0].state, 'verified')
+  assert.equal(result.stage_evidence.stages[0].outputs.report.sha256, result.artifacts.report.sha256)
 })
 
 test('revalidates baseline inputs, metrics, report, checkpoint, and reported SDC before reuse', async (context) => {
