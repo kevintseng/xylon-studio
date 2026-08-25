@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, rename, symlink } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { mkdir, mkdtemp, readFile, rm, rename, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { createTimingRunWorkspace, persistTimingResult } from '../timing-artifacts.mjs'
+import {
+  createTimingRunWorkspace,
+  persistTimingResult,
+  readBaselineArtifacts,
+} from '../timing-artifacts.mjs'
 import { TIMING_REPORT_RECIPE_SHA256 } from '../timing-contract.mjs'
 import {
   acceptExternalTimingConfirmation,
@@ -12,14 +17,22 @@ import {
   persistTimingRepairProposal,
 } from '../../timing/state-store.mjs'
 
+const RTL = 'module demo(input clk, input d, output reg q); always @(posedge clk) q <= d; endmodule\n'
+const SDC = 'create_clock -name core_clock -period 2.0 [get_ports {clk}]\n'
+const EFFECTIVE_SDC = 'create_clock -name core_clock -period 2.000 [get_ports {clk}]\n'
+const digest = (value) => createHash('sha256').update(value).digest('hex')
+
 const INPUT = {
-  rtl: 'module demo(input clk, input d, output reg q); always @(posedge clk) q <= d; endmodule\n',
-  sdc: 'create_clock -name core_clock -period 2.0 [get_ports {clk}]\n',
-  effective_sdc: 'create_clock -name core_clock -period 2.000 [get_ports {clk}]\n',
+  rtl: RTL,
+  sdc: SDC,
+  effective_sdc: EFFECTIVE_SDC,
   top_module: 'demo',
   platform: 'sky130hd',
   clock: { name: 'core_clock', port: 'clk', period_ns: 2 },
   identities: {
+    rtl_sha256: digest(RTL),
+    original_sdc_sha256: digest(SDC),
+    effective_sdc_sha256: digest(EFFECTIVE_SDC),
     design_platform_sha256: 'a'.repeat(64),
     report_recipe_sha256: TIMING_REPORT_RECIPE_SHA256,
   },
@@ -34,20 +47,30 @@ async function baselineRun(context) {
     validatedInput: INPUT,
     runId: '1'.repeat(32),
   })
+  const prefix = path.join('sky130hd', 'demo', 'base')
+  await mkdir(path.join(staged.runDir, 'reports', prefix), { recursive: true })
+  await mkdir(path.join(staged.runDir, 'results', prefix), { recursive: true })
+  await writeFile(path.join(staged.runDir, 'reports', prefix, '5_global_route.rpt'), [
+    'wns max -0.500',
+    'tns max -2.000',
+    'global route report_checks -path_delay max',
+    '--------------------------------------------------------------------------',
+    'Startpoint: q_reg',
+    'Endpoint: out_reg',
+    'Path Group: core_clock',
+    'Path Type: max',
+    '-0.500 slack (VIOLATED)',
+    '',
+  ].join('\n'))
+  await writeFile(path.join(staged.runDir, 'results', prefix, '5_1_grt.odb'), 'odb')
+  await writeFile(path.join(staged.runDir, 'results', prefix, '5_1_grt.sdc'), 'sdc')
+  const baseline = await readBaselineArtifacts({ runDir: staged.runDir, topModule: 'demo' })
   await persistTimingResult({
     runDir: staged.runDir,
     identity: staged.identity,
     result: {
-      metrics: {
-        violations: true,
-        wns: -0.5,
-        tns: -2.0,
-        worst_path: { startpoint: 'q_reg', endpoint: 'out_reg', slack: -0.5 },
-      },
-      artifacts: {
-        checkpoint: { sha256: 'b'.repeat(64) },
-        report: { sha256: 'c'.repeat(64) },
-      },
+      metrics: baseline.metrics,
+      artifacts: baseline.artifacts,
     },
     runtime: { code: 0 },
     cleanup: { verified: true },
@@ -133,6 +156,84 @@ test('confirmation fails closed without external verifier or with wrong actor an
       }),
     }),
     /confirmation principal and source are not supported/,
+  )
+})
+
+test('proposal, confirmation, and execution each reject mutated baseline evidence', async (context) => {
+  const proposalRun = await baselineRun(context)
+  await writeFile(path.join(proposalRun, 'inputs', 'design.v'), `${RTL}// changed\n`)
+  await assert.rejects(
+    persistTimingRepairProposal(proposalRun, { now: new Date('2026-08-25T00:00:00.000Z') }),
+    /TimingArtifactInvalid/,
+  )
+
+  const confirmationRun = await baselineRun(context)
+  const confirmationProposal = await persistTimingRepairProposal(
+    confirmationRun,
+    { now: new Date('2026-08-25T00:00:00.000Z') },
+  )
+  await writeFile(
+    path.join(confirmationRun, 'results', 'sky130hd', 'demo', 'base', '5_1_grt.odb'),
+    'changed odb',
+  )
+  await assert.rejects(
+    acceptExternalTimingConfirmation(confirmationRun, {}, {
+      now: new Date('2026-08-25T00:01:00.000Z'),
+      verifyExternalReceipt: async () => ({
+        ...CONFIRMED,
+        proposal_id: confirmationProposal.proposal_id,
+      }),
+    }),
+    /TimingArtifactInvalid/,
+  )
+
+  const executionRun = await baselineRun(context)
+  const executionProposal = await persistTimingRepairProposal(
+    executionRun,
+    { now: new Date('2026-08-25T00:00:00.000Z') },
+  )
+  const confirmation = await acceptExternalTimingConfirmation(executionRun, {}, {
+    now: new Date('2026-08-25T00:01:00.000Z'),
+    verifyExternalReceipt: async () => ({
+      ...CONFIRMED,
+      proposal_id: executionProposal.proposal_id,
+    }),
+  })
+  await writeFile(
+    path.join(executionRun, 'reports', 'sky130hd', 'demo', 'base', '5_global_route.rpt'),
+    'changed report',
+  )
+  await assert.rejects(
+    consumeConfirmedTimingRepair(executionRun, {
+      proposalId: executionProposal.proposal_id,
+      confirmationId: confirmation.confirmation_id,
+      now: new Date('2026-08-25T00:02:00.000Z'),
+    }),
+    /TimingArtifactInvalid/,
+  )
+})
+
+test('proposal rejects lockstep RTL, current manifest, and identity tampering', async (context) => {
+  const runDir = await baselineRun(context)
+  const changedRtl = `${RTL}// changed together with mutable state\n`
+  const changedRtlSha256 = digest(changedRtl)
+  const identityPath = path.join(runDir, 'identity.json')
+  const manifestPath = path.join(runDir, 'manifest.json')
+  const identity = JSON.parse(await readFile(identityPath, 'utf8'))
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  await writeFile(path.join(runDir, 'inputs', 'design.v'), changedRtl)
+  await writeFile(identityPath, `${JSON.stringify({
+    ...identity,
+    identities: { ...identity.identities, rtl_sha256: changedRtlSha256 },
+  })}\n`)
+  await writeFile(manifestPath, `${JSON.stringify({
+    ...manifest,
+    identities: { ...manifest.identities, rtl_sha256: changedRtlSha256 },
+  })}\n`)
+
+  await assert.rejects(
+    persistTimingRepairProposal(runDir, { now: new Date('2026-08-25T00:00:00.000Z') }),
+    /current baseline identities no longer matches the frozen baseline/,
   )
 })
 

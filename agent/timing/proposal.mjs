@@ -58,13 +58,33 @@ function requireBaseline(baseline) {
   if (sourceRevision !== null && !SOURCE_REVISION.test(sourceRevision)) {
     throw new Error('TimingProposalInvalid: baseline source revision is invalid')
   }
+  if (!baseline.metrics || typeof baseline.metrics !== 'object') {
+    throw new Error('TimingProposalInvalid: baseline timing metrics are missing')
+  }
+  const snapshotEvidence = {
+    run_id: baseline.run_id,
+    source_revision: sourceRevision,
+    flow_recipe_version: baseline.flow_recipe_version,
+    run_purpose: baseline.run_purpose,
+    platform: baseline.platform,
+    top_module: baseline.top_module,
+    clock: baseline.clock,
+    identities: baseline.identities,
+    metrics: baseline.metrics,
+    artifacts: baseline.artifacts,
+  }
   return {
     baseline_run_id: baseline.run_id,
     source_revision: sourceRevision,
+    rtl_sha256: requireDigest(baseline.identities?.rtl_sha256, 'RTL'),
+    original_sdc_sha256: requireDigest(baseline.identities?.original_sdc_sha256, 'original SDC'),
+    effective_sdc_sha256: requireDigest(baseline.identities?.effective_sdc_sha256, 'effective SDC'),
     design_platform_sha256: requireDigest(baseline.identities?.design_platform_sha256, 'design/platform'),
     report_recipe_sha256: requireDigest(baseline.identities?.report_recipe_sha256, 'report recipe'),
     checkpoint_sha256: requireDigest(baseline.artifacts?.checkpoint?.sha256, 'baseline checkpoint'),
     report_sha256: requireDigest(baseline.artifacts?.report?.sha256, 'baseline report'),
+    metrics_sha256: sha256(canonicalJson(baseline.metrics)),
+    baseline_snapshot_sha256: sha256(canonicalJson(snapshotEvidence)),
   }
 }
 

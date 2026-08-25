@@ -11,6 +11,7 @@ import {
   unlink,
 } from 'node:fs/promises'
 import path from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 
 import { parseOrfsTimingReport, TIMING_REPORT_LIMIT_BYTES } from './timing-report.mjs'
 import {
@@ -22,6 +23,7 @@ export const TIMING_RUN_ID_PATTERN = /^[a-f0-9]{32}$/
 const INPUT_RTL_LIMIT = 2 * 1024 * 1024
 const INPUT_SDC_LIMIT = 256 * 1024
 const ODB_LIMIT = 512 * 1024 * 1024
+const IDENTITY_LIMIT = 1024 * 1024
 
 export function createTimingRunId() {
   return randomUUID().replaceAll('-', '')
@@ -78,6 +80,68 @@ export async function writeJsonAtomic(filePath, payload) {
   } catch (error) {
     await unlink(temporary).catch(() => {})
     throw error
+  }
+}
+
+async function writeJsonFrozen(filePath, payload) {
+  const directory = path.dirname(filePath)
+  const handle = await open(filePath, 'wx', 0o400)
+  let complete = false
+  try {
+    await handle.writeFile(`${JSON.stringify(payload, null, 2)}\n`, 'utf8')
+    await handle.sync()
+    complete = true
+  } finally {
+    await handle.close()
+    if (!complete) await unlink(filePath).catch(() => {})
+  }
+  await fsyncDirectory(directory)
+}
+
+function timingAnchorBoundary(runDir) {
+  const resolvedRunDir = path.resolve(runDir)
+  const runId = path.basename(resolvedRunDir)
+  const runsRoot = path.dirname(resolvedRunDir)
+  if (!TIMING_RUN_ID_PATTERN.test(runId) || path.basename(runsRoot) !== 'runs') {
+    throw new Error('TimingArtifactInvalid: timing run cannot resolve an anchor boundary')
+  }
+  const timingRoot = path.dirname(runsRoot)
+  return {
+    anchorDir: path.join(timingRoot, 'anchors'),
+    anchorPath: path.join(timingRoot, 'anchors', `${runId}.json`),
+    timingRoot,
+  }
+}
+
+async function writeTimingBaselineAnchor(runDir, payload) {
+  const { anchorDir, anchorPath, timingRoot } = timingAnchorBoundary(runDir)
+  await rejectSymlinkSegments(timingRoot, anchorDir)
+  await mkdir(anchorDir, { recursive: true, mode: 0o700 })
+  if (await realpath(anchorDir) !== anchorDir) {
+    throw new Error('TimingArtifactInvalid: timing anchor directory contains an unsupported indirection')
+  }
+  await writeJsonFrozen(anchorPath, payload)
+}
+
+async function readTimingBaselineAnchor(runDir) {
+  const { anchorPath, timingRoot } = timingAnchorBoundary(runDir)
+  let metadata
+  try {
+    await rejectSymlinkSegments(timingRoot, anchorPath)
+    metadata = await lstat(anchorPath)
+  } catch {
+    throw new Error('TimingArtifactInvalid: frozen baseline anchor is unavailable')
+  }
+  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size <= 0 || metadata.size > IDENTITY_LIMIT) {
+    throw new Error('TimingArtifactInvalid: frozen baseline anchor is not a bounded regular file')
+  }
+  if (await realpath(anchorPath) !== anchorPath) {
+    throw new Error('TimingArtifactInvalid: frozen baseline anchor contains an unsupported indirection')
+  }
+  try {
+    return JSON.parse(await readFile(anchorPath, 'utf8'))
+  } catch {
+    throw new Error('TimingArtifactInvalid: frozen baseline anchor is not valid JSON')
   }
 }
 
@@ -236,6 +300,98 @@ export async function readBaselineArtifacts({ runDir, topModule }) {
   return { metrics, artifacts: { report, checkpoint, effective_sdc: effectiveSdc } }
 }
 
+function assertArtifactMatch(observed, expected, label) {
+  if (!expected
+      || observed.path !== expected.path
+      || observed.bytes !== expected.bytes
+      || observed.sha256 !== expected.sha256) {
+    throw new Error(`TimingArtifactInvalid: ${label} no longer matches the persisted baseline`)
+  }
+}
+
+export async function verifyTimingBaselineArtifacts({ runDir, baseline }) {
+  const frozen = await readTimingBaselineAnchor(runDir)
+  if (!frozen || frozen.state !== 'baseline_ready') {
+    throw new Error('TimingArtifactInvalid: a frozen baseline_ready manifest is required')
+  }
+  if (!baseline || baseline.state !== 'baseline_ready') {
+    throw new Error('TimingArtifactInvalid: a completed baseline manifest is required')
+  }
+  for (const field of [
+    'run_id',
+    'source_revision',
+    'flow_recipe_version',
+    'run_purpose',
+    'platform',
+    'top_module',
+  ]) {
+    if (baseline[field] !== frozen[field]) {
+      throw new Error(`TimingArtifactInvalid: current baseline ${field} no longer matches the frozen baseline`)
+    }
+  }
+  for (const field of ['clock', 'identities', 'metrics', 'artifacts', 'runtime', 'cleanup']) {
+    if (!isDeepStrictEqual(baseline[field], frozen[field])) {
+      throw new Error(`TimingArtifactInvalid: current baseline ${field} no longer matches the frozen baseline`)
+    }
+  }
+  const baselineCopyFile = await requiredRegularFile(
+    runDir,
+    'baseline/manifest.json',
+    IDENTITY_LIMIT,
+    { read: true },
+  )
+  let baselineCopy
+  try {
+    baselineCopy = JSON.parse(baselineCopyFile.content)
+  } catch {
+    throw new Error('TimingArtifactInvalid: baseline evidence copy is not valid JSON')
+  }
+  if (!isDeepStrictEqual(baselineCopy, frozen)) {
+    throw new Error('TimingArtifactInvalid: baseline evidence copy no longer matches the frozen anchor')
+  }
+  const identityFile = await requiredRegularFile(runDir, 'identity.json', IDENTITY_LIMIT, { read: true })
+  let identity
+  try {
+    identity = JSON.parse(identityFile.content)
+  } catch {
+    throw new Error('TimingArtifactInvalid: identity.json is not valid JSON')
+  }
+  for (const field of ['run_id', 'source_revision', 'flow_recipe_version', 'run_purpose', 'platform', 'top_module']) {
+    if (identity[field] !== frozen[field]) {
+      throw new Error(`TimingArtifactInvalid: baseline ${field} no longer matches identity.json`)
+    }
+  }
+  if (!isDeepStrictEqual(identity.identities, frozen.identities)) {
+    throw new Error('TimingArtifactInvalid: baseline design identities no longer match identity.json')
+  }
+
+  const inputs = [
+    ['inputs/design.v', INPUT_RTL_LIMIT, frozen.identities?.rtl_sha256, 'RTL'],
+    ['inputs/constraints.sdc.txt', INPUT_SDC_LIMIT, frozen.identities?.original_sdc_sha256, 'SDC'],
+    ['inputs/effective.sdc', INPUT_SDC_LIMIT, frozen.identities?.effective_sdc_sha256, 'effective SDC'],
+  ]
+  for (const [relativePath, maxBytes, expectedSha256, label] of inputs) {
+    const observed = await requiredRegularFile(runDir, relativePath, maxBytes)
+    if (observed.sha256 !== expectedSha256) {
+      throw new Error(`TimingArtifactInvalid: baseline ${label} no longer matches its identity`)
+    }
+  }
+
+  let current
+  try {
+    current = await readBaselineArtifacts({ runDir, topModule: frozen.top_module })
+  } catch (error) {
+    throw new Error(`TimingArtifactInvalid: baseline artifacts cannot be read (${error?.message ?? 'unknown error'})`)
+  }
+  assertArtifactMatch(current.artifacts.report, frozen.artifacts?.report, 'timing report')
+  assertArtifactMatch(current.artifacts.checkpoint, frozen.artifacts?.checkpoint, 'OpenROAD checkpoint')
+  assertArtifactMatch(current.artifacts.effective_sdc, frozen.artifacts?.effective_sdc, 'reported SDC')
+  if (!isDeepStrictEqual(current.metrics, frozen.metrics)) {
+    throw new Error('TimingArtifactInvalid: measured timing metrics no longer match the report')
+  }
+  return frozen
+}
+
 export async function persistTimingResult({ runDir, identity, result, runtime, cleanup }) {
   const isCandidate = identity.run_purpose === 'candidate'
   const timingResult = {
@@ -261,6 +417,9 @@ export async function persistTimingResult({ runDir, identity, result, runtime, c
     cleanup,
   }
   const resultDirectory = isCandidate ? 'candidate' : 'baseline'
+  if (!isCandidate) {
+    await writeTimingBaselineAnchor(runDir, timingResult)
+  }
   await writeJsonAtomic(path.join(runDir, resultDirectory, 'metrics.json'), result.metrics)
   await writeJsonAtomic(path.join(runDir, resultDirectory, 'manifest.json'), timingResult)
   await writeJsonAtomic(path.join(runDir, 'manifest.json'), { ...identity, ...timingResult })

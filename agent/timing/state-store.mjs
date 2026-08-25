@@ -2,7 +2,10 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, rmdir } from 'node:fs/promises'
 import path from 'node:path'
 
-import { writeJsonAtomic } from '../openroad/timing-artifacts.mjs'
+import {
+  verifyTimingBaselineArtifacts,
+  writeJsonAtomic,
+} from '../openroad/timing-artifacts.mjs'
 import { readBoundedRegularText } from '../openroad/timing-files.mjs'
 import {
   assertProposalMatchesBaseline,
@@ -96,7 +99,8 @@ async function transitionTimingConfirmation(runDir, {
         || manifest.proposal?.state !== 'awaiting_confirmation') {
       throw new Error('TimingConfirmationInvalid: manifest and proposal are not awaiting the same confirmation')
     }
-    assertProposalMatchesBaseline(proposal, manifest, { now })
+    const frozenBaseline = await verifyTimingBaselineArtifacts({ runDir, baseline: manifest })
+    assertProposalMatchesBaseline(proposal, frozenBaseline, { now })
     const verified = await resolveVerified({
       proposal_id: proposal.proposal_id,
       binding: proposal.binding,
@@ -129,7 +133,8 @@ export async function persistTimingRepairProposal(runDir, options = {}) {
     const manifestPath = path.join(runDir, 'manifest.json')
     const manifest = await readJson(manifestPath)
     if (manifest.proposal) throw new Error('TimingProposalExists: this baseline already has a proposal')
-    const proposal = buildTimingRepairProposal(manifest, options)
+    const frozenBaseline = await verifyTimingBaselineArtifacts({ runDir, baseline: manifest })
+    const proposal = buildTimingRepairProposal(frozenBaseline, options)
     const proposalPath = path.join(runDir, 'proposal', 'proposal.json')
     await writeJsonAtomic(proposalPath, proposal)
     await writeJsonAtomic(manifestPath, {
@@ -189,7 +194,8 @@ export async function consumeConfirmedTimingRepair(runDir, { proposalId, confirm
     const confirmation = await readJson(confirmationPath)
     const timestamp = now instanceof Date ? now : new Date(now)
     if (!Number.isFinite(timestamp.getTime())) throw new Error('TimingConfirmationInvalid: execution clock is invalid')
-    assertProposalMatchesBaseline(proposal, manifest, { now: timestamp })
+    const frozenBaseline = await verifyTimingBaselineArtifacts({ runDir, baseline: manifest })
+    assertProposalMatchesBaseline(proposal, frozenBaseline, { now: timestamp })
     if (manifest.journey_state !== 'externally_confirmed'
         || proposal.proposal_id !== proposalId
         || confirmation.confirmation_id !== confirmationId

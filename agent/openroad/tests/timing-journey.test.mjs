@@ -4,8 +4,12 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { createTimingRunWorkspace, persistTimingResult } from '../timing-artifacts.mjs'
-import { TIMING_REPORT_RECIPE_SHA256 } from '../timing-contract.mjs'
+import {
+  createTimingRunWorkspace,
+  persistTimingResult,
+  readBaselineArtifacts,
+} from '../timing-artifacts.mjs'
+import { validateTimingInput } from '../timing-contract.mjs'
 import { runTimingDesign } from '../timing-runner.mjs'
 import {
   compareTimingResults,
@@ -18,19 +22,12 @@ import {
 
 const SOURCE_REVISION = 'f'.repeat(40)
 const INPUT = {
-  rtl: 'module demo(input clk, input d, output reg q); always @(posedge clk) q <= d; endmodule\n',
-  sdc: 'create_clock -name core_clock -period 2.0 [get_ports {clk}]\n',
-  effective_sdc: 'create_clock -name core_clock -period 2 [get_ports {clk}]\n',
-  top_module: 'demo',
-  platform: 'sky130hd',
-  clock: { name: 'core_clock', port: 'clk', period_ns: 2 },
-  identities: {
-    rtl_sha256: '1'.repeat(64),
-    original_sdc_sha256: '2'.repeat(64),
-    effective_sdc_sha256: '3'.repeat(64),
-    design_platform_sha256: '4'.repeat(64),
-    report_recipe_sha256: TIMING_REPORT_RECIPE_SHA256,
-  },
+  ...validateTimingInput({
+    rtl: 'module demo(input clk, input d, output reg q); always @(posedge clk) q <= d; endmodule\n',
+    sdc: 'create_clock -name core_clock -period 2.0 [get_ports {clk}]\n',
+    top_module: 'demo',
+    platform: 'sky130hd',
+  }),
   source_revision: SOURCE_REVISION,
   resource_limits: { cpus: 1, memory_gib: 8 },
 }
@@ -39,29 +36,14 @@ async function preparedBaseline(context) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'xylon-timing-journey-'))
   context.after(() => rm(repoRoot, { recursive: true, force: true }))
   const staged = await createTimingRunWorkspace({ repoRoot, validatedInput: INPUT, runId: 'a'.repeat(32) })
-  const validated = (await import('../timing-contract.mjs')).validateTimingInput({
-    platform: INPUT.platform,
-    top_module: INPUT.top_module,
-    rtl: INPUT.rtl,
-    sdc: INPUT.sdc,
-  })
-  staged.identity.identities = validated.identities
+  await writeCandidateArtifacts(staged.runDir, { wns: -0.5, tns: -2 })
+  const baseline = await readBaselineArtifacts({ runDir: staged.runDir, topModule: 'demo' })
   await persistTimingResult({
     runDir: staged.runDir,
     identity: staged.identity,
     result: {
-      metrics: {
-        analysis: 'setup',
-        unit: 'ns',
-        violations: true,
-        wns: -0.5,
-        tns: -2,
-        worst_path: { startpoint: 'q_reg', endpoint: 'out_reg', path_type: 'max', slack: -0.5 },
-      },
-      artifacts: {
-        checkpoint: { sha256: 'b'.repeat(64) },
-        report: { sha256: 'c'.repeat(64) },
-      },
+      metrics: baseline.metrics,
+      artifacts: baseline.artifacts,
     },
     runtime: { code: 0 },
     cleanup: { verified: true, cleanup_verified: true },
@@ -198,7 +180,7 @@ test('comparison reports mixed and regression without claiming improvement', () 
   assert.equal(regressed.outcome, 'regressed')
 })
 
-test('post-confirmation RTL mutation fails closed and consumes the confirmation once', async (context) => {
+test('post-confirmation RTL mutation fails before consuming the confirmation', async (context) => {
   const prepared = await preparedBaseline(context)
   await writeFile(path.join(prepared.runDir, 'inputs', 'design.v'), INPUT.rtl.replace('q <= d', 'q <= ~d'))
   await assert.rejects(
@@ -212,20 +194,11 @@ test('post-confirmation RTL mutation fails closed and consumes the confirmation 
       createRunId: () => 'f'.repeat(32),
       runTiming: realRunnerWithFakeProcess(),
     }),
-    (error) => error.code === 'TimingCandidateInputChanged',
+    /TimingArtifactInvalid: baseline RTL no longer matches its identity/,
   )
   const manifest = JSON.parse(await readFile(path.join(prepared.runDir, 'manifest.json'), 'utf8'))
-  assert.equal(manifest.journey_state, 'candidate_failed')
-  assert.equal(manifest.confirmation.state, 'consumed')
-  await assert.rejects(
-    executeApprovedTimingRepair({
-      repoRoot: prepared.repoRoot,
-      baselineRunId: 'a'.repeat(32),
-      proposalId: prepared.proposal.proposal_id,
-      confirmationId: prepared.confirmation.confirmation_id,
-    }, { now: new Date('2026-08-25T00:03:00.000Z') }),
-    /missing, mismatched, or already used/,
-  )
+  assert.equal(manifest.journey_state, 'externally_confirmed')
+  assert.equal(manifest.confirmation.state, 'available')
 })
 
 test('candidate execution failure directs the user to a fresh baseline', async (context) => {

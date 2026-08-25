@@ -13,8 +13,15 @@ function baseline(overrides = {}) {
     state: 'baseline_ready',
     run_id: 'a'.repeat(32),
     source_revision: 'e'.repeat(40),
+    flow_recipe_version: 'orfs-grt-timing-v1',
+    run_purpose: 'baseline',
     platform: 'sky130hd',
+    top_module: 'demo',
+    clock: { name: 'core_clock', port: 'clk', period_ns: 2 },
     identities: {
+      rtl_sha256: '1'.repeat(64),
+      original_sdc_sha256: '2'.repeat(64),
+      effective_sdc_sha256: '3'.repeat(64),
       design_platform_sha256: 'b'.repeat(64),
       report_recipe_sha256: TIMING_REPORT_RECIPE_SHA256,
     },
@@ -43,7 +50,12 @@ test('builds one expiring physical repair proposal bound to exact baseline evide
   assert.equal(proposal.expires_at, '2026-08-25T00:10:00.000Z')
   assert.equal(proposal.binding.baseline_run_id, current.run_id)
   assert.equal(proposal.binding.source_revision, current.source_revision)
+  assert.equal(proposal.binding.rtl_sha256, current.identities.rtl_sha256)
+  assert.equal(proposal.binding.original_sdc_sha256, current.identities.original_sdc_sha256)
+  assert.equal(proposal.binding.effective_sdc_sha256, current.identities.effective_sdc_sha256)
   assert.equal(proposal.binding.checkpoint_sha256, current.artifacts.checkpoint.sha256)
+  assert.match(proposal.binding.metrics_sha256, /^[a-f0-9]{64}$/)
+  assert.match(proposal.binding.baseline_snapshot_sha256, /^[a-f0-9]{64}$/)
   assert.deepEqual(
     {
       type: proposal.action.type,
@@ -75,6 +87,9 @@ test('proposal identity changes with baseline evidence and rejects tampering', (
   assert.throws(
     () => assertProposalMatchesBaseline(first, baseline({
       identities: {
+        rtl_sha256: '1'.repeat(64),
+        original_sdc_sha256: '2'.repeat(64),
+        effective_sdc_sha256: '3'.repeat(64),
         design_platform_sha256: 'f'.repeat(64),
         report_recipe_sha256: TIMING_REPORT_RECIPE_SHA256,
       },
@@ -91,7 +106,13 @@ test('fails closed for clean, stale-recipe, expired, or unsupported baselines', 
   )
   assert.throws(
     () => buildTimingRepairProposal(baseline({
-      identities: { design_platform_sha256: 'b'.repeat(64), report_recipe_sha256: '0'.repeat(64) },
+      identities: {
+        rtl_sha256: '1'.repeat(64),
+        original_sdc_sha256: '2'.repeat(64),
+        effective_sdc_sha256: '3'.repeat(64),
+        design_platform_sha256: 'b'.repeat(64),
+        report_recipe_sha256: '0'.repeat(64),
+      },
     }), { now }),
     /does not match this Xylon revision/,
   )

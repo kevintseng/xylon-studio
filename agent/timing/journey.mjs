@@ -5,6 +5,7 @@ import {
   createTimingRunId,
   createTimingRunWorkspace,
   TIMING_RUN_ID_PATTERN,
+  verifyTimingBaselineArtifacts,
   writeJsonAtomic,
 } from '../openroad/timing-artifacts.mjs'
 import { validateTimingInput } from '../openroad/timing-contract.mjs'
@@ -191,8 +192,13 @@ export async function executeApprovedTimingRepair({
       }),
     })
     const candidate = candidateRun.timing_result
+    const comparisonBaselineState = await readManifest(path.join(runDir, 'manifest.json'))
+    const comparisonBaseline = await verifyTimingBaselineArtifacts({
+      runDir,
+      baseline: comparisonBaselineState,
+    })
     const comparison = compareTimingResults({
-      baseline: { ...baseline, state: 'baseline_ready' },
+      baseline: comparisonBaseline,
       candidate,
       proposal: consumed.proposal,
       confirmation: consumed.confirmation,

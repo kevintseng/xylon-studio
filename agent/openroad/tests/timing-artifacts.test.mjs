@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -6,19 +7,32 @@ import test from 'node:test'
 
 import {
   createTimingRunWorkspace,
+  persistTimingResult,
   readBaselineArtifacts,
+  verifyTimingBaselineArtifacts,
   writeJsonAtomic,
 } from '../timing-artifacts.mjs'
 import { TIMING_CANDIDATE_FLOW_RECIPE } from '../timing-recipe.mjs'
 
+const RTL = 'module demo(input clk, input d, output reg q); always @(posedge clk) q <= d; endmodule\n'
+const SDC = 'create_clock -name core_clock -period 2.0 [get_ports {clk}]\n'
+const EFFECTIVE_SDC = 'create_clock -name core_clock -period 2.000 [get_ports {clk}]\n'
+const digest = (value) => createHash('sha256').update(value).digest('hex')
+
 const INPUT = {
-  rtl: 'module demo(input clk, input d, output reg q); always @(posedge clk) q <= d; endmodule\n',
-  sdc: 'create_clock -name core_clock -period 2.0 [get_ports {clk}]\n',
-  effective_sdc: 'create_clock -name core_clock -period 2.000 [get_ports {clk}]\n',
+  rtl: RTL,
+  sdc: SDC,
+  effective_sdc: EFFECTIVE_SDC,
   top_module: 'demo',
   platform: 'sky130hd',
   clock: { name: 'core_clock', port: 'clk', period_ns: 2 },
-  identities: { design_sha256: 'a'.repeat(64), report_recipe_sha256: 'b'.repeat(64) },
+  identities: {
+    rtl_sha256: digest(RTL),
+    original_sdc_sha256: digest(SDC),
+    effective_sdc_sha256: digest(EFFECTIVE_SDC),
+    design_platform_sha256: 'a'.repeat(64),
+    report_recipe_sha256: 'b'.repeat(64),
+  },
   resource_limits: { cpus: 1, memory_gib: 8 },
 }
 
@@ -126,6 +140,84 @@ test('reads checksummed ORFS baseline artifacts and parses metrics', async (cont
   assert.equal(result.metrics.wns, -0.1)
   assert.match(result.artifacts.report.sha256, /^[a-f0-9]{64}$/)
   assert.match(result.artifacts.checkpoint.sha256, /^[a-f0-9]{64}$/)
+})
+
+test('revalidates baseline inputs, metrics, report, checkpoint, and reported SDC before reuse', async (context) => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'xylon-timing-artifacts-'))
+  context.after(() => rm(repoRoot, { recursive: true, force: true }))
+  const workspace = await createTimingRunWorkspace({ repoRoot, validatedInput: INPUT, runId: '5'.repeat(32) })
+  const prefix = path.join('sky130hd', 'demo', 'base')
+  const reportPath = path.join(workspace.runDir, 'reports', prefix, '5_global_route.rpt')
+  await mkdir(path.dirname(reportPath), { recursive: true })
+  await mkdir(path.join(workspace.runDir, 'results', prefix), { recursive: true })
+  await writeFile(reportPath, [
+    'wns max -0.100',
+    'tns max -0.500',
+    'global route report_checks -path_delay max',
+    '--------------------------------------------------------------------------',
+    'Startpoint: q_reg',
+    'Endpoint: out_reg',
+    'Path Group: core_clock',
+    'Path Type: max',
+    '-0.100 slack (VIOLATED)',
+    '',
+  ].join('\n'))
+  await writeFile(path.join(workspace.runDir, 'results', prefix, '5_1_grt.odb'), 'odb')
+  await writeFile(path.join(workspace.runDir, 'results', prefix, '5_1_grt.sdc'), 'sdc')
+  const result = await readBaselineArtifacts({ runDir: workspace.runDir, topModule: 'demo' })
+  const baseline = await persistTimingResult({
+    runDir: workspace.runDir,
+    identity: workspace.identity,
+    result,
+    runtime: { code: 0 },
+    cleanup: { verified: true, cleanup_verified: true },
+  })
+
+  assert.deepEqual(
+    await verifyTimingBaselineArtifacts({ runDir: workspace.runDir, baseline }),
+    baseline,
+  )
+  await writeFile(reportPath, 'tampered timing report\n')
+  await assert.rejects(
+    verifyTimingBaselineArtifacts({ runDir: workspace.runDir, baseline }),
+    /TimingArtifactInvalid/,
+  )
+  await writeFile(reportPath, [
+    'wns max -0.100', 'tns max -0.500', 'global route report_checks -path_delay max',
+    '--------------------------------------------------------------------------', 'Startpoint: q_reg', 'Endpoint: out_reg',
+    'Path Group: core_clock', 'Path Type: max', '-0.100 slack (VIOLATED)', '',
+  ].join('\n'))
+  await writeFile(path.join(workspace.runDir, 'inputs', 'design.v'), `${RTL}// changed\n`)
+  await assert.rejects(
+    verifyTimingBaselineArtifacts({ runDir: workspace.runDir, baseline }),
+    /baseline RTL no longer matches its identity/,
+  )
+})
+
+test('anchor publication failure never leaves a false baseline_ready manifest', async (context) => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'xylon-timing-anchor-failure-'))
+  context.after(() => rm(repoRoot, { recursive: true, force: true }))
+  const workspace = await createTimingRunWorkspace({ repoRoot, validatedInput: INPUT, runId: '6'.repeat(32) })
+  const anchorDir = path.join(repoRoot, '.xylon', 'timing', 'anchors')
+  await mkdir(anchorDir, { recursive: true })
+  await writeFile(path.join(anchorDir, `${workspace.runId}.json`), '{}\n')
+
+  await assert.rejects(
+    persistTimingResult({
+      runDir: workspace.runDir,
+      identity: workspace.identity,
+      result: { metrics: {}, artifacts: {} },
+      runtime: { code: 0 },
+      cleanup: { verified: true, cleanup_verified: true },
+    }),
+    /EEXIST/,
+  )
+  const manifest = JSON.parse(await readFile(path.join(workspace.runDir, 'manifest.json'), 'utf8'))
+  assert.equal(manifest.state, 'input_staged')
+  await assert.rejects(
+    readFile(path.join(workspace.runDir, 'baseline', 'manifest.json'), 'utf8'),
+    (error) => error.code === 'ENOENT',
+  )
 })
 
 test('atomic JSON replacement always leaves parseable state', async (context) => {
