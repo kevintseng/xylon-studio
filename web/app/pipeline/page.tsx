@@ -162,6 +162,11 @@ export default function PipelinePage() {
 
   useEffect(() => {
     const controller = new AbortController()
+    // refreshReadiness is async and every setState call inside it happens
+    // after an await; the lint rule can't see past the function reference to
+    // confirm that, so it flags this call site as if it set state
+    // synchronously. It doesn't.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void refreshReadiness({ signal: controller.signal })
     const interval = setInterval(() => {
       void refreshReadiness({ silent: true })
