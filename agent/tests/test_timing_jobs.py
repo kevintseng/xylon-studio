@@ -305,6 +305,51 @@ def test_api_shutdown_interrupts_and_awaits_owned_timing_job(tmp_path, monkeypat
     asyncio.run(_shutdown_scenario(tmp_path, monkeypatch))
 
 
+def test_shutdown_cannot_overwrite_terminal_with_stale_cancelling(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        process = _FakeProcess()
+        bridge_started = asyncio.Event()
+        recorded_states: list[str] = []
+        original_persist = timing_routes._persist_operation
+
+        async def delayed_persist(job, state: str) -> None:
+            recorded_states.append(state)
+            if state == "cancelling":
+                await asyncio.sleep(0.01)
+            await original_persist(job, state)
+
+        async def fake_bridge(command: str, payload: dict, *, job=None) -> dict:
+            if command == "status":
+                return _cancelled_state(payload["run_id"])
+            assert job is not None
+            job.process = process
+            bridge_started.set()
+            await process.signalled.wait()
+            raise HTTPException(status_code=503, detail={
+                "error": "TimingRunInterrupted",
+                "message": "The local application stopped the timing run.",
+                "recovery": "Restart Xylon and review the saved run status.",
+                "run_id": payload["run_id"],
+            })
+
+        monkeypatch.setattr(timing_routes, "TIMING_OPERATION_ROOT", tmp_path / "operations")
+        monkeypatch.setattr(timing_routes, "_require_timing_admission", AsyncMock())
+        monkeypatch.setattr(timing_routes, "_invoke_timing_bridge", fake_bridge)
+        monkeypatch.setattr(timing_routes, "_persist_operation", delayed_persist)
+
+        await timing_routes._start_timing_job("analyze", _payload())
+        await asyncio.wait_for(bridge_started.wait(), timeout=1)
+
+        assert await timing_routes.cancel_active_timing_jobs(shutdown=True) is True
+        operation = json.loads((tmp_path / "operations" / f"{RUN_ID}.json").read_text())
+        assert operation["state"] == "terminal"
+        assert operation["public_state"]["phase"] != "cancelling"
+        assert recorded_states.count("cancelling") == 1
+        assert recorded_states[-1] == "terminal"
+
+    asyncio.run(scenario())
+
+
 def test_cancel_requires_exact_local_browser_origin():
     async def scenario() -> None:
         foreign = _request()

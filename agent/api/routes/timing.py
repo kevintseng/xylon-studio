@@ -489,10 +489,10 @@ async def _run_heavy_timing(command: str, payload: dict) -> dict:
 async def cancel_active_timing_jobs(*, shutdown: bool = False) -> bool:
     jobs = list(_active_timing_jobs().values())
     for job in jobs:
+        await _persist_operation(job, "cancelling")
+        job.cancel_requested.set()
         if job.process is not None:
             _signal_timing_bridge(job, signal.SIGTERM if shutdown else signal.SIGUSR1)
-        job.cancel_requested.set()
-        await _persist_operation(job, "cancelling")
     if not jobs:
         return True
     try:
