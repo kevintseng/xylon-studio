@@ -57,6 +57,63 @@ test('LibreLane Docker shim rejects non-run Docker verbs', async () => {
   }
 })
 
+test('LibreLane Docker shim allows only exact read-only Docker probes', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'xylon-librelane-docker-'))
+  const fakeDocker = path.join(temp, 'docker')
+  const log = path.join(temp, 'args')
+  await writeFile(fakeDocker, `#!/usr/bin/env bash\nprintf '%s\\n' "$*" > ${JSON.stringify(log)}\n`)
+  await chmod(fakeDocker, 0o700)
+  try {
+    await execFileAsync('bash', [dockerShim, '--version'], {
+      env: { ...process.env, XYLON_LIBRELANE_DOCKER_REAL: fakeDocker },
+    })
+    assert.equal(await readFile(log, 'utf8'), '--version\n')
+
+    await execFileAsync('bash', [dockerShim, 'info', '--format', '{{json .}}'], {
+      env: { ...process.env, XYLON_LIBRELANE_DOCKER_REAL: fakeDocker },
+    })
+    assert.equal(await readFile(log, 'utf8'), 'info --format {{json .}}\n')
+
+    await execFileAsync('bash', [dockerShim, 'images', 'pinned-image'], {
+      env: {
+        ...process.env,
+        XYLON_LIBRELANE_DOCKER_REAL: fakeDocker,
+        LIBRELANE_IMAGE_OVERRIDE: 'pinned-image',
+      },
+    })
+    assert.equal(await readFile(log, 'utf8'), 'images pinned-image\n')
+  } finally {
+    await rm(temp, { recursive: true, force: true })
+  }
+})
+
+test('LibreLane Docker shim rejects malformed read-only Docker probes', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'xylon-librelane-docker-'))
+  const fakeDocker = path.join(temp, 'docker')
+  await writeFile(fakeDocker, '#!/usr/bin/env bash\nexit 99\n')
+  await chmod(fakeDocker, 0o700)
+  try {
+    await assert.rejects(
+      execFileAsync('bash', [dockerShim, 'info'], {
+        env: { ...process.env, XYLON_LIBRELANE_DOCKER_REAL: fakeDocker },
+      }),
+      /allows only 'docker info --format \{\{json \.\}\}'/,
+    )
+    await assert.rejects(
+      execFileAsync('bash', [dockerShim, 'images', 'other-image'], {
+        env: {
+          ...process.env,
+          XYLON_LIBRELANE_DOCKER_REAL: fakeDocker,
+          LIBRELANE_IMAGE_OVERRIDE: 'pinned-image',
+        },
+      }),
+      /allows only 'docker images' for the pinned LibreLane image/,
+    )
+  } finally {
+    await rm(temp, { recursive: true, force: true })
+  }
+})
+
 test('LibreLane launcher documents a bounded run and fails before missing resources', async () => {
   const source = await readFile(launcher, 'utf8')
   assert.match(source, /LIBRELANE_IMAGE_OVERRIDE/)

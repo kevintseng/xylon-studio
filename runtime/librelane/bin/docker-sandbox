@@ -4,11 +4,37 @@ set -euo pipefail
 real_docker="${XYLON_LIBRELANE_DOCKER_REAL:?XYLON_LIBRELANE_DOCKER_REAL is required}"
 [[ -x "${real_docker}" ]] || { echo "LibreLane Docker engine is not executable" >&2; exit 2; }
 
-if [[ "${1:-}" != "run" ]]; then
-  echo "LibreLane Docker shim allows only bounded 'run' invocations" >&2
-  exit 2
-fi
-shift
+case "${1:-}" in
+  --version)
+    [[ "$#" -eq 1 ]] || { echo "LibreLane Docker shim rejects unexpected --version arguments" >&2; exit 2; }
+    exec "${real_docker}" --version
+    ;;
+  info)
+    [[ "$#" -eq 3 && "${2:-}" == "--format" && "${3:-}" == "{{json .}}" ]] || {
+      echo "LibreLane Docker shim allows only 'docker info --format {{json .}}'" >&2
+      exit 2
+    }
+    exec "${real_docker}" info --format "{{json .}}"
+    ;;
+  images)
+    [[ -n "${LIBRELANE_IMAGE_OVERRIDE:-}" ]] || {
+      echo "LibreLane Docker shim requires LIBRELANE_IMAGE_OVERRIDE for image probes" >&2
+      exit 2
+    }
+    [[ "$#" -eq 2 && "${2:-}" == "${LIBRELANE_IMAGE_OVERRIDE}" ]] || {
+      echo "LibreLane Docker shim allows only 'docker images' for the pinned LibreLane image" >&2
+      exit 2
+    }
+    exec "${real_docker}" images "${LIBRELANE_IMAGE_OVERRIDE}"
+    ;;
+  run)
+    shift
+    ;;
+  *)
+    echo "LibreLane Docker shim allows only bounded 'run' invocations and exact read-only probes" >&2
+    exit 2
+    ;;
+esac
 
 for argument in "$@"; do
   case "${argument}" in
