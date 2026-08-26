@@ -247,6 +247,24 @@ def test_prepared_run_root_is_accepted_by_the_bounded_executor(tmp_path: Path, m
     assert result["state"] == "succeeded"
 
 
+def test_saved_librelane_run_can_be_reloaded_after_refresh(tmp_path: Path, monkeypatch) -> None:
+    _import_project(tmp_path, monkeypatch)
+    monkeypatch.setattr(routes.openroad, "probe_librelane", lambda: LibreLaneProbe("available", "/opt/librelane/python", "3.0.10", "ok"))
+    monkeypatch.setattr(routes.openroad, "collect_librelane_readiness", lambda _repo_root, probe=None: _ready_payload())
+    with TestClient(app) as client:
+        prepared = client.post(
+            "/api/openroad/librelane-project-runs",
+            json={"run_id": "run_reload", "project_id": "counter-librelane"},
+        )
+        assert prepared.status_code == 201
+        reloaded = client.get("/api/openroad/librelane-project-runs/run_reload")
+
+    assert reloaded.status_code == 200
+    assert reloaded.json()["run_id"] == "run_reload"
+    assert reloaded.json()["state"] in {"prepared", "blocked"}
+
+
+
 def test_execution_requires_explicit_approval(tmp_path: Path, monkeypatch) -> None:
     _import_project(tmp_path, monkeypatch)
     monkeypatch.setattr(
