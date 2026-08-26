@@ -441,6 +441,7 @@ def test_negative_wns_baseline_creates_bound_placement_density_proposal(tmp_path
         "scope": "one_candidate_librelane_rerun",
         "functional_inputs_unchanged": True,
     }
+    assert proposal["rationale"]["hypothesis"] == "提高 placement 利用率可能增加擁塞，但有機會改善最差 setup path 的繞線與延遲。"
     persisted = json.loads(
         (tmp_path / ".xylon" / "timing" / "runs" / "run_proposal" / "manifest.json").read_text()
     )

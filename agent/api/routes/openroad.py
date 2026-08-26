@@ -588,7 +588,7 @@ def _create_librelane_proposal(run_root: Path, payload: dict[str, Any]) -> dict[
         "binding": binding,
         "action": action,
         "rationale": {
-            "hypothesis": "降低 placement 壓力可能改善最差 setup path 的繞線與延遲。",
+            "hypothesis": "提高 placement 利用率可能增加擁塞，但有機會改善最差 setup path 的繞線與延遲。",
             "expected_signal": "candidate 的 native setup WNS 或 TNS 改善。",
             "confidence": "heuristic_requires_measurement",
         },
