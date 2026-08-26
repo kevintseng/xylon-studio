@@ -6,6 +6,7 @@ import {
   executeLibreLaneProjectRun,
   executeLibreLaneRepair,
   getLibreLaneProjectRun,
+  LibreLaneApiError,
   normalizeLibreLaneRun,
   prepareLibreLaneProjectRun,
   resolveLibreLaneProjectApiUrl,
@@ -256,4 +257,29 @@ test('LibreLane project client calls the exact bounded endpoints', async (contex
   assert.deepEqual(calls[1]?.body, { approved: true })
   assert.deepEqual(calls[2]?.body, { strategy: 'density' })
   assert.deepEqual(calls[3]?.body, { approved: true, proposal_id: 'd'.repeat(64) })
+})
+
+test('LibreLane API errors preserve the first blocker for immediate display', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    detail: {
+      error: 'LibreLaneExecutionFailed',
+      message: 'flow failed',
+      recovery: 'Fix the first blocker and retry.',
+      run_id: 'run_failure',
+      blocking_evidence: {
+        stage: 'native_readback',
+        first_error_line: 'PDN-0185 failed before metrics writeback',
+      },
+    },
+  }), { status: 422, headers: { 'Content-Type': 'application/json' } })) as typeof fetch
+  try {
+    await assert.rejects(
+      getLibreLaneProjectRun('http://127.0.0.1:5001/api/openroad', 'run_failure'),
+      (error: unknown) => error instanceof LibreLaneApiError
+        && error.blockingEvidence?.firstError === 'PDN-0185 failed before metrics writeback',
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })

@@ -434,9 +434,11 @@ async function librelaneJsonRequest(url: string, init?: RequestInit): Promise<un
           stage: typeof (detail.blocking_evidence as Record<string, unknown>).stage === 'string'
             ? (detail.blocking_evidence as Record<string, unknown>).stage as string
             : undefined,
-          firstError: typeof (detail.blocking_evidence as Record<string, unknown>).first_error === 'string'
-            ? (detail.blocking_evidence as Record<string, unknown>).first_error as string
-            : null,
+          firstError: typeof (detail.blocking_evidence as Record<string, unknown>).first_error_line === 'string'
+            ? (detail.blocking_evidence as Record<string, unknown>).first_error_line as string
+            : typeof (detail.blocking_evidence as Record<string, unknown>).first_error === 'string'
+              ? (detail.blocking_evidence as Record<string, unknown>).first_error as string
+              : null,
         }
         : null,
     )
