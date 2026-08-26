@@ -53,6 +53,34 @@ function displayError(error: unknown): VisibleError {
   }
 }
 
+function localizeError(error: VisibleError, locale: string, translate: (key: string) => string): VisibleError {
+  if (locale !== 'zh-TW') return error
+  if (error.code === 'ProjectImportInvalid' || error.code === 'LibreLaneProjectPreparationInvalid') {
+    return { code: error.code, message: translate('timing.project.preflightBlocked'), recovery: translate('timing.project.preflightRecovery') }
+  }
+  if (error.code === 'LibreLaneReadinessBlocked' || error.code === 'LibreLaneRepairReadinessBlocked') {
+    return { code: error.code, message: translate('librelane.journey.error.readiness'), recovery: translate('librelane.journey.error.readinessRecovery') }
+  }
+  if (error.code.startsWith('LibreLane')) {
+    return { code: error.code, message: translate('librelane.journey.error.generic'), recovery: translate('librelane.journey.error.genericRecovery') }
+  }
+  return error
+}
+
+function localizeNextAction(action: string, locale: string, translate: (key: string) => string): string {
+  if (locale !== 'zh-TW') return action
+  if (/resolve the (first listed blocker|listed librelane readiness blockers)/i.test(action)) {
+    return translate('librelane.journey.nextAction.readiness')
+  }
+  if (/use the exact saved config handoff/i.test(action)) {
+    return translate('librelane.journey.nextAction.prepared')
+  }
+  if (/start one pinned librelane reference run/i.test(action)) {
+    return translate('librelane.journey.nextAction.start')
+  }
+  return action
+}
+
 function formatNs(value: unknown): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
   return `${value > 0 ? '+' : ''}${value.toFixed(3)} ns`
@@ -119,6 +147,7 @@ export function LibreLaneProjectJourney() {
     && /^[A-Za-z_][A-Za-z0-9_$]*$/.test(clockPort)
     && Number.isFinite(Number(clockPeriod))
     && Number(clockPeriod) > 0
+  const visibleError = (caught: unknown) => localizeError(displayError(caught), locale, t)
   const proposalReady = run?.state === 'proposal_ready' && run.proposal !== null
   const stageStates = useMemo(() => summarizeState(run), [run])
   const baselineWns = metricValue(run?.baselineMetrics ?? null, 'timing__setup__wns')
@@ -213,7 +242,7 @@ export function LibreLaneProjectJourney() {
       }
       setRun(await prepareLibreLaneProjectRun(LIBRELANE_API_URL, { runId, projectId }))
     } catch (caught) {
-      setError(displayError(caught))
+      setError(visibleError(caught))
     } finally {
       setBusy(null)
     }
@@ -226,7 +255,7 @@ export function LibreLaneProjectJourney() {
     try {
       setRun(await executeLibreLaneProjectRun(LIBRELANE_API_URL, run.runId))
     } catch (caught) {
-      const nextError = displayError(caught)
+      const nextError = visibleError(caught)
       setError(nextError)
       setRun((current) => current ? {
         ...current,
@@ -255,7 +284,7 @@ export function LibreLaneProjectJourney() {
         failure: null,
       } : current)
     } catch (caught) {
-      setError(displayError(caught))
+      setError(visibleError(caught))
     } finally {
       setBusy(null)
     }
@@ -268,7 +297,7 @@ export function LibreLaneProjectJourney() {
     try {
       setRun(await executeLibreLaneRepair(LIBRELANE_API_URL, { runId: run.runId, proposalId: run.proposal.proposalId }))
     } catch (caught) {
-      const nextError = displayError(caught)
+      const nextError = visibleError(caught)
       setError(nextError)
       setRun((current) => current ? {
         ...current,
@@ -280,7 +309,7 @@ export function LibreLaneProjectJourney() {
     }
   }
 
-  const nextAction = run?.failure?.recovery ?? run?.nextAction ?? t('librelane.journey.idle')
+  const nextAction = localizeNextAction(run?.failure?.recovery ?? run?.nextAction ?? t('librelane.journey.idle'), locale, t)
   const comparison = run?.comparison
 
   return (

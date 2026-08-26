@@ -37,9 +37,17 @@ test('project import sends bounded files and manifest metadata to the OpenROAD A
 
   assert.equal(observedUrl, 'http://127.0.0.1:5001/api/openroad/projects')
   const payload = observedPayload as unknown as Record<string, unknown>
-  assert.equal(payload.project_id, 'counter-demo')
-  assert.deepEqual(payload.rtl, ['rtl/counter.sv'])
-  assert.deepEqual(payload.clocks, [{ name: 'clk', port: 'clk', period_ns: 10 }])
+  assert.deepEqual(payload, {
+    project_id: 'counter-demo',
+    top: 'counter',
+    platform: 'sky130hd',
+    rtl: ['rtl/counter.sv'],
+    include_dirs: ['include'],
+    sdc: 'constraints/counter.sdc',
+    clocks: [{ name: 'clk', port: 'clk', period_ns: 10 }],
+    macros: [],
+    files: [{ path: 'rtl/counter.sv', content: 'module counter; endmodule' }],
+  })
   assert.equal(result.preflight.state, 'ready')
 })
 

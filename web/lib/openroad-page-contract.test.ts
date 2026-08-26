@@ -50,6 +50,8 @@ test('LibreLane journey exposes the bounded prepare execute proposal and repair 
   assert.match(librelaneJourneySource, /clearProjectSelection\(\)\s+if \(selected\.length/)
   assert.match(librelaneJourneySource, /importGeneration\.current/)
   assert.match(librelaneJourneySource, /disabled=\{busy !== null \|\| importing\}/)
+  assert.match(librelaneJourneySource, /function localizeError/)
+  assert.match(librelaneJourneySource, /LibreLaneReadinessBlocked/)
 })
 
 test('advanced MCP records keep cleanup evidence and an actionable visible alert', () => {
