@@ -333,7 +333,7 @@ def test_execute_plan_preserves_native_readback_when_timing_violations_set_exit_
     run_dir = tmp_path / ".xylon" / "timing" / "runs" / ("c" * 32)
     run_dir.mkdir(parents=True)
     config = run_dir / "inputs" / "librelane" / "config.json"
-    config.parent.mkdir(parents=True)
+    config.parent.mkdir(parents=True, exist_ok=True)
     config.write_text("{}\n", encoding="utf-8")
     launcher = tmp_path / "scripts" / "xylon-librelane"
     launcher.parent.mkdir()
@@ -370,6 +370,48 @@ def test_execute_plan_preserves_native_readback_when_timing_violations_set_exit_
     assert result["flow_status"] == "completed_with_violations"
     assert result["tool_returncode"] == 1
     assert result["readback"]["metrics"]["timing__setup__wns"] == -4.2
+
+
+def test_execute_plan_rejects_stale_native_readback_after_failed_launcher(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".xylon" / "timing" / "runs" / ("d" * 32)
+    stale_run = run_dir / "runs" / "RUN_2026-08-25_00-00-00"
+    (stale_run / "final").mkdir(parents=True)
+    (stale_run / "resolved.json").write_text(
+        '{"PDK":"sky130A","STD_CELL_LIBRARY":"sky130_fd_sc_hd"}\n',
+        encoding="utf-8",
+    )
+    (stale_run / "final" / "metrics.csv").write_text(
+        "Metric,Value\ntiming__setup__wns,-0.1\n", encoding="utf-8"
+    )
+    config = run_dir / "config.json"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text("{}\n", encoding="utf-8")
+    launcher = tmp_path / "scripts" / "xylon-librelane"
+    launcher.parent.mkdir()
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o700)
+    project = adapter.LibreLaneMaterializedProject(
+        request={"platform": "sky130hd", "run_id": "d" * 32, "config_path": "config.json"},
+        top="counter",
+        source_revision="a" * 40,
+        design_path="inputs/design.v",
+        sdc_path="inputs/design.sdc",
+        config_path="config.json",
+    )
+    plan = adapter.build_execution_plan(
+        adapter.LibreLaneProbe("available", "/opt/librelane/python", "3.0.10", "ok"),
+        run_dir=run_dir,
+        project=project,
+    )
+    with pytest.raises(adapter.LibreLaneExecutionError, match="execution failed"):
+        adapter.execute_plan(
+            tmp_path,
+            run_dir=run_dir,
+            plan=plan,
+            runner=lambda command, **kwargs: subprocess.CompletedProcess(
+                command, 1, stdout="", stderr="native flow stopped before readback"
+            ),
+        )
 
 
 def test_execute_plan_rejects_missing_readback_after_launcher_success(tmp_path: Path) -> None:
