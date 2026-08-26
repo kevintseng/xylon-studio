@@ -21,15 +21,16 @@ Xylon 是在本機執行的 OpenROAD 時序助理。提供真實 RTL、SDC、頂
 2. 輸入：「檢查 setup 時序、找出最差路徑，並告訴我怎麼改善。」
 3. Xylon 會先驗證輸入與本機資源，通過後才啟動 OpenROAD。
 4. 查看實測 WNS、TNS 與最差 setup 路徑。
-5. 若有違規，審閱一個確切的 `PLACE_DENSITY 0.60 → 0.65` 提案。
+5. 若有違規，審閱一個確切的 `PL_TARGET_DENSITY 0.60 → 0.65` 提案。
 6. 只有確定要跑 candidate 才確認；完成後比較相同指標的前後差異。
 
 ### LibreLane 執行流程
 
-Xylon v0.6 也提供固定版本的 LibreLane 3.0.10 流程。工作台會先檢查本機
+Xylon v0.6 已建立固定版本的 LibreLane 3.0.10 後端介面。系統會先檢查本機
 ARM64 映像檔、Python、sky130A PDK 與可用資源；任何一項不符合時，只顯示
-第一個阻塞原因，不會啟動 EDA。使用者批准準備好的 run 後，系統才會執行
-一次受控的 LibreLane 工作，並讀回原生 timing 結果，不會從 log 猜測數據。
+第一個阻塞原因，不會啟動 EDA。目前 `/openroad` 工作台仍使用既有的 ORFS
+比較流程；LibreLane API 正在接回同一條使用者流程，沒有讀回原生結果前，
+不會把它說成已完成的 LibreLane 工作。
 
 支援這個流程的功能包括：
 
@@ -37,9 +38,11 @@ ARM64 映像檔、Python、sky130A PDK 與可用資源；任何一項不符合�
 
 - **Setup 時序助理：**支援 OpenAI API 格式的本機模型只負責理解一句需求。受限工具會
   驗證 RTL／SDC，執行內建 `sky130hd` 流程，讀回 WNS、TNS 與最差 setup 路徑；
-  量到違規時，準備一個 `PLACE_DENSITY 0.60 → 0.65` candidate。
-- **由使用者決定是否改善：**Xylon 顯示有期限的確切提案。使用者必須在本機頁面
-  輸入提案代碼，接著明確要求執行，Xylon 才能跑一次候選改善，並以相同指標比較前後結果。
+  量到負的 native setup WNS 時，LibreLane API 會準備一個有期限、綁定雜湊的
+  `PL_TARGET_DENSITY 0.60 → 0.65` candidate 提案。
+- **由使用者決定是否改善：**API 要求使用者提交完全相同的提案 ID 並明確批准；
+  系統會再次檢查資源與輸入是否被改動，才建立隔離的 candidate，最後用 native
+  指標比較前後結果。
 - **RTL 驗證：**固定版本的 Verilator lint、選用的獨立 C++ 自我檢查、實測覆蓋率、
   選用的 Yosys 結構統計，以及經雜湊檢查、可精確重跑的證據包。
 - **進階 OpenROAD MCP 紀錄：**獨立的受限 MCP 執行環境仍可用於診斷，但不可拿來

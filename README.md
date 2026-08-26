@@ -23,7 +23,7 @@ live at `/openroad` and `/pipeline` after `scripts/xylon start`.
 2. Ask: “Check setup timing, identify the worst path, and tell me how to improve it.”
 3. Xylon validates the input and local resources before starting OpenROAD.
 4. Review measured WNS, TNS, and the worst setup path.
-5. If a violation exists, review one exact `PLACE_DENSITY 0.60 → 0.65` proposal.
+5. If a violation exists, review one exact `PL_TARGET_DENSITY 0.60 → 0.65` proposal.
 6. Confirm it only if you want a candidate run, then compare the same metrics
    before and after.
 
@@ -44,7 +44,7 @@ The supported paths behind that journey are:
 - **Setup-timing assistant:** a local OpenAI-compatible model interprets one
   sentence. Deterministic tools validate RTL/SDC, run the built-in `sky130hd`
   recipe, read WNS, TNS, and the worst setup path, then prepare one bounded
-  `PLACE_DENSITY 0.60 → 0.65` candidate when violations exist.
+  `PL_TARGET_DENSITY 0.60 → 0.65` candidate when violations exist.
 - **Human-controlled improvement:** the LibreLane API can create one expiring,
   hash-bound `PL_TARGET_DENSITY 0.60 → 0.65` proposal from a negative native WNS
   baseline. The exact proposal ID and explicit approval are required before an
