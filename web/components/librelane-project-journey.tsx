@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState, type ChangeEvent } from 'react'
 
 import { useI18n } from '@/lib/i18n'
+import { localizeLibreLaneNextAction } from '@/lib/librelane-next-action'
 import {
   createLibreLaneRepairProposal,
   executeLibreLaneProjectRun,
@@ -65,20 +66,6 @@ function localizeError(error: VisibleError, locale: string, translate: (key: str
     return { code: error.code, message: translate('librelane.journey.error.generic'), recovery: translate('librelane.journey.error.genericRecovery') }
   }
   return error
-}
-
-function localizeNextAction(action: string, locale: string, translate: (key: string) => string): string {
-  if (locale !== 'zh-TW') return action
-  if (/resolve the (first listed blocker|listed librelane readiness blockers)/i.test(action)) {
-    return translate('librelane.journey.nextAction.readiness')
-  }
-  if (/use the exact saved config handoff/i.test(action)) {
-    return translate('librelane.journey.nextAction.prepared')
-  }
-  if (/start one pinned librelane reference run/i.test(action)) {
-    return translate('librelane.journey.nextAction.start')
-  }
-  return action
 }
 
 function formatNs(value: unknown): string {
@@ -309,7 +296,7 @@ export function LibreLaneProjectJourney() {
     }
   }
 
-  const nextAction = localizeNextAction(run?.failure?.recovery ?? run?.nextAction ?? t('librelane.journey.idle'), locale, t)
+  const nextAction = localizeLibreLaneNextAction(run?.failure?.recovery ?? run?.nextAction ?? t('librelane.journey.idle'), locale, t)
   const comparison = run?.comparison
 
   return (
