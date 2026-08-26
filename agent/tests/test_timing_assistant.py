@@ -7,6 +7,7 @@ import threading
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import AsyncMock
+from urllib.error import URLError
 
 import pytest
 from fastapi import HTTPException
@@ -359,6 +360,28 @@ def test_local_provider_rejects_a_second_in_flight_request(monkeypatch):
             provider._complete_json_sync(system_prompt="{}", user_message="{}")
     finally:
         provider_module._PROVIDER_SLOT.release()
+
+
+def test_local_provider_releases_slot_after_provider_failure(monkeypatch):
+    provider = OpenAICompatibleProvider(
+        ProviderConfig(
+            protocol="openai-compatible",
+            model="sandbox-model",
+            base_url="http://127.0.0.1:11434/v1",
+        )
+    )
+
+    class FailingOpener:
+        def open(self, *_args, **_kwargs):
+            raise URLError("offline")
+
+    monkeypatch.setattr(provider_module, "build_opener", lambda *_args, **_kwargs: FailingOpener())
+
+    with pytest.raises(ProviderError, match="could not be reached"):
+        provider._complete_json_sync(system_prompt="{}", user_message="{}")
+
+    assert provider_module._PROVIDER_SLOT.acquire(blocking=False)
+    provider_module._PROVIDER_SLOT.release()
 
 
 def test_assistant_request_is_bounded_before_provider_or_eda(monkeypatch):
