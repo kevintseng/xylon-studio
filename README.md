@@ -43,11 +43,14 @@ The supported paths behind that journey are:
 - **Setup-timing assistant:** a local OpenAI-compatible model interprets one
   sentence. Deterministic tools validate RTL/SDC, run the built-in `sky130hd`
   recipe, read WNS, TNS, and the worst setup path, then prepare one bounded
-  `PL_TARGET_DENSITY 0.60 → 0.65` candidate when violations exist.
+  one allowlisted candidate when violations exist: either
+  `PL_TARGET_DENSITY 0.60 → 0.65` or `RUN_POST_CTS_RESIZER_TIMING false → true`.
 - **Human-controlled improvement:** the LibreLane API can create one expiring,
-  hash-bound `PL_TARGET_DENSITY 0.60 → 0.65` proposal from a negative native WNS
-  baseline. The exact proposal ID and explicit approval are required before an
-  isolated candidate rerun; the response compares native metrics before and after.
+  hash-bound proposal from a negative native WNS baseline. The only supported
+  strategies are placement density (`PL_TARGET_DENSITY 0.60 → 0.65`) and CTS
+  timing repair (`RUN_POST_CTS_RESIZER_TIMING false → true`). The exact proposal
+  ID and explicit approval are required before an isolated candidate rerun; the
+  response compares native metrics before and after.
 - **RTL verification:** pinned Verilator lint, optional independent C++
   self-check, measured coverage, optional Yosys structure, and a checksummed
   exact-rerun bundle.
@@ -136,7 +139,7 @@ scripts/xylon stop
 | --- | --- |
 | Bounded RTL/SDC setup timing on built-in `sky130hd` | Arbitrary PDK or library import |
 | WNS, TNS, worst max path, and cleanup readback | Hold, multi-corner, power, area, DRC/LVS, or signoff claims |
-| One evidence-bound placement-density candidate API path | General autonomous OpenROAD command execution |
+| Two evidence-bound LibreLane repair candidates (density or CTS timing repair) | General autonomous OpenROAD command execution |
 | Loopback OpenAI-compatible intent model | Remote BYOK endpoints or stored API keys |
 | Local confirmation gesture bound to one proposal | Authenticated user identity or approval audit |
 

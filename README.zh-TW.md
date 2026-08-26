@@ -124,7 +124,7 @@ scripts/xylon stop
 | --- | --- |
 | 以內建 `sky130hd` 執行受限 RTL／SDC setup 時序分析 | 任意 PDK 或元件庫匯入 |
 | 讀回 WNS、TNS、最差 max path 與清理結果 | Hold、多 corner、功耗、面積、DRC／LVS 或 signoff 判定 |
-| 一個綁定證據的 placement-density candidate | 通用的 OpenROAD 自主指令操作 |
+| 兩種綁定證據的 LibreLane candidate（密度或 CTS 時序修正） | 通用的 OpenROAD 自主指令操作 |
 | 支援 OpenAI API 格式的本機模型理解需求 | 遠端 BYOK 服務網址或保存 API key |
 | 綁定單一提案的本機確認動作 | 經身分驗證的使用者或審核紀錄 |
 
