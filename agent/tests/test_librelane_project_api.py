@@ -280,6 +280,37 @@ def test_execution_requires_explicit_approval(tmp_path: Path, monkeypatch) -> No
     assert response.json()["detail"]["error"] == "LibreLaneApprovalRequired"
 
 
+def test_malformed_prepared_manifest_fails_closed_without_internal_error(tmp_path: Path, monkeypatch) -> None:
+    _import_project(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        routes.openroad,
+        "probe_librelane",
+        lambda: LibreLaneProbe("available", "/opt/librelane/python", "3.0.10", "ok"),
+    )
+    monkeypatch.setattr(routes.openroad, "collect_librelane_readiness", lambda _repo_root, probe=None: _ready_payload())
+    with TestClient(app) as client:
+        prepared = client.post(
+            "/api/openroad/librelane-project-runs",
+            json={"run_id": "run_bad_manifest", "project_id": "counter-librelane"},
+        )
+        assert prepared.status_code == 201
+    manifest_path = tmp_path / ".xylon" / "timing" / "runs" / "run_bad_manifest" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["manifest"]["rtl"] = []
+    manifest_path.write_text(json.dumps(manifest) + "\n")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/openroad/librelane-project-runs/run_bad_manifest/execute",
+            json={"approved": True},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["error"] == "LibreLaneExecutionFailed"
+    persisted = json.loads(manifest_path.read_text())
+    assert persisted["state"] == "failed"
+
+
 def test_approved_execution_persists_native_result_and_state(tmp_path: Path, monkeypatch) -> None:
     imported = _import_project(tmp_path, monkeypatch)
     monkeypatch.setattr(

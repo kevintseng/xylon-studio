@@ -11,8 +11,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from typing import Any, Literal, Mapping
+from typing import Any, Literal
 
 ADAPTER_SCHEMA_VERSION = "xylon-openroad-execution-adapter/v1"
 PINNED_ORFS_IMAGE = "openroad/orfs@sha256:305f9bb42a714a37d287f9755e6f9eae1f82007a54f488a87cd663caf9900422"

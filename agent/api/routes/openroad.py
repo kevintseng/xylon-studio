@@ -465,7 +465,7 @@ def _build_prepared_librelane_project(run_root: Path, payload: dict[str, Any]) -
         raise ProjectStoreError("prepared LibreLane run has no design manifest")
     rtl = manifest.get("rtl")
     include_dirs = manifest.get("include_dirs")
-    if not isinstance(rtl, list) or not all(isinstance(path, str) for path in rtl):
+    if not isinstance(rtl, list) or not rtl or not all(isinstance(path, str) for path in rtl):
         raise ProjectStoreError("prepared LibreLane run has invalid RTL paths")
     if not isinstance(include_dirs, list) or not all(isinstance(path, str) for path in include_dirs):
         raise ProjectStoreError("prepared LibreLane run has invalid include paths")
