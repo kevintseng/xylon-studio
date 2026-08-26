@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 const pageSource = readFileSync(new URL('../app/openroad/page.tsx', import.meta.url), 'utf8')
+const librelaneJourneySource = readFileSync(new URL('../components/librelane-project-journey.tsx', import.meta.url), 'utf8')
 const timingSource = readFileSync(new URL('../components/timing-workbench.tsx', import.meta.url), 'utf8')
 const resourceDashboardSource = readFileSync(new URL('../components/resource-status-dashboard.tsx', import.meta.url), 'utf8')
 const agentSource = readFileSync(new URL('../components/timing-agent-panel.tsx', import.meta.url), 'utf8')
@@ -16,14 +17,37 @@ function sourceSection(source: string, start: string, end: string): string {
   return source.slice(startIndex, endIndex)
 }
 
-test('OpenROAD page makes the timing journey primary and MCP records explicitly secondary', () => {
+test('OpenROAD page makes the LibreLane project journey primary and keeps older fixtures secondary', () => {
   assert.match(pageSource, /<LibreLaneReadinessCard \/>/)
+  assert.match(pageSource, /<LibreLaneProjectJourney \/>/)
+  assert.match(pageSource, /<details/)
+  assert.match(pageSource, /openroad\.reference\.summary/)
   assert.match(pageSource, /<TimingWorkbench \/>/)
   assert.match(pageSource, /<OpenroadActivityLog \/>/)
   assert.match(activitySource, /<details/)
   assert.match(activitySource, /openroad\.activity\.separate/)
   assert.match(activitySource, /if \(!open\) return/)
   assert.match(activitySource, /onToggle=/)
+})
+
+test('LibreLane journey exposes the bounded prepare execute proposal and repair flow', () => {
+  for (const required of [
+    'importProjectBundle\\(OPENROAD_API_URL',
+    'prepareLibreLaneProjectRun\\(LIBRELANE_API_URL',
+    'executeLibreLaneProjectRun\\(LIBRELANE_API_URL',
+    'createLibreLaneRepairProposal\\(LIBRELANE_API_URL',
+    'executeLibreLaneRepair\\(LIBRELANE_API_URL',
+    'PL_TARGET_DENSITY',
+    'librelane\\.journey\\.stage\\.\\$\\{key\\}\\.label',
+    'librelane\\.journey\\.action\\.runCandidate',
+    'timing\\.project\\.detected',
+    'timing\\.failure\\.details',
+  ]) {
+    assert.match(librelaneJourneySource, new RegExp(required))
+  }
+  assert.doesNotMatch(librelaneJourneySource, /PLACE_DENSITY 0\.60 → 0\.65/)
+  assert.match(librelaneJourneySource, /setFiles\(\[\]\)/)
+  assert.match(librelaneJourneySource, /clearProjectSelection\(\)\s+if \(selected\.length/)
 })
 
 test('advanced MCP records keep cleanup evidence and an actionable visible alert', () => {

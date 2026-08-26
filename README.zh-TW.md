@@ -17,7 +17,7 @@ Xylon 是在本機執行的 OpenROAD 時序助理。提供真實 RTL、SDC、頂
 
 ## 第一個實用流程
 
-1. 選擇「匯入多檔專案」一次載入受限的 RTL／include／SDC 檔案，或載入內建 `sky130hd` 時序範例。Xylon 只會把選取的文字檔保存到自己的本機工作區。
+1. 選擇「匯入多檔專案」一次載入受限的 RTL／include／SDC 檔案。Xylon 只會把選取的文字檔保存到自己的本機工作區；舊版內建範例收在下方收起的參考畫面裡。
 2. 輸入：「檢查 setup 時序、找出最差路徑，並告訴我怎麼改善。」
 3. Xylon 會先驗證輸入與本機資源，通過後才啟動 OpenROAD。
 4. 查看實測 WNS、TNS 與最差 setup 路徑。
@@ -26,11 +26,10 @@ Xylon 是在本機執行的 OpenROAD 時序助理。提供真實 RTL、SDC、頂
 
 ### LibreLane 執行流程
 
-Xylon v0.6 已建立固定版本的 LibreLane 3.0.10 後端介面。系統會先檢查本機
-ARM64 映像檔、Python、sky130A PDK 與可用資源；任何一項不符合時，只顯示
-第一個阻塞原因，不會啟動 EDA。目前 `/openroad` 工作台仍使用既有的 ORFS
-比較流程；LibreLane API 正在接回同一條使用者流程，沒有讀回原生結果前，
-不會把它說成已完成的 LibreLane 工作。
+Xylon v0.6 已建立固定版本的 LibreLane 3.0.10 後端介面。`/openroad` 的主要
+使用流程現在直接使用這個 API：先檢查本機 ARM64 映像檔、Python、sky130A PDK
+與可用資源；任何一項不符合時，只顯示第一個阻塞原因，不會啟動 EDA。下方
+收起的舊版 ORFS 畫面只作比較，不代表 LibreLane 的結果。
 
 支援這個流程的功能包括：
 

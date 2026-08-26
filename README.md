@@ -19,7 +19,7 @@ live at `/openroad` and `/pipeline` after `scripts/xylon start`.
 
 ## The first useful journey
 
-1. Choose **Import a project bundle** to select a bounded multi-file RTL/SDC bundle, or load the included `sky130hd` timing example. Xylon stores only the selected text files inside its local workspace.
+1. Choose **Import a project bundle** to select a bounded multi-file RTL/SDC bundle. Xylon stores only the selected text files inside its local workspace; the older built-in example is available inside the collapsed reference fixture.
 2. Ask: “Check setup timing, identify the worst path, and tell me how to improve it.”
 3. Xylon validates the input and local resources before starting OpenROAD.
 4. Review measured WNS, TNS, and the worst setup path.
@@ -30,12 +30,11 @@ live at `/openroad` and `/pipeline` after `scripts/xylon start`.
 ### LibreLane execution boundary
 
 Xylon v0.6 exposes a pinned LibreLane 3.0.10 backend path for an imported project.
-It checks the local ARM64 image, Python environment, sky130A PDK, and available
-resources before any EDA subprocess. When the gate is blocked, it records the first
-blocker and gives one next action. The current `/openroad` workbench still uses the
-existing ORFS comparison journey; the LibreLane API path is being wired into that
-same user journey and is not presented as a completed native run until its readback
-is available.
+The primary `/openroad` journey now uses that API: it checks the local ARM64 image,
+Python environment, sky130A PDK, and available resources before any EDA subprocess.
+When the gate is blocked, it records the first blocker and gives one next action.
+The older ORFS screen is collapsed below as a comparison fixture; it is not the
+LibreLane result path.
 
 The supported paths behind that journey are:
 
