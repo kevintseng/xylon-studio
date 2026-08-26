@@ -576,10 +576,10 @@ export function LibreLaneProjectJourney() {
                       <p className="text-sm font-semibold text-slate-100">{t('librelane.journey.decisionTitle')}</p>
                       <p className="mt-1 text-xs leading-5 text-slate-400">{t('librelane.journey.decisionDetail')}</p>
                       <div className="mt-3 flex flex-wrap gap-2">
-                        <button type="button" onClick={() => void decide('accept_candidate')} disabled={busy !== null} className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-emerald-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200 disabled:cursor-wait disabled:opacity-60">
+                        <button type="button" onClick={() => void decide('accept_candidate')} disabled={busy !== null} className={`rounded-xl px-3 py-2 text-xs font-semibold transition focus:outline-none disabled:cursor-wait disabled:opacity-60 ${comparison.setupWns.improved ? 'bg-emerald-500 text-slate-950 hover:bg-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-200' : 'border border-slate-600 text-slate-200 hover:border-cyan-400/40 hover:bg-cyan-500/10 focus-visible:ring-2 focus-visible:ring-cyan-300'}`}>
                           {busy === 'decision' ? t('librelane.journey.deciding') : t('librelane.journey.keepCandidate')}
                         </button>
-                        <button type="button" onClick={() => void decide('keep_baseline')} disabled={busy !== null} className="rounded-xl border border-slate-600 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:border-cyan-400/40 hover:bg-cyan-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 disabled:cursor-wait disabled:opacity-60">
+                        <button type="button" onClick={() => void decide('keep_baseline')} disabled={busy !== null} className={`rounded-xl px-3 py-2 text-xs font-semibold transition focus:outline-none disabled:cursor-wait disabled:opacity-60 ${comparison.setupWns.improved ? 'border border-slate-600 text-slate-200 hover:border-cyan-400/40 hover:bg-cyan-500/10 focus-visible:ring-2 focus-visible:ring-cyan-300' : 'bg-emerald-500 text-slate-950 hover:bg-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-200'}`}>
                           {t('librelane.journey.keepBaseline')}
                         </button>
                       </div>

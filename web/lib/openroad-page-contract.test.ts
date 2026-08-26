@@ -105,6 +105,8 @@ test('LibreLane comparison tells the truth when candidate WNS regresses', () => 
   assert.match(librelaneJourneySource, /comparison\.setupWns\.delta < -0\.001/)
   assert.match(librelaneJourneySource, /t\('timing\.outcome\.regressed'\)/)
   assert.match(librelaneJourneySource, /t\('timing\.outcome\.unchanged'\)/)
+  assert.match(librelaneJourneySource, /comparison\.setupWns\.improved \? 'bg-emerald-500 text-slate-950 hover:bg-emerald-400/)
+  assert.match(librelaneJourneySource, /comparison\.setupWns\.improved \? 'border border-slate-600 text-slate-200/)
 })
 
 test('advanced MCP records keep cleanup evidence and an actionable visible alert', () => {
