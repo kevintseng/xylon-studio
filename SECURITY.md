@@ -53,6 +53,9 @@ Implemented controls:
   Pipeline and timing work share one heavy-EDA slot. The candidate remains bound
   to exact baseline artifacts, expires, is one-use, and cannot run until the
   exact local Web origin records the displayed proposal code.
+- LibreLane repair proposals are allowlisted to two bounded changes only:
+  `PL_TARGET_DENSITY` to `0.65` or `RUN_POST_CTS_RESIZER_TIMING` from `false` to
+  `true`. No arbitrary Tcl, command, image, or flow parameter is accepted.
 - The timing assistant accepts only literal loopback OpenAI-compatible model
   endpoints (`127.0.0.1` or `::1`) with no API key and no redirect. Requests and
   responses are bounded and timed out. The model receives the user sentence and
