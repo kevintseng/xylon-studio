@@ -827,10 +827,26 @@ def _stage_selected_librelane_execution(
     decision, selected_config_path, selected_config_sha256, selected_inputs_path, selected_inputs_sha256 = (
         _load_selected_librelane_decision(run_root, payload)
     )
-    execution_id = str(decision.get("proposal_id", "selected"))[:16]
-    selected_parent = run_root / "selected" / execution_id
+    proposal_id = decision.get("proposal_id")
+    if (
+        not isinstance(proposal_id, str)
+        or len(proposal_id) != 64
+        or any(character not in "0123456789abcdef" for character in proposal_id)
+    ):
+        raise ProjectStoreError("selected LibreLane proposal identity is invalid")
+    execution_id = proposal_id[:16]
+    selected_base = run_root / "selected"
+    if selected_base.exists() and selected_base.is_symlink():
+        raise ProjectStoreError("selected LibreLane rerun directory is unavailable")
+    selected_base_resolved = selected_base.resolve()
+    run_root_resolved = run_root.resolve()
+    if not selected_base_resolved.is_relative_to(run_root_resolved):
+        raise ProjectStoreError("selected LibreLane rerun directory is outside the owned run root")
+    selected_parent = selected_base / execution_id
     if selected_parent.exists() and selected_parent.is_symlink():
         raise ProjectStoreError("selected LibreLane rerun directory is unavailable")
+    if not selected_parent.resolve().is_relative_to(selected_base_resolved):
+        raise ProjectStoreError("selected LibreLane rerun directory is outside the owned run root")
     selected_parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     existing_attempts = {
         candidate.name

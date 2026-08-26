@@ -1050,6 +1050,36 @@ def test_selected_decision_execution_rejects_selected_config_hash_drift(tmp_path
     assert "selected LibreLane config hash no longer matches the saved decision" in response.json()["detail"]["message"]
 
 
+def test_selected_decision_execution_rejects_tampered_proposal_identity_before_staging(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    run_id = "run_selected_traversal"
+    _persist_decision(tmp_path, monkeypatch, run_id=run_id, decision="accept_candidate")
+    run_root = tmp_path / ".xylon" / "timing" / "runs" / run_id
+    manifest_path = run_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["decision"]["proposal_id"] = "../../../escapex"
+    manifest_path.write_text(json.dumps(manifest) + "\n")
+    monkeypatch.setattr(routes.openroad, "collect_librelane_readiness", lambda _repo_root, probe=None: _ready_payload())
+    monkeypatch.setattr(
+        routes.openroad,
+        "execute_plan",
+        lambda *_args, **_kwargs: pytest.fail("tampered proposal identity must fail before execute_plan"),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/openroad/librelane-project-runs/{run_id}/selected-execute",
+            json={"approved": True},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["error"] == "LibreLaneSelectedExecutionInvalid"
+    assert "proposal identity is invalid" in response.json()["detail"]["message"]
+    assert not (tmp_path / "escapex").exists()
+
+
 def test_selected_decision_execution_failure_keeps_attempt_evidence_and_retry_uses_new_attempt(
     tmp_path: Path,
     monkeypatch,
