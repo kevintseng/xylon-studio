@@ -24,6 +24,24 @@ interface AgentError {
   recovery: string
 }
 
+function localizedAgentError(error: LibreLaneApiError, locale: 'en' | 'zh-TW', t: (key: string) => string): AgentError {
+  if (locale === 'en') return { code: error.code, message: error.message, recovery: error.recovery }
+  const known = new Set([
+    'TimingAgentProviderUnavailable',
+    'TimingAgentProviderRedirectRejected',
+    'TimingAgentProviderRateLimited',
+    'TimingAgentProviderResponseInvalid',
+    'LibreLaneAgentIntentInvalid',
+    'LibreLaneAgentStateInvalid',
+  ])
+  const key = known.has(error.code) ? error.code : 'generic'
+  return {
+    code: error.code,
+    message: t(`librelane.agent.error.${key}.message`),
+    recovery: t(`librelane.agent.error.${key}.recovery`),
+  }
+}
+
 export function LibreLaneAgentPanel({ projectRunId, disabled, onResult }: LibreLaneAgentPanelProps) {
   const { locale, t } = useI18n()
   const [baseUrl, setBaseUrl] = useState('http://127.0.0.1:11434/v1')
@@ -39,7 +57,7 @@ export function LibreLaneAgentPanel({ projectRunId, disabled, onResult }: LibreL
 
   const captureError = (caught: unknown) => {
     if (caught instanceof LibreLaneApiError) {
-      setError({ code: caught.code, message: caught.message, recovery: caught.recovery })
+      setError(localizedAgentError(caught, locale, t))
       return
     }
     setError({
