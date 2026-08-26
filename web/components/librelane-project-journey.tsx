@@ -64,6 +64,9 @@ function formatProposalChange(parameter: string, from: number, to: number, local
 
 function localizeError(error: VisibleError, locale: string, translate: (key: string) => string): VisibleError {
   if (locale !== 'zh-TW') return error
+  if (error.code === 'ProjectImportInvalid' && /project_id already exists/i.test(error.message)) {
+    return { code: error.code, message: translate('timing.project.idConflict'), recovery: translate('timing.project.idConflictRecovery') }
+  }
   if (error.code === 'ProjectImportInvalid' || error.code === 'LibreLaneProjectPreparationInvalid') {
     return { code: error.code, message: translate('timing.project.preflightBlocked'), recovery: translate('timing.project.preflightRecovery') }
   }
