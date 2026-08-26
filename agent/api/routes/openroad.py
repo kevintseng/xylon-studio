@@ -828,9 +828,21 @@ def _stage_selected_librelane_execution(
         _load_selected_librelane_decision(run_root, payload)
     )
     execution_id = str(decision.get("proposal_id", "selected"))[:16]
-    selected_root = run_root / "selected" / execution_id
-    if selected_root.exists() or selected_root.is_symlink():
-        raise ProjectStoreError("selected LibreLane rerun directory already exists")
+    selected_parent = run_root / "selected" / execution_id
+    if selected_parent.exists() and selected_parent.is_symlink():
+        raise ProjectStoreError("selected LibreLane rerun directory is unavailable")
+    selected_parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    existing_attempts = {
+        candidate.name
+        for candidate in selected_parent.iterdir()
+        if candidate.is_dir() and not candidate.is_symlink()
+    }
+    attempt_number = 1
+    while True:
+        selected_root = selected_parent / f"attempt-{attempt_number:04d}"
+        if selected_root.name not in existing_attempts and not selected_root.exists() and not selected_root.is_symlink():
+            break
+        attempt_number += 1
     selected_inputs_root = (run_root / selected_inputs_path).resolve()
     selected_config = (run_root / selected_config_path).resolve()
     manifest = payload.get("manifest")
@@ -869,6 +881,7 @@ def _stage_selected_librelane_execution(
             "selected_config_sha256": selected_config_sha256,
             "selected_inputs_path": selected_inputs_path,
             "selected_inputs_sha256": selected_inputs_sha256,
+            "attempt": f"attempt-{attempt_number:04d}",
         }
         return selected_root, project, provenance
     except Exception:

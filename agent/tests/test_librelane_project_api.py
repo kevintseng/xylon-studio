@@ -1009,6 +1009,8 @@ def test_selected_decision_execution_stages_owned_run_and_persists_result(
     assert selected_execution["decision_choice"] == decision
     assert selected_execution["result"]["readback"]["metrics"]["timing__setup__wns"] == 0.08
     selected_root = run_root / selected_execution["root"]
+    assert selected_execution["attempt"] == "attempt-0001"
+    assert selected_root.parent.name == decided["decision"]["proposal_id"][:16]
     assert executed_roots == [selected_root]
     staged_config = json.loads((selected_root / "config.json").read_text())
     assert staged_config["PL_TARGET_DENSITY"] == expected_density
@@ -1046,3 +1048,60 @@ def test_selected_decision_execution_rejects_selected_config_hash_drift(tmp_path
     assert response.status_code == 422
     assert response.json()["detail"]["error"] == "LibreLaneSelectedExecutionInvalid"
     assert "selected LibreLane config hash no longer matches the saved decision" in response.json()["detail"]["message"]
+
+
+def test_selected_decision_execution_failure_keeps_attempt_evidence_and_retry_uses_new_attempt(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    run_id = "run_selected_retry"
+    _persist_decision(tmp_path, monkeypatch, run_id=run_id, decision="accept_candidate")
+    run_root = tmp_path / ".xylon" / "timing" / "runs" / run_id
+    monkeypatch.setattr(routes.openroad, "collect_librelane_readiness", lambda _repo_root, probe=None: _ready_payload())
+    executed_roots: list[Path] = []
+    attempts = 0
+
+    def flaky_selected_execute(_repo_root, *, run_dir, plan):
+        nonlocal attempts
+        attempts += 1
+        executed_roots.append(run_dir)
+        if attempts == 1:
+            raise adapter.LibreLaneExecutionError(
+                "selected rerun failed once",
+                evidence={"stage": "native_readback", "tool_returncode": 1},
+            )
+        return {
+            "state": "succeeded",
+            "run_id": run_id,
+            "readback": {
+                "resolved": {"PDK": "sky130A", "STD_CELL_LIBRARY": "sky130_fd_sc_hd"},
+                "metrics": {"timing__setup__wns": 0.03, "timing__setup__tns": 0.0},
+                "paths": {"resolved": "resolved.json", "metrics": "metrics.csv"},
+            },
+        }
+
+    monkeypatch.setattr(routes.openroad, "execute_plan", flaky_selected_execute)
+    with TestClient(app) as client:
+        first = client.post(
+            f"/api/openroad/librelane-project-runs/{run_id}/selected-execute",
+            json={"approved": True},
+        )
+        second = client.post(
+            f"/api/openroad/librelane-project-runs/{run_id}/selected-execute",
+            json={"approved": True},
+        )
+
+    assert first.status_code == 422
+    assert second.status_code == 200
+    assert len(executed_roots) == 2
+    first_root, second_root = executed_roots
+    assert first_root != second_root
+    assert first_root.name == "attempt-0001"
+    assert second_root.name == "attempt-0002"
+    assert first_root.is_dir()
+    assert second_root.is_dir()
+    result = second.json()
+    assert result["selected_execution"]["state"] == "succeeded"
+    assert result["selected_execution"]["attempt"] == "attempt-0002"
+    persisted = json.loads((run_root / "manifest.json").read_text())
+    assert persisted["selected_execution"]["root"].endswith("/attempt-0002")
