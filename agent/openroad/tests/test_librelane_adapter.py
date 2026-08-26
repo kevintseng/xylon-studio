@@ -404,7 +404,7 @@ def test_execute_plan_rejects_stale_native_readback_after_failed_launcher(tmp_pa
         run_dir=run_dir,
         project=project,
     )
-    with pytest.raises(adapter.LibreLaneExecutionError, match="execution failed"):
+    with pytest.raises(adapter.LibreLaneExecutionError, match="execution failed") as caught:
         adapter.execute_plan(
             tmp_path,
             run_dir=run_dir,
@@ -413,6 +413,10 @@ def test_execute_plan_rejects_stale_native_readback_after_failed_launcher(tmp_pa
                 command, 1, stdout="", stderr="native flow stopped before readback"
             ),
         )
+    assert caught.value.evidence["stage"] == "native_readback"
+    assert caught.value.evidence["first_error"] == "native flow stopped before readback"
+    assert caught.value.evidence["tool_returncode"] == 1
+    assert caught.value.evidence["config_identity_sha256"] == plan.config_identity_sha256
 
 
 def test_execute_plan_rejects_missing_readback_after_launcher_success(tmp_path: Path) -> None:
@@ -437,13 +441,17 @@ def test_execute_plan_rejects_missing_readback_after_launcher_success(tmp_path: 
         run_dir=run_dir,
         project=project,
     )
-    with pytest.raises(adapter.LibreLaneExecutionError, match="native metrics"):
+    with pytest.raises(adapter.LibreLaneExecutionError, match="native metrics") as caught:
         adapter.execute_plan(
             tmp_path,
             run_dir=run_dir,
             plan=plan,
             runner=lambda command, **kwargs: subprocess.CompletedProcess(command, 0, stdout="", stderr=""),
         )
+    assert caught.value.evidence["stage"] == "native_readback"
+    assert caught.value.evidence["first_error"] == (
+        "LibreLane resolved config and native metrics artifacts are missing"
+    )
 
 
 def test_readback_requires_native_librelane_outputs(tmp_path: Path) -> None:

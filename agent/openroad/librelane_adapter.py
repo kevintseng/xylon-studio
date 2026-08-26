@@ -43,6 +43,10 @@ class LibreLaneAdapterError(ValueError):
 class LibreLaneExecutionError(LibreLaneAdapterError):
     """Raised when the fixed LibreLane launcher cannot produce verified output."""
 
+    def __init__(self, message: str, *, evidence: dict[str, object] | None = None) -> None:
+        super().__init__(message)
+        self.evidence = evidence or None
+
 
 @dataclass(frozen=True)
 class LibreLaneProbe:
@@ -364,6 +368,43 @@ def _bounded_output(value: str | None) -> str:
     return text if len(text) <= MAX_EXECUTION_OUTPUT_BYTES else text[:MAX_EXECUTION_OUTPUT_BYTES] + "…"
 
 
+def _first_error_line(stderr: str, stdout: str) -> str | None:
+    for stream in (stderr, stdout):
+        for line in stream.splitlines():
+            normalized = " ".join(line.split())
+            if normalized:
+                return normalized[:512]
+    return None
+
+
+def _failure_evidence(
+    *,
+    stage: str,
+    plan: LibreLaneExecutionPlan,
+    stdout: str = "",
+    stderr: str = "",
+    returncode: int | None = None,
+    error: object | None = None,
+) -> dict[str, object]:
+    evidence: dict[str, object] = {
+        "stage": stage,
+        "config_identity_sha256": plan.config_identity_sha256,
+        "plan_identity_sha256": plan.plan_identity_sha256,
+    }
+    first_error = _first_error_line(stderr, stdout) or (_bounded(error) if error is not None else None)
+    if first_error:
+        evidence["first_error_line"] = first_error
+    if stdout:
+        evidence["stdout_excerpt"] = _bounded(stdout)
+    if stderr:
+        evidence["stderr_excerpt"] = _bounded(stderr)
+    if returncode is not None:
+        evidence["tool_returncode"] = returncode
+    if error is not None:
+        evidence["adapter_error"] = _bounded(error)
+    return evidence
+
+
 def execute_plan(
     repo_root: Path,
     *,
@@ -400,9 +441,15 @@ def execute_plan(
             timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired as error:
-        raise LibreLaneExecutionError("LibreLane execution exceeded the bounded timeout") from error
+        raise LibreLaneExecutionError(
+            "LibreLane execution exceeded the bounded timeout",
+            evidence=_failure_evidence(stage="execution_timeout", plan=plan, error=error),
+        ) from error
     except OSError as error:
-        raise LibreLaneExecutionError("LibreLane launcher could not start") from error
+        raise LibreLaneExecutionError(
+            "LibreLane launcher could not start",
+            evidence=_failure_evidence(stage="launcher_start", plan=plan, error=error),
+        ) from error
     stdout = _bounded_output(result.stdout)
     stderr = _bounded_output(result.stderr)
     try:
@@ -418,8 +465,28 @@ def execute_plan(
     except LibreLaneAdapterError as error:
         if result.returncode != 0:
             detail = _bounded(stderr or stdout or "the pinned LibreLane launcher returned a failure")
-            raise LibreLaneExecutionError(f"LibreLane execution failed: {detail}") from error
-        raise LibreLaneExecutionError(str(error)) from error
+            raise LibreLaneExecutionError(
+                f"LibreLane execution failed: {detail}",
+                evidence=_failure_evidence(
+                    stage="native_readback",
+                    plan=plan,
+                    stdout=stdout,
+                    stderr=stderr,
+                    returncode=result.returncode,
+                    error=error,
+                ),
+            ) from error
+        raise LibreLaneExecutionError(
+            str(error),
+            evidence=_failure_evidence(
+                stage="native_readback",
+                plan=plan,
+                stdout=stdout,
+                stderr=stderr,
+                returncode=result.returncode,
+                error=error,
+            ),
+        ) from error
     flow_status = "completed" if result.returncode == 0 else "completed_with_violations"
     return {
         "state": "succeeded",
