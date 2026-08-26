@@ -289,9 +289,13 @@ function normalizeArtifacts(value: unknown, label: string): LibreLaneArtifacts |
   const input = value as Record<string, unknown>
   const artifact = (key: string): LibreLaneArtifactRef => {
     const item = record(input[key], `${label}.${key}`)
+    const sha256 = string(item.sha256, `${label}.${key}.sha256`)
+    if (!/^[a-f0-9]{64}$/i.test(sha256)) {
+      throw new Error(`${label}.${key}.sha256 must be a 64-character hexadecimal digest`)
+    }
     return {
       path: string(item.path, `${label}.${key}.path`),
-      sha256: string(item.sha256, `${label}.${key}.sha256`),
+      sha256: sha256.toLowerCase(),
       bytes: number(item.bytes, `${label}.${key}.bytes`),
     }
   }

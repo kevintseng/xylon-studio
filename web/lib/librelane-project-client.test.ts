@@ -100,6 +100,25 @@ test('LibreLane run normalization rejects an invented terminal state', () => {
   assert.throws(() => normalizeLibreLaneRun({ state: 'complete', run_id: 'run_12345678', next_action: 'x' }), /state is invalid/)
 })
 
+test('LibreLane run normalization rejects malformed artifact digests', () => {
+  assert.throws(() => normalizeLibreLaneRun({
+    run_id: 'run_12345678',
+    state: 'comparison_ready',
+    next_action: 'Review the measured comparison.',
+    failure: null,
+    execution: {
+      result: {
+        readback: {
+          artifacts: {
+            resolved: { path: 'runs/RUN_BASE/resolved.json', sha256: 'not-a-digest', bytes: 128 },
+            metrics: { path: 'runs/RUN_BASE/metrics.csv', sha256: 'e'.repeat(64), bytes: 256 },
+          },
+        },
+      },
+    },
+  }), /sha256 must be a 64-character hexadecimal digest/)
+})
+
 test('LibreLane run normalization accepts the bounded CTS timing proposal', () => {
   const run = normalizeLibreLaneRun({
     run_id: 'run_cts1234', state: 'proposal_ready', next_action: 'Review CTS proposal.', failure: null,
