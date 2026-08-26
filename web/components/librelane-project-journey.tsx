@@ -167,8 +167,16 @@ export function LibreLaneProjectJourney() {
           if (savedRun.failure) setError(visibleError(savedRun.failure))
         }
       })
-      .catch(() => {
+      .catch((caught) => {
+        if (cancelled) return
         window.localStorage.removeItem(LIBRELANE_RUN_STORAGE_KEY)
+        const parsed = displayError(caught)
+        setError({
+          code: 'LibreLaneSavedRunStale',
+          message: t('librelane.journey.error.savedRunStale'),
+          recovery: t('librelane.journey.error.savedRunStaleRecovery'),
+          ...(parsed.blockingEvidence ? { blockingEvidence: parsed.blockingEvidence } : {}),
+        })
       })
     return () => { cancelled = true }
   }, [t, visibleError])

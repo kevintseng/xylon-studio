@@ -68,6 +68,8 @@ test('LibreLane journey exposes the bounded prepare execute proposal and repair 
   assert.match(librelaneJourneySource, /caught instanceof LibreLaneApiError/)
   assert.match(librelaneJourneySource, /caught\.runId/)
   assert.match(librelaneJourneySource, /savedRun\.manifest\.top/)
+  assert.match(librelaneJourneySource, /LibreLaneSavedRunStale/)
+  assert.match(librelaneJourneySource, /librelane\.journey\.error\.savedRunStaleRecovery/)
   assert.match(librelaneJourneySource, /run\.state === 'comparison_ready' && run\.proposal && !run\.decision/)
   assert.match(librelaneJourneySource, /<LibreLaneAgentPanel/)
   assert.match(librelaneAgentSource, /runLibreLaneAssistant/)
