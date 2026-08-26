@@ -110,6 +110,18 @@ test('LibreLane normalization rejects malformed bounded repair and comparison pa
   }), /must be a boolean/)
 })
 
+test('LibreLane normalization rejects an invalid proposal timestamp', () => {
+  assert.throws(() => normalizeLibreLaneRun({
+    run_id: 'run_12345678', state: 'proposal_ready', next_action: 'Review proposal.', failure: null,
+    manifest: null, preparation: null, runtime_identity: null, execution: null, comparison: null, candidate: null,
+    proposal: {
+      proposal_id: 'c'.repeat(64), state: 'awaiting_approval', created_at: 'not-a-date', expires_at: '2026-08-26T09:15:00Z',
+      binding: { baseline_wns: -0.2 }, action: { parameter: 'PL_TARGET_DENSITY', from: 0.6, to: 0.65, scope: 'one_candidate_librelane_rerun' },
+      rationale: { hypothesis: 'x', expected_signal: 'y', tradeoffs: ['z'] },
+    },
+  }), /valid timestamp/)
+})
+
 test('LibreLane project client calls the exact bounded endpoints', async (context) => {
   const originalFetch = globalThis.fetch
   const calls: Array<{ url: string; method: string; body: unknown }> = []

@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState, type ChangeEvent } from 'react'
+import { useMemo, useRef, useState, type ChangeEvent } from 'react'
 
 import { useI18n } from '@/lib/i18n'
 import {
@@ -106,7 +106,9 @@ export function LibreLaneProjectJourney() {
   const [fileState, setFileState] = useState<string | null>(null)
   const [run, setRun] = useState<LibreLaneRun | null>(null)
   const [busy, setBusy] = useState<BusyAction>(null)
+  const [importing, setImporting] = useState(false)
   const [error, setError] = useState<VisibleError | null>(null)
+  const importGeneration = useRef(0)
 
   const inputReady = files.length > 0
     && rtlPaths.length > 0
@@ -142,6 +144,7 @@ export function LibreLaneProjectJourney() {
   }
 
   const importProjectFiles = async (event: ChangeEvent<HTMLInputElement>) => {
+    const generation = ++importGeneration.current
     const selected = Array.from(event.target.files ?? [])
     event.target.value = ''
     clearProjectSelection()
@@ -154,28 +157,34 @@ export function LibreLaneProjectJourney() {
       setError({ code: 'ProjectImportInvalid', message: t('timing.project.fileSize'), recovery: t('timing.project.fileRecovery') })
       return
     }
-    const nextFiles = await Promise.all(selected.map(async (file) => ({
-      path: file.webkitRelativePath || file.name,
-      content: await file.text(),
-    })))
-    const nextRtlPaths = nextFiles.filter(({ path }) => /\.(v|sv)$/i.test(path)).map(({ path }) => path)
-    const sdcFiles = nextFiles.filter(({ path }) => /\.sdc$/i.test(path))
-    const nextIncludeDirs = Array.from(new Set(nextFiles
-      .filter(({ path }) => /\.(vh|svh)$/i.test(path))
-      .map(({ path }) => path.split('/').slice(0, -1).join('/'))
-      .filter(Boolean)))
-    const sdcText = sdcFiles[0]?.content ?? ''
-    const detectedClock = /create_clock\s+-name\s+([A-Za-z_][A-Za-z0-9_$]*)\s+-period\s+([0-9]+(?:\.[0-9]+)?)\s+\[get_ports\s+(?:\{([A-Za-z_][A-Za-z0-9_$]*)\}|([A-Za-z_][A-Za-z0-9_$]*))\]/i.exec(sdcText)
+    setImporting(true)
+    try {
+      const nextFiles = await Promise.all(selected.map(async (file) => ({
+        path: file.webkitRelativePath || file.name,
+        content: await file.text(),
+      })))
+      if (generation !== importGeneration.current) return
+      const nextRtlPaths = nextFiles.filter(({ path }) => /\.(v|sv)$/i.test(path)).map(({ path }) => path)
+      const sdcFiles = nextFiles.filter(({ path }) => /\.sdc$/i.test(path))
+      const nextIncludeDirs = Array.from(new Set(nextFiles
+        .filter(({ path }) => /\.(vh|svh)$/i.test(path))
+        .map(({ path }) => path.split('/').slice(0, -1).join('/'))
+        .filter(Boolean)))
+      const sdcText = sdcFiles[0]?.content ?? ''
+      const detectedClock = /create_clock\s+-name\s+([A-Za-z_][A-Za-z0-9_$]*)\s+-period\s+([0-9]+(?:\.[0-9]+)?)\s+\[get_ports\s+(?:\{([A-Za-z_][A-Za-z0-9_$]*)\}|([A-Za-z_][A-Za-z0-9_$]*))\]/i.exec(sdcText)
 
-    setFiles(nextFiles)
-    setRtlPaths(nextRtlPaths)
-    setIncludeDirs(nextIncludeDirs)
-    setSdcPath(sdcFiles[0]?.path ?? '')
-    setFileState(t('timing.project.filesReady'))
-    if (detectedClock) {
-      setClockName(detectedClock[1])
-      setClockPeriod(detectedClock[2])
-      setClockPort(detectedClock[3] ?? detectedClock[4])
+      setFiles(nextFiles)
+      setRtlPaths(nextRtlPaths)
+      setIncludeDirs(nextIncludeDirs)
+      setSdcPath(sdcFiles[0]?.path ?? '')
+      setFileState(t('timing.project.filesReady'))
+      if (detectedClock) {
+        setClockName(detectedClock[1])
+        setClockPeriod(detectedClock[2])
+        setClockPort(detectedClock[3] ?? detectedClock[4])
+      }
+    } finally {
+      if (generation === importGeneration.current) setImporting(false)
     }
   }
 
@@ -313,7 +322,7 @@ export function LibreLaneProjectJourney() {
                   <p className="text-sm font-semibold text-slate-100">{t('timing.project.files')}</p>
                   <p className="mt-1 text-xs leading-5 text-slate-500">{t('librelane.journey.filesHelp')}</p>
                 </div>
-                <input type="file" multiple accept=".v,.sv,.vh,.svh,.sdc,text/plain" disabled={busy !== null} onChange={(event) => void importProjectFiles(event)} className="block max-w-full text-xs text-slate-400 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-xs file:text-slate-100" />
+                <input type="file" multiple accept=".v,.sv,.vh,.svh,.sdc,text/plain" disabled={busy !== null || importing} aria-busy={importing} onChange={(event) => void importProjectFiles(event)} className="block max-w-full text-xs text-slate-400 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-xs file:text-slate-100" />
               </div>
               {fileState ? <p role="status" className="mt-3 text-xs text-cyan-100">{fileState}</p> : null}
               <div className="mt-4 grid gap-3 sm:grid-cols-3">

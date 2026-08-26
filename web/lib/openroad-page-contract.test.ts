@@ -48,6 +48,8 @@ test('LibreLane journey exposes the bounded prepare execute proposal and repair 
   assert.doesNotMatch(librelaneJourneySource, /PLACE_DENSITY 0\.60 → 0\.65/)
   assert.match(librelaneJourneySource, /setFiles\(\[\]\)/)
   assert.match(librelaneJourneySource, /clearProjectSelection\(\)\s+if \(selected\.length/)
+  assert.match(librelaneJourneySource, /importGeneration\.current/)
+  assert.match(librelaneJourneySource, /disabled=\{busy !== null \|\| importing\}/)
 })
 
 test('advanced MCP records keep cleanup evidence and an actionable visible alert', () => {

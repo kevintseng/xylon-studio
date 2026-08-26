@@ -130,6 +130,12 @@ function boolean(value: unknown, label: string): boolean {
   return value
 }
 
+function timestamp(value: unknown, label: string): string {
+  const parsed = string(value, label)
+  if (!Number.isFinite(Date.parse(parsed))) throw new Error(`${label} must be a valid timestamp`)
+  return parsed
+}
+
 function stringArray(value: unknown, label: string): string[] {
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
     throw new Error(`${label} must be a string array`)
@@ -166,8 +172,8 @@ function proposal(value: unknown): LibreLaneBoundedProposal {
   return {
     proposalId: string(input.proposal_id, 'proposal.proposal_id'),
     state: proposalState,
-    createdAt: string(input.created_at, 'proposal.created_at'),
-    expiresAt: string(input.expires_at, 'proposal.expires_at'),
+    createdAt: timestamp(input.created_at, 'proposal.created_at'),
+    expiresAt: timestamp(input.expires_at, 'proposal.expires_at'),
     baselineWns: number(binding.baseline_wns, 'proposal.binding.baseline_wns'),
     action: {
       parameter,
