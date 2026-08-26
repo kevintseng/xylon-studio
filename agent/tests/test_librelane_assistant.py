@@ -116,6 +116,23 @@ def test_librelane_assistant_passes_only_allowlisted_repair_strategy():
     assert result["state"] == "repair_proposal_ready"
 
 
+def test_public_librelane_readback_is_compact_and_excludes_unneeded_metrics():
+    public = assistant_routes._public_librelane_run({
+        "run_id": "run_12345678",
+        "state": "comparison_ready",
+        "next_action": "Review comparison.",
+        "comparison": {
+            "schema_version": "xylon-librelane-comparison/v1",
+            "setup_wns": {"baseline": -1.0, "candidate": -0.5, "delta": 0.5, "improved": True, "timing_met": False},
+            "baseline_metrics": {"timing__setup__wns": -1.0, "timing__setup__tns": -2.0, "design__core__area": 1234},
+            "candidate_metrics": {"timing__setup__wns": -0.5, "timing__setup__tns": -1.0, "power__total": 4},
+        },
+    })
+    assert public["comparison"]["baseline_metrics"] == {"timing__setup__wns": -1.0, "timing__setup__tns": -2.0}
+    assert "design__core__area" not in public["comparison"]["baseline_metrics"]
+    assert "power__total" not in public["comparison"]["candidate_metrics"]
+
+
 def test_librelane_assistant_unsupported_request_does_not_call_tools():
     calls: list[str] = []
     result = asyncio.run(

@@ -88,18 +88,58 @@ TIMING_TOOLS = TimingSemanticTools(
 
 def _public_librelane_run(payload: dict) -> dict:
     """Return state/evidence summaries without re-emitting project source files."""
+    failure = payload.get("failure")
+    public_failure = None
+    if isinstance(failure, dict):
+        public_failure = {
+            key: failure.get(key)
+            for key in ("code", "message", "recovery")
+            if isinstance(failure.get(key), str)
+        }
     observed = {
         "run_id": payload.get("run_id"),
         "project_id": payload.get("project_id"),
         "state": payload.get("state"),
         "source_revision": payload.get("source_revision"),
         "next_action": payload.get("next_action"),
-        "failure": payload.get("failure"),
+        "failure": public_failure,
     }
-    for key in ("readiness", "comparison", "decision"):
-        value = payload.get(key)
-        if isinstance(value, dict):
-            observed[key] = value
+    readiness = payload.get("readiness")
+    if isinstance(readiness, dict):
+        observed["readiness"] = {
+            key: readiness.get(key)
+            for key in ("state", "blockers", "checks", "next_action")
+            if key in readiness
+        }
+    comparison = payload.get("comparison")
+    if isinstance(comparison, dict):
+        setup_wns = comparison.get("setup_wns")
+        baseline_metrics = comparison.get("baseline_metrics")
+        candidate_metrics = comparison.get("candidate_metrics")
+        observed["comparison"] = {
+            "schema_version": comparison.get("schema_version"),
+            "setup_wns": setup_wns,
+            "baseline_metrics": {
+                metric: baseline_metrics[metric]
+                for metric in ("timing__setup__wns", "timing__setup__tns")
+                if isinstance(baseline_metrics, dict) and metric in baseline_metrics
+            },
+            "candidate_metrics": {
+                metric: candidate_metrics[metric]
+                for metric in ("timing__setup__wns", "timing__setup__tns")
+                if isinstance(candidate_metrics, dict) and metric in candidate_metrics
+            },
+        }
+    decision = payload.get("decision")
+    if isinstance(decision, dict):
+        observed["decision"] = {
+            key: decision.get(key)
+            for key in (
+                "state", "choice", "proposal_id", "source_revision",
+                "selected_config_path", "selected_config_sha256", "selected_inputs_sha256",
+            )
+            if key in decision
+        }
     for key in ("execution", "candidate", "selected_execution"):
         value = payload.get(key)
         if not isinstance(value, dict):
