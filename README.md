@@ -27,7 +27,8 @@ live at `/openroad` and `/pipeline` after `scripts/xylon start`.
 6. Confirm it only if you want a candidate run, then compare the same metrics
    before and after.
 7. Choose **Keep candidate** or **Keep baseline**. Xylon records that choice and
-   the selected configuration; it never silently replaces the baseline.
+   the selected configuration; it never silently replaces the baseline. Use the
+   explicit selected-rerun action when you want to measure that choice again.
 
 ### LibreLane execution boundary
 
@@ -54,7 +55,7 @@ The supported paths behind that journey are:
   ID and explicit approval are required before an isolated candidate rerun; the
   response compares native metrics before and after. After comparison, the user
   explicitly keeps the candidate or keeps the baseline; the selected config and
-  both config hashes are persisted for the next requested run.
+  both config hashes are persisted for the next explicitly approved rerun.
 - **RTL verification:** pinned Verilator lint, optional independent C++
   self-check, measured coverage, optional Yosys structure, and a checksummed
   exact-rerun bundle.
@@ -113,7 +114,7 @@ OpenROAD. Xylon does not download or silently select a model.
 6. Explicitly ask the assistant to execute the confirmed change, or use the
    dedicated candidate button. Status and explanation requests never start EDA.
 7. After the comparison, choose **Keep candidate** or **Keep baseline** so the
-   next run has an explicit configuration choice.
+   next explicitly approved rerun has an explicit configuration choice.
 
 ## When OpenROAD cannot start
 
@@ -164,7 +165,7 @@ or inconclusive evidence never becomes a completed stage.
   candidate endpoints.
 - `/api/openroad/librelane-project-runs/*` — pinned LibreLane preparation,
   approved baseline execution, bounded repair proposal, candidate comparison,
-  and explicit keep-candidate/keep-baseline decision.
+  explicit keep-candidate/keep-baseline decision, and selected-configuration rerun.
 - `POST /api/openroad/projects` and `POST /api/timing/project-runs` — bounded
   project import, revalidation, and timing start from a local project ID.
 - `GET /api/openroad/snapshot` — read-only MCP execution record.

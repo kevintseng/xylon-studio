@@ -9,6 +9,7 @@ import {
   createLibreLaneRepairProposal,
   executeLibreLaneProjectRun,
   executeLibreLaneRepair,
+  executeLibreLaneSelected,
   getLibreLaneProjectRun,
   LibreLaneApiError,
   recordLibreLaneDecision,
@@ -32,7 +33,7 @@ const OPENROAD_API_URL = resolveOpenroadApiUrl(process.env.NEXT_PUBLIC_API_URL)
 const LIBRELANE_API_URL = resolveLibreLaneProjectApiUrl(process.env.NEXT_PUBLIC_API_URL)
 const LIBRELANE_RUN_STORAGE_KEY = 'xylon.librelane.active-run'
 
-type BusyAction = 'prepare' | 'baseline' | 'proposal' | 'repair' | 'decision' | null
+type BusyAction = 'prepare' | 'baseline' | 'proposal' | 'repair' | 'decision' | 'selected' | null
 type StageState = 'pending' | 'active' | 'complete' | 'blocked'
 
 type VisibleError = LibreLaneVisibleError
@@ -389,6 +390,28 @@ export function LibreLaneProjectJourney() {
     }
   }
 
+  const executeSelected = async () => {
+    if (!run || !run.decision || busy || (run.state !== 'candidate_accepted' && run.state !== 'baseline_kept')) return
+    if (run.selectedExecution?.state === 'running' || run.selectedExecution?.state === 'succeeded') return
+    setBusy('selected')
+    setError(null)
+    try {
+      persistRun(await executeLibreLaneSelected(LIBRELANE_API_URL, run.runId))
+    } catch (caught) {
+      const nextError = visibleError(caught)
+      setError(nextError)
+      if (!await reloadRunAfterApiError(caught)) {
+        setRun((current) => current ? {
+          ...current,
+          failure: { code: nextError.code, message: nextError.message, recovery: nextError.recovery },
+          nextAction: nextError.recovery,
+        } : current)
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const nextAction = localizeLibreLaneNextAction(run?.failure?.recovery ?? run?.nextAction ?? t('librelane.journey.idle'), locale, t)
   const comparison = run?.comparison
   const comparisonMessage = comparison?.setupWns.timingMet
@@ -476,6 +499,11 @@ export function LibreLaneProjectJourney() {
               <button type="button" onClick={() => void executeRepair()} disabled={!proposalReady || busy !== null} className="rounded-2xl border border-emerald-400/40 px-4 py-3 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-500">
                 {busy === 'repair' ? t('librelane.journey.action.runningCandidate') : t('librelane.journey.action.runCandidate')}
               </button>
+              {run?.decision && (run.state === 'candidate_accepted' || run.state === 'baseline_kept') && run.selectedExecution?.state !== 'succeeded' ? (
+                <button type="button" onClick={() => void executeSelected()} disabled={busy !== null || run.selectedExecution?.state === 'running'} className="rounded-2xl border border-cyan-400/40 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 disabled:cursor-wait disabled:border-slate-800 disabled:text-slate-500">
+                  {busy === 'selected' || run.selectedExecution?.state === 'running' ? t('librelane.journey.action.runningSelected') : t('librelane.journey.action.runSelected')}
+                </button>
+              ) : null}
             </div>
           </div>
 
@@ -553,6 +581,16 @@ export function LibreLaneProjectJourney() {
                     <div className="mt-4 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-100">
                       {run.decision.choice === 'accept_candidate' ? t('librelane.journey.decisionCandidate') : t('librelane.journey.decisionBaseline')}
                       <p className="mt-2 break-all font-mono text-[11px] text-emerald-200/80">{run.decision.selectedConfigPath} · sha256:{run.decision.selectedConfigSha256.slice(0, 12)}</p>
+                      <p className="mt-2 text-xs leading-5 text-emerald-100/80">{t('librelane.journey.selectedRerunDetail')}</p>
+                    </div>
+                  ) : null}
+                  {run.selectedExecution?.metrics ? (
+                    <div className="mt-4 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-100">{t('librelane.journey.selectedRerunMetrics')}</p>
+                      <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+                        <div><p className="text-xs text-slate-400">WNS</p><p className="mt-1 font-semibold text-slate-100">{formatNs(metricValue(run.selectedExecution.metrics, 'timing__setup__wns'))}</p></div>
+                        <div><p className="text-xs text-slate-400">TNS</p><p className="mt-1 font-semibold text-slate-100">{formatNs(metricValue(run.selectedExecution.metrics, 'timing__setup__tns'))}</p></div>
+                      </div>
                     </div>
                   ) : null}
                 </div>
@@ -617,6 +655,16 @@ export function LibreLaneProjectJourney() {
                       <dd className="mt-1 space-y-1 font-mono">
                         <div>{run.decision.choice} · {run.decision.decidedAt}</div>
                         <div>{run.decision.selectedConfigPath} · sha256:{run.decision.selectedConfigSha256}</div>
+                      </dd>
+                    </div>
+                  ) : null}
+                  {run.selectedExecution ? (
+                    <div>
+                      <dt className="font-semibold text-slate-200">{t('librelane.journey.selectedRerunMetrics')}</dt>
+                      <dd className="mt-1 space-y-1 font-mono">
+                        <div>{run.selectedExecution.state} · {run.selectedExecution.root ?? '—'}</div>
+                        <div>{run.selectedExecution.configPath ?? '—'} · sha256:{run.selectedExecution.configSha256 ?? '—'}</div>
+                        {run.selectedExecution.planIdentitySha256 ? <div>plan sha256:{run.selectedExecution.planIdentitySha256}</div> : null}
                       </dd>
                     </div>
                   ) : null}

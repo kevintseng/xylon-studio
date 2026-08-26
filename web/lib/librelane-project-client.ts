@@ -61,6 +61,27 @@ export interface LibreLaneDecision {
   candidateConfigSha256: string
   selectedConfigPath: string
   selectedConfigSha256: string
+  selectedInputsPath: string
+  selectedInputsSha256: string
+}
+
+export interface LibreLaneSelectedExecution {
+  state: 'blocked' | 'running' | 'succeeded' | 'failed'
+  decisionChoice: 'accept_candidate' | 'keep_baseline' | null
+  proposalId: string | null
+  sourceRevision: string | null
+  root: string | null
+  configPath: string | null
+  configSha256: string | null
+  selectedConfigPath: string | null
+  selectedConfigSha256: string | null
+  selectedInputsPath: string | null
+  selectedInputsSha256: string | null
+  runtimeIdentity: Record<string, string> | null
+  planIdentitySha256: string | null
+  startedAt: string | null
+  finishedAt: string | null
+  metrics: LibreLaneMetricMap | null
 }
 
 export interface LibreLaneArtifactRef {
@@ -115,6 +136,7 @@ export interface LibreLaneRun {
   proposal: LibreLaneBoundedProposal | null
   comparison: LibreLaneComparison | null
   decision: LibreLaneDecision | null
+  selectedExecution: LibreLaneSelectedExecution | null
   candidateArtifacts: LibreLaneArtifacts | null
   candidate: {
     state: string
@@ -310,6 +332,49 @@ function normalizeDecision(value: unknown): LibreLaneDecision | null {
     candidateConfigSha256: sha256(input.candidate_config_sha256, 'decision.candidate_config_sha256'),
     selectedConfigPath: string(input.selected_config_path, 'decision.selected_config_path'),
     selectedConfigSha256: sha256(input.selected_config_sha256, 'decision.selected_config_sha256'),
+    selectedInputsPath: string(input.selected_inputs_path, 'decision.selected_inputs_path'),
+    selectedInputsSha256: sha256(input.selected_inputs_sha256, 'decision.selected_inputs_sha256'),
+  }
+}
+
+function normalizeSelectedExecution(value: unknown): LibreLaneSelectedExecution | null {
+  if (value === null || value === undefined) return null
+  const input = record(value, 'selected_execution')
+  const state = string(input.state, 'selected_execution.state')
+  if (!['blocked', 'running', 'succeeded', 'failed'].includes(state)) throw new Error('selected_execution.state is invalid')
+  const optionalString = (key: string): string | null => typeof input[key] === 'string' ? input[key] as string : null
+  const optionalTimestamp = (key: string): string | null => input[key] === undefined || input[key] === null ? null : timestamp(input[key], `selected_execution.${key}`)
+  const result = input.result
+  const selectedMetrics = result === undefined || result === null
+    ? null
+    : (() => {
+      const resultRecord = record(result, 'selected_execution.result')
+      const readback = record(resultRecord.readback, 'selected_execution.result.readback')
+      return metrics(readback.metrics, 'selected_execution.result.readback.metrics')
+    })()
+  const configSha256 = optionalString('config_sha256')
+  const selectedConfigSha256 = optionalString('selected_config_sha256')
+  const selectedInputsSha256 = optionalString('selected_inputs_sha256')
+  if (configSha256 !== null && !/^[a-f0-9]{64}$/i.test(configSha256)) throw new Error('selected_execution.config_sha256 must be a 64-character hexadecimal digest')
+  if (selectedConfigSha256 !== null && !/^[a-f0-9]{64}$/i.test(selectedConfigSha256)) throw new Error('selected_execution.selected_config_sha256 must be a 64-character hexadecimal digest')
+  if (selectedInputsSha256 !== null && !/^[a-f0-9]{64}$/i.test(selectedInputsSha256)) throw new Error('selected_execution.selected_inputs_sha256 must be a 64-character hexadecimal digest')
+  return {
+    state: state as LibreLaneSelectedExecution['state'],
+    decisionChoice: input.decision_choice === 'accept_candidate' || input.decision_choice === 'keep_baseline' ? input.decision_choice : null,
+    proposalId: optionalString('proposal_id'),
+    sourceRevision: optionalString('source_revision'),
+    root: optionalString('root'),
+    configPath: optionalString('config_path'),
+    configSha256: configSha256?.toLowerCase() ?? null,
+    selectedConfigPath: optionalString('selected_config_path'),
+    selectedConfigSha256: selectedConfigSha256?.toLowerCase() ?? null,
+    selectedInputsPath: optionalString('selected_inputs_path'),
+    selectedInputsSha256: selectedInputsSha256?.toLowerCase() ?? null,
+    runtimeIdentity: normalizeRuntimeIdentity(input.runtime_identity),
+    planIdentitySha256: optionalString('plan_identity_sha256'),
+    startedAt: optionalTimestamp('started_at'),
+    finishedAt: optionalTimestamp('finished_at'),
+    metrics: selectedMetrics,
   }
 }
 
@@ -418,6 +483,7 @@ export function normalizeLibreLaneRun(input: unknown): LibreLaneRun {
     proposal: value.proposal ? proposal(value.proposal) : null,
     comparison: value.comparison ? comparison(value.comparison) : null,
     decision: normalizeDecision(value.decision),
+    selectedExecution: normalizeSelectedExecution(value.selected_execution),
     candidateArtifacts: normalizeReadbackArtifacts(value.candidate, 'candidate.result.readback.artifacts'),
     candidate: value.candidate && typeof value.candidate === 'object'
       ? {
@@ -535,5 +601,15 @@ export async function recordLibreLaneDecision(
   return normalizeLibreLaneRun(await librelaneJsonRequest(`${apiUrl}/librelane-project-runs/${input.runId}/decision`, {
     method: 'POST',
     body: JSON.stringify({ decision: input.decision, proposal_id: input.proposalId }),
+  }))
+}
+
+export async function executeLibreLaneSelected(
+  apiUrl: string,
+  runId: string,
+): Promise<LibreLaneRun> {
+  return normalizeLibreLaneRun(await librelaneJsonRequest(`${apiUrl}/librelane-project-runs/${runId}/selected-execute`, {
+    method: 'POST',
+    body: JSON.stringify({ approved: true }),
   }))
 }

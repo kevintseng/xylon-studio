@@ -5,6 +5,7 @@ import {
   createLibreLaneRepairProposal,
   executeLibreLaneProjectRun,
   executeLibreLaneRepair,
+  executeLibreLaneSelected,
   getLibreLaneProjectRun,
   LibreLaneApiError,
   normalizeLibreLaneRun,
@@ -201,7 +202,7 @@ test('LibreLane decision client records and reloads the selected config identity
       decision: {
         schema_version: 'xylon-librelane-decision/v1', state: 'rejected', choice: 'keep_baseline', decided_at: '2026-08-26T09:10:00Z',
         proposal_id: 'c'.repeat(64), source_revision: 'a'.repeat(64), baseline_config_sha256: 'b'.repeat(64), candidate_config_sha256: 'd'.repeat(64),
-        selected_config_path: 'config.json', selected_config_sha256: 'b'.repeat(64),
+        selected_config_path: 'config.json', selected_config_sha256: 'b'.repeat(64), selected_inputs_path: 'inputs', selected_inputs_sha256: 'e'.repeat(64),
       },
       candidate: { state: 'succeeded', proposal_id: 'c'.repeat(64), root: 'candidate/abcd' },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })
@@ -213,6 +214,30 @@ test('LibreLane decision client records and reloads the selected config identity
     assert.equal(run.state, 'baseline_kept')
     assert.equal(run.decision?.selectedConfigPath, 'config.json')
     assert.equal(run.decision?.selectedConfigSha256, 'b'.repeat(64))
+    assert.equal(run.decision?.selectedInputsPath, 'inputs')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('LibreLane selected rerun client requires the explicit selected-execute endpoint', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input, init) => {
+    assert.equal(String(input), 'http://127.0.0.1:5001/api/openroad/librelane-project-runs/run_selected/selected-execute')
+    assert.equal(init?.method, 'POST')
+    assert.deepEqual(JSON.parse(String(init?.body)), { approved: true })
+    return new Response(JSON.stringify({
+      run_id: 'run_selected', state: 'candidate_accepted', next_action: 'Review selected rerun evidence.', failure: null,
+      decision: null, selected_execution: { state: 'running', decision_choice: 'accept_candidate', proposal_id: 'c'.repeat(64),
+        source_revision: 'a'.repeat(64), root: 'selected/c', config_path: 'config.json', config_sha256: 'b'.repeat(64),
+        selected_config_path: 'candidate/c/config.json', selected_config_sha256: 'b'.repeat(64), selected_inputs_path: 'candidate/c/inputs', selected_inputs_sha256: 'd'.repeat(64),
+        runtime_identity: null, plan_identity_sha256: null, started_at: '2026-08-26T09:10:00Z' },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
+  try {
+    const run = await executeLibreLaneSelected('http://127.0.0.1:5001/api/openroad', 'run_selected')
+    assert.equal(run.selectedExecution?.state, 'running')
+    assert.equal(run.selectedExecution?.decisionChoice, 'accept_candidate')
   } finally {
     globalThis.fetch = originalFetch
   }
