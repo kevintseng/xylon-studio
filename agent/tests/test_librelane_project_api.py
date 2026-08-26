@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from agent.api import routes
+from agent.api.execution import EdaSlotBusyError
 from agent.api.main import app
 from agent.openroad import librelane_adapter as adapter
 from agent.openroad.librelane_adapter import LibreLaneProbe
@@ -362,6 +363,42 @@ def test_approved_execution_persists_native_result_and_state(tmp_path: Path, mon
     assert persisted["source_revision"] == imported["preflight"]["manifest"]["source_revision"]
 
 
+def test_busy_execution_returns_409_without_starting_subprocess(tmp_path: Path, monkeypatch) -> None:
+    _import_project(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        routes.openroad,
+        "probe_librelane",
+        lambda: LibreLaneProbe("available", "/opt/librelane/python", "3.0.10", "ok"),
+    )
+    monkeypatch.setattr(routes.openroad, "collect_librelane_readiness", lambda _repo_root, probe=None: _ready_payload())
+
+    async def busy_slot(_operation):
+        raise EdaSlotBusyError("another Xylon high-load EDA job is already running")
+
+    monkeypatch.setattr(routes.openroad, "run_in_exclusive_eda_slot", busy_slot)
+    monkeypatch.setattr(
+        routes.openroad,
+        "execute_plan",
+        lambda *_args, **_kwargs: pytest.fail("busy execution must not start execute_plan"),
+    )
+    with TestClient(app) as client:
+        prepared = client.post(
+            "/api/openroad/librelane-project-runs",
+            json={"run_id": "run_busy", "project_id": "counter-librelane"},
+        )
+        assert prepared.status_code == 201
+        response = client.post(
+            "/api/openroad/librelane-project-runs/run_busy/execute",
+            json={"approved": True},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "LibreLaneResourceBusy"
+    persisted = json.loads((tmp_path / ".xylon" / "timing" / "runs" / "run_busy" / "manifest.json").read_text())
+    assert persisted["state"] == "prepared"
+    assert "execution" not in persisted
+
+
 def test_execute_time_readiness_block_is_persisted_as_retryable_blocked_state(tmp_path: Path, monkeypatch) -> None:
     _import_project(tmp_path, monkeypatch)
     monkeypatch.setattr(
@@ -513,6 +550,39 @@ def test_repair_requires_explicit_exact_proposal_approval(tmp_path: Path, monkey
     assert persisted["state"] == "proposal_ready"
     assert persisted["proposal"]["state"] == "awaiting_approval"
     assert "candidate" not in persisted
+
+
+def test_busy_repair_returns_409_without_staging_candidate_or_starting_subprocess(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id="run_repair_busy", wns=-0.1)
+
+    async def busy_slot():
+        raise EdaSlotBusyError("another Xylon high-load EDA job is already running")
+
+    monkeypatch.setattr(routes.openroad, "acquire_exclusive_eda_slot", busy_slot)
+    monkeypatch.setattr(
+        routes.openroad,
+        "execute_plan",
+        lambda *_args, **_kwargs: pytest.fail("busy repair must not start execute_plan"),
+    )
+    with TestClient(app) as client:
+        proposal_response = client.post("/api/openroad/librelane-project-runs/run_repair_busy/proposal")
+        assert proposal_response.status_code == 200
+        proposal_id = proposal_response.json()["proposal"]["proposal_id"]
+        response = client.post(
+            "/api/openroad/librelane-project-runs/run_repair_busy/repair",
+            json={"approved": True, "proposal_id": proposal_id},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "LibreLaneResourceBusy"
+    run_root = tmp_path / ".xylon" / "timing" / "runs" / "run_repair_busy"
+    persisted = json.loads((run_root / "manifest.json").read_text())
+    assert persisted["state"] == "proposal_ready"
+    assert persisted["proposal"]["state"] == "awaiting_approval"
+    assert not (run_root / "candidate").exists()
 
 
 def test_expired_repair_proposal_is_rejected_without_candidate(tmp_path: Path, monkeypatch) -> None:
