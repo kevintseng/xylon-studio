@@ -39,6 +39,7 @@ test('project import sends bounded files and manifest metadata to the OpenROAD A
   const payload = observedPayload as unknown as Record<string, unknown>
   assert.equal(payload.project_id, 'counter-demo')
   assert.deepEqual(payload.rtl, ['rtl/counter.sv'])
+  assert.deepEqual(payload.clocks, [{ name: 'clk', port: 'clk', period_ns: 10 }])
   assert.equal(result.preflight.state, 'ready')
 })
 

@@ -246,7 +246,11 @@ export function importProjectBundle(
       rtl: input.rtl,
       include_dirs: input.includeDirs,
       sdc: input.sdc,
-      clocks: [input.clock],
+      clocks: [{
+        name: input.clock.name,
+        port: input.clock.port,
+        period_ns: input.clock.periodNs,
+      }],
       macros: [],
       files: input.files,
     }),
