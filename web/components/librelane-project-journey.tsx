@@ -415,6 +415,9 @@ export function LibreLaneProjectJourney() {
                 <div className="mt-4 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4">
                   <p className="font-mono text-sm text-amber-100">PL_TARGET_DENSITY {run.proposal.action.from.toFixed(2)} → {run.proposal.action.to.toFixed(2)}</p>
                   <p className="mt-2 text-sm leading-6 text-slate-300">{run.proposal.rationale.hypothesis}</p>
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-5 text-slate-400">
+                    {run.proposal.tradeoffs.map((tradeoff) => <li key={tradeoff}>{tradeoff}</li>)}
+                  </ul>
                   <p className="mt-2 text-xs text-slate-500">{t('timing.proposal.expires')}: {new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(run.proposal.expiresAt))}</p>
                 </div>
               ) : null}

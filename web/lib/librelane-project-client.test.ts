@@ -62,8 +62,8 @@ test('LibreLane run normalization keeps bounded preparation and comparison evide
       rationale: {
         hypothesis: 'Increase placement effort while preserving design inputs.',
         expected_signal: 'Setup WNS improves in native readback.',
-        tradeoffs: ['Runtime may increase.'],
       },
+      tradeoffs: ['Runtime may increase.'],
     },
     comparison: {
       baseline_metrics: { timing__setup__wns: -0.2, timing__setup__tns: -1.4 },
@@ -101,7 +101,7 @@ test('LibreLane normalization rejects malformed bounded repair and comparison pa
     proposal: {
       proposal_id: 'c'.repeat(64), state: 'awaiting_approval', created_at: '2026-08-26T09:00:00Z', expires_at: '2026-08-26T09:15:00Z',
       binding: { baseline_wns: -0.2 }, action: { parameter: 'UNSAFE_FIELD', from: 0.6, to: 0.65, scope: 'one_candidate_librelane_rerun' },
-      rationale: { hypothesis: 'x', expected_signal: 'y', tradeoffs: ['z'] },
+      rationale: { hypothesis: 'x', expected_signal: 'y' }, tradeoffs: ['z'],
     },
   }), /outside the supported boundary/)
   assert.throws(() => normalizeLibreLaneRun({
@@ -117,7 +117,7 @@ test('LibreLane normalization rejects an invalid proposal timestamp', () => {
     proposal: {
       proposal_id: 'c'.repeat(64), state: 'awaiting_approval', created_at: 'not-a-date', expires_at: '2026-08-26T09:15:00Z',
       binding: { baseline_wns: -0.2 }, action: { parameter: 'PL_TARGET_DENSITY', from: 0.6, to: 0.65, scope: 'one_candidate_librelane_rerun' },
-      rationale: { hypothesis: 'x', expected_signal: 'y', tradeoffs: ['z'] },
+      rationale: { hypothesis: 'x', expected_signal: 'y' }, tradeoffs: ['z'],
     },
   }), /valid timestamp/)
 })
@@ -152,8 +152,8 @@ test('LibreLane project client calls the exact bounded endpoints', async (contex
           rationale: {
             hypothesis: 'Increase placement effort while preserving design inputs.',
             expected_signal: 'Setup WNS improves in native readback.',
-            tradeoffs: ['Runtime may increase.'],
           },
+          tradeoffs: ['Runtime may increase.'],
         },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     }

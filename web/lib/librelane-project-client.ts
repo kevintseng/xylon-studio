@@ -31,8 +31,8 @@ export interface LibreLaneBoundedProposal {
   rationale: {
     hypothesis: string
     expectedSignal: string
-    tradeoffs: string[]
   }
+  tradeoffs: string[]
 }
 
 export interface LibreLaneComparison {
@@ -184,8 +184,8 @@ function proposal(value: unknown): LibreLaneBoundedProposal {
     rationale: {
       hypothesis: string(rationale.hypothesis, 'proposal.rationale.hypothesis'),
       expectedSignal: string(rationale.expected_signal, 'proposal.rationale.expected_signal'),
-      tradeoffs: stringArray(rationale.tradeoffs, 'proposal.rationale.tradeoffs'),
     },
+    tradeoffs: stringArray(input.tradeoffs, 'proposal.tradeoffs'),
   }
 }
 
