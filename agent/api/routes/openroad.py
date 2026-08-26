@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import os
 import shutil
 from dataclasses import asdict
@@ -534,15 +535,23 @@ def _librelane_inputs_sha256(inputs_root: Path) -> str:
     return _canonical_sha256(entries)
 
 
-def _librelane_setup_wns(payload: dict[str, Any]) -> float:
+def _librelane_setup_metric(payload: dict[str, Any], metric: str, label: str) -> float:
     execution = payload.get("execution")
     result = execution.get("result") if isinstance(execution, dict) else None
     readback = result.get("readback") if isinstance(result, dict) else None
     metrics = readback.get("metrics") if isinstance(readback, dict) else None
-    value = metrics.get("timing__setup__wns") if isinstance(metrics, dict) else None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ProjectStoreError("native LibreLane setup WNS is unavailable")
+    value = metrics.get(metric) if isinstance(metrics, dict) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ProjectStoreError(f"native LibreLane setup {label} is unavailable")
     return float(value)
+
+
+def _librelane_setup_wns(payload: dict[str, Any]) -> float:
+    return _librelane_setup_metric(payload, "timing__setup__wns", "WNS")
+
+
+def _librelane_setup_tns(payload: dict[str, Any]) -> float:
+    return _librelane_setup_metric(payload, "timing__setup__tns", "TNS")
 
 
 def _create_librelane_proposal(
@@ -1153,18 +1162,32 @@ async def post_librelane_repair_execution(
         _persist_librelane_run(run_root, payload)
         result = await asyncio.to_thread(execute_plan, REPO_ROOT, run_dir=candidate_root, plan=plan)
         baseline_wns = _librelane_setup_wns(payload)
+        baseline_tns = _librelane_setup_tns(payload)
         candidate_metrics = _candidate_metrics(result)
         candidate_wns_value = candidate_metrics.get("timing__setup__wns")
-        if isinstance(candidate_wns_value, bool) or not isinstance(candidate_wns_value, (int, float)):
+        if (
+            isinstance(candidate_wns_value, bool)
+            or not isinstance(candidate_wns_value, (int, float))
+            or not math.isfinite(candidate_wns_value)
+        ):
             raise ProjectStoreError("candidate LibreLane setup WNS is unavailable")
         candidate_wns = float(candidate_wns_value)
+        candidate_tns_value = candidate_metrics.get("timing__setup__tns")
+        if (
+            isinstance(candidate_tns_value, bool)
+            or not isinstance(candidate_tns_value, (int, float))
+            or not math.isfinite(candidate_tns_value)
+        ):
+            raise ProjectStoreError("candidate LibreLane setup TNS is unavailable")
+        candidate_tns = float(candidate_tns_value)
         baseline_execution = payload.get("execution")
         baseline_result = baseline_execution.get("result") if isinstance(baseline_execution, dict) else None
         baseline_readback = baseline_result.get("readback") if isinstance(baseline_result, dict) else None
         baseline_metrics = baseline_readback.get("metrics") if isinstance(baseline_readback, dict) else None
         if not isinstance(baseline_metrics, dict):
             raise ProjectStoreError("baseline LibreLane native metrics are unavailable")
-        delta = candidate_wns - baseline_wns
+        wns_delta = candidate_wns - baseline_wns
+        tns_delta = candidate_tns - baseline_tns
         payload["state"] = "comparison_ready"
         proposal["state"] = "applied"
         payload["candidate"].update({
@@ -1179,9 +1202,16 @@ async def post_librelane_repair_execution(
             "setup_wns": {
                 "baseline": baseline_wns,
                 "candidate": candidate_wns,
-                "delta": delta,
-                "improved": delta > 0,
+                "delta": wns_delta,
+                "improved": wns_delta > 0,
                 "timing_met": candidate_wns >= 0,
+            },
+            "setup_tns": {
+                "baseline": baseline_tns,
+                "candidate": candidate_tns,
+                "delta": tns_delta,
+                "improved": tns_delta > 0,
+                "timing_met": candidate_tns >= 0,
             },
         }
         payload["failure"] = None

@@ -784,6 +784,11 @@ def test_readiness_block_keeps_proposal_retryable_then_returns_native_comparison
         "improved": True,
         "timing_met": True,
     }
+    assert result["comparison"]["setup_tns"]["baseline"] == pytest.approx(-0.6)
+    assert result["comparison"]["setup_tns"]["candidate"] == 0.0
+    assert result["comparison"]["setup_tns"]["delta"] == pytest.approx(0.6)
+    assert result["comparison"]["setup_tns"]["improved"] is True
+    assert result["comparison"]["setup_tns"]["timing_met"] is True
     assert result["comparison"]["baseline_metrics"]["timing__setup__wns"] == -0.2
     assert result["comparison"]["candidate_metrics"]["timing__setup__wns"] == 0.05
     baseline_config = json.loads((run_root / "config.json").read_text())
@@ -798,6 +803,46 @@ def test_readiness_block_keeps_proposal_retryable_then_returns_native_comparison
     assert persisted["candidate"]["state"] == "succeeded"
     assert persisted["candidate"]["proposal_id"] == proposal_id
     assert persisted["candidate"]["source_revision"] == persisted["source_revision"]
+    assert persisted["comparison"]["setup_tns"] == result["comparison"]["setup_tns"]
+
+
+def test_candidate_without_setup_tns_does_not_persist_a_partial_comparison(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id="run_repair_no_tns", wns=-0.2)
+    monkeypatch.setattr(
+        routes.openroad,
+        "collect_librelane_readiness",
+        lambda _repo_root, probe=None: _ready_payload(),
+    )
+
+    def candidate_without_tns(_repo_root, *, run_dir, plan):
+        return {
+            "state": "succeeded",
+            "run_id": "run_repair_no_tns",
+            "readback": {
+                "resolved": {"PDK": "sky130A", "STD_CELL_LIBRARY": "sky130_fd_sc_hd"},
+                "metrics": {"timing__setup__wns": 0.05},
+                "paths": {"resolved": "resolved.json", "metrics": "metrics.csv"},
+            },
+        }
+
+    monkeypatch.setattr(routes.openroad, "execute_plan", candidate_without_tns)
+    with TestClient(app) as client:
+        proposal = client.post("/api/openroad/librelane-project-runs/run_repair_no_tns/proposal")
+        response = client.post(
+            "/api/openroad/librelane-project-runs/run_repair_no_tns/repair",
+            json={"approved": True, "proposal_id": proposal.json()["proposal"]["proposal_id"]},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["message"] == "candidate LibreLane setup TNS is unavailable"
+    persisted = json.loads(
+        (tmp_path / ".xylon" / "timing" / "runs" / "run_repair_no_tns" / "manifest.json").read_text()
+    )
+    assert persisted["state"] == "candidate_failed"
+    assert "comparison" not in persisted
 
 
 def test_candidate_execution_failure_is_persisted_without_changing_baseline(

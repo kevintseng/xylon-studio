@@ -109,6 +109,13 @@ test('LibreLane comparison tells the truth when candidate WNS regresses', () => 
   assert.match(librelaneJourneySource, /comparison\.setupWns\.improved \? 'border border-slate-600 text-slate-200/)
 })
 
+test('LibreLane comparison visibly includes measured setup TNS before and after', () => {
+  assert.match(librelaneJourneySource, />TNS</)
+  assert.match(librelaneJourneySource, /comparison\.setupTns\.baseline/)
+  assert.match(librelaneJourneySource, /comparison\.setupTns\.candidate/)
+  assert.match(librelaneJourneySource, /comparison\.setupTns\.delta/)
+})
+
 test('advanced MCP records keep cleanup evidence and an actionable visible alert', () => {
   for (const required of [
     'session.interruptionReason',

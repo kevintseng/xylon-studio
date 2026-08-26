@@ -117,6 +117,7 @@ test('LibreLane run normalization keeps bounded preparation and comparison evide
       baseline_metrics: { timing__setup__wns: -0.2, timing__setup__tns: -1.4 },
       candidate_metrics: { timing__setup__wns: 0.05, timing__setup__tns: 0 },
       setup_wns: { baseline: -0.2, candidate: 0.05, delta: 0.25, improved: true, timing_met: true },
+      setup_tns: { baseline: -1.4, candidate: 0, delta: 1.4, improved: true, timing_met: true },
     },
     candidate: {
       state: 'succeeded', proposal_id: 'c'.repeat(64), root: 'candidate/abcd',
@@ -138,6 +139,9 @@ test('LibreLane run normalization keeps bounded preparation and comparison evide
   assert.equal(run.candidateArtifacts?.resolved.sha256, 'f'.repeat(64))
   assert.equal(run.proposal?.action.parameter, 'PL_TARGET_DENSITY')
   assert.equal(run.comparison?.setupWns.delta, 0.25)
+  assert.equal(run.comparison?.setupTns.baseline, -1.4)
+  assert.equal(run.comparison?.setupTns.candidate, 0)
+  assert.equal(run.comparison?.setupTns.delta, 1.4)
 })
 
 test('LibreLane run normalization rejects an invented terminal state', () => {
@@ -199,8 +203,19 @@ test('LibreLane normalization rejects malformed bounded repair and comparison pa
   }), /outside the supported boundary/)
   assert.throws(() => normalizeLibreLaneRun({
     ...base,
-    comparison: { baseline_metrics: { wns: -0.2 }, candidate_metrics: { wns: 0.1 }, setup_wns: { baseline: -0.2, candidate: 0.1, delta: 0.3, improved: 'false', timing_met: false } },
+    comparison: {
+      baseline_metrics: { wns: -0.2, tns: -1 }, candidate_metrics: { wns: 0.1, tns: 0 },
+      setup_wns: { baseline: -0.2, candidate: 0.1, delta: 0.3, improved: 'false', timing_met: false },
+      setup_tns: { baseline: -1, candidate: 0, delta: 1, improved: true, timing_met: true },
+    },
   }), /must be a boolean/)
+  assert.throws(() => normalizeLibreLaneRun({
+    ...base,
+    comparison: {
+      baseline_metrics: { wns: -0.2, tns: -1 }, candidate_metrics: { wns: 0.1, tns: 0 },
+      setup_wns: { baseline: -0.2, candidate: 0.1, delta: 0.3, improved: true, timing_met: true },
+    },
+  }), /comparison\.setup_tns must be an object/)
 })
 
 test('LibreLane normalization rejects an invalid proposal timestamp', () => {
@@ -236,8 +251,9 @@ test('LibreLane decision client records and reloads the selected config identity
         rationale: { hypothesis: 'Increase placement effort.', expected_signal: 'WNS improves.' }, tradeoffs: ['Runtime may increase.'],
       },
       comparison: {
-        baseline_metrics: { timing__setup__wns: -0.2 }, candidate_metrics: { timing__setup__wns: -0.1 },
+        baseline_metrics: { timing__setup__wns: -0.2, timing__setup__tns: -1.2 }, candidate_metrics: { timing__setup__wns: -0.1, timing__setup__tns: -0.5 },
         setup_wns: { baseline: -0.2, candidate: -0.1, delta: 0.1, improved: true, timing_met: false },
+        setup_tns: { baseline: -1.2, candidate: -0.5, delta: 0.7, improved: true, timing_met: false },
       },
       decision: {
         schema_version: 'xylon-librelane-decision/v1', state: 'rejected', choice: 'keep_baseline', decided_at: '2026-08-26T09:10:00Z',

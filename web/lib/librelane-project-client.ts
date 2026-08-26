@@ -49,6 +49,13 @@ export interface LibreLaneComparison {
     improved: boolean
     timingMet: boolean
   }
+  setupTns: {
+    baseline: number
+    candidate: number
+    delta: number
+    improved: boolean
+    timingMet: boolean
+  }
 }
 
 export interface LibreLaneDecision {
@@ -290,6 +297,7 @@ function proposal(value: unknown): LibreLaneBoundedProposal {
 function comparison(value: unknown): LibreLaneComparison {
   const input = record(value, 'comparison')
   const setupWns = record(input.setup_wns, 'comparison.setup_wns')
+  const setupTns = record(input.setup_tns, 'comparison.setup_tns')
   return {
     baselineMetrics: metrics(input.baseline_metrics, 'comparison.baseline_metrics'),
     candidateMetrics: metrics(input.candidate_metrics, 'comparison.candidate_metrics'),
@@ -299,6 +307,13 @@ function comparison(value: unknown): LibreLaneComparison {
       delta: number(setupWns.delta, 'comparison.setup_wns.delta'),
       improved: boolean(setupWns.improved, 'comparison.setup_wns.improved'),
       timingMet: boolean(setupWns.timing_met, 'comparison.setup_wns.timing_met'),
+    },
+    setupTns: {
+      baseline: number(setupTns.baseline, 'comparison.setup_tns.baseline'),
+      candidate: number(setupTns.candidate, 'comparison.setup_tns.candidate'),
+      delta: number(setupTns.delta, 'comparison.setup_tns.delta'),
+      improved: boolean(setupTns.improved, 'comparison.setup_tns.improved'),
+      timingMet: boolean(setupTns.timing_met, 'comparison.setup_tns.timing_met'),
     },
   }
 }

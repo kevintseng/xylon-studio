@@ -140,10 +140,14 @@ def test_public_librelane_readback_is_compact_and_excludes_unneeded_metrics():
         "comparison": {
             "schema_version": "xylon-librelane-comparison/v1",
             "setup_wns": {"baseline": -1.0, "candidate": -0.5, "delta": 0.5, "improved": True, "timing_met": False},
+            "setup_tns": {"baseline": -2.0, "candidate": -1.0, "delta": 1.0, "improved": True, "timing_met": False},
             "baseline_metrics": {"timing__setup__wns": -1.0, "timing__setup__tns": -2.0, "design__core__area": 1234},
             "candidate_metrics": {"timing__setup__wns": -0.5, "timing__setup__tns": -1.0, "power__total": 4},
         },
     })
+    assert public["comparison"]["setup_tns"] == {
+        "baseline": -2.0, "candidate": -1.0, "delta": 1.0, "improved": True, "timing_met": False,
+    }
     assert public["comparison"]["baseline_metrics"] == {"timing__setup__wns": -1.0, "timing__setup__tns": -2.0}
     assert "design__core__area" not in public["comparison"]["baseline_metrics"]
     assert "power__total" not in public["comparison"]["candidate_metrics"]

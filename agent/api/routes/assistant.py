@@ -114,11 +114,13 @@ def _public_librelane_run(payload: dict) -> dict:
     comparison = payload.get("comparison")
     if isinstance(comparison, dict):
         setup_wns = comparison.get("setup_wns")
+        setup_tns = comparison.get("setup_tns")
         baseline_metrics = comparison.get("baseline_metrics")
         candidate_metrics = comparison.get("candidate_metrics")
         observed["comparison"] = {
             "schema_version": comparison.get("schema_version"),
             "setup_wns": setup_wns,
+            "setup_tns": setup_tns,
             "baseline_metrics": {
                 metric: baseline_metrics[metric]
                 for metric in ("timing__setup__wns", "timing__setup__tns")

@@ -554,19 +554,31 @@ export function LibreLaneProjectJourney() {
               ) : null}
               {comparison ? (
                 <div className="mt-4 rounded-2xl border border-cyan-500/30 bg-cyan-500/5 p-4">
-                  <div className="grid grid-cols-3 gap-3 text-sm">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.16em] text-slate-500">{t('timing.comparison.baseline')}</p>
-                      <p className="mt-2 font-semibold text-slate-100">{formatNs(comparison.setupWns.baseline)}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.16em] text-slate-500">{t('timing.comparison.candidate')}</p>
-                      <p className="mt-2 font-semibold text-slate-100">{formatNs(comparison.setupWns.candidate)}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Δ WNS</p>
-                      <p className={`mt-2 font-semibold ${comparison.setupWns.improved ? 'text-emerald-200' : 'text-amber-100'}`}>{formatNs(comparison.setupWns.delta)}</p>
-                    </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[300px] text-left text-sm">
+                      <thead className="text-xs uppercase tracking-[0.12em] text-slate-500">
+                        <tr>
+                          <th className="pb-2">{t('timing.comparison.metric')}</th>
+                          <th className="pb-2">{t('timing.comparison.baseline')}</th>
+                          <th className="pb-2">{t('timing.comparison.candidate')}</th>
+                          <th className="pb-2">Δ</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800 text-slate-100">
+                        <tr>
+                          <th className="py-2">WNS</th>
+                          <td>{formatNs(comparison.setupWns.baseline)}</td>
+                          <td>{formatNs(comparison.setupWns.candidate)}</td>
+                          <td className={comparison.setupWns.improved ? 'text-emerald-200' : 'text-amber-100'}>{formatNs(comparison.setupWns.delta)}</td>
+                        </tr>
+                        <tr>
+                          <th className="py-2">TNS</th>
+                          <td>{formatNs(comparison.setupTns.baseline)}</td>
+                          <td>{formatNs(comparison.setupTns.candidate)}</td>
+                          <td className={comparison.setupTns.improved ? 'text-emerald-200' : 'text-amber-100'}>{formatNs(comparison.setupTns.delta)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
                   </div>
                   <p className={`mt-4 rounded-2xl px-4 py-3 text-sm leading-6 ${comparison.setupWns.timingMet ? 'bg-emerald-500/10 text-emerald-100' : 'bg-amber-500/10 text-amber-100'}`}>
                     {comparisonMessage}
