@@ -253,7 +253,9 @@ function normalizeFailure(value: unknown): LibreLaneRun['failure'] {
       const item = evidence as Record<string, unknown>
       return {
         stage: typeof item.stage === 'string' ? item.stage : undefined,
-        firstError: typeof item.first_error === 'string' ? item.first_error : null,
+        firstError: typeof item.first_error_line === 'string'
+          ? item.first_error_line
+          : typeof item.first_error === 'string' ? item.first_error : null,
         toolReturncode: typeof item.tool_returncode === 'number' ? item.tool_returncode : undefined,
         configIdentitySha256: typeof item.config_identity_sha256 === 'string' ? item.config_identity_sha256 : undefined,
         planIdentitySha256: typeof item.plan_identity_sha256 === 'string' ? item.plan_identity_sha256 : undefined,

@@ -363,6 +363,51 @@ def test_approved_execution_persists_native_result_and_state(tmp_path: Path, mon
     assert persisted["source_revision"] == imported["preflight"]["manifest"]["source_revision"]
 
 
+def test_execution_failure_persists_blocking_evidence_for_next_action(tmp_path: Path, monkeypatch) -> None:
+    _import_project(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        routes.openroad,
+        "probe_librelane",
+        lambda: LibreLaneProbe("available", "/opt/librelane/python", "3.0.10", "ok"),
+    )
+    monkeypatch.setattr(routes.openroad, "collect_librelane_readiness", lambda _repo_root, probe=None: _ready_payload())
+
+    def fail_execute(_repo_root, *, run_dir, plan):
+        raise adapter.LibreLaneExecutionError(
+            "bounded baseline failed",
+            evidence={
+                "stage": "native_readback",
+                "first_error_line": "PDN-0185 failed before metrics writeback",
+                "stderr_excerpt": "PDN-0185 failed before metrics writeback",
+                "tool_returncode": 1,
+                "config_identity_sha256": plan.config_identity_sha256,
+                "plan_identity_sha256": plan.plan_identity_sha256,
+            },
+        )
+
+    monkeypatch.setattr(routes.openroad, "execute_plan", fail_execute)
+    with TestClient(app) as client:
+        prepared = client.post(
+            "/api/openroad/librelane-project-runs",
+            json={"run_id": "run_execute_failure", "project_id": "counter-librelane"},
+        )
+        assert prepared.status_code == 201
+        response = client.post(
+            "/api/openroad/librelane-project-runs/run_execute_failure/execute",
+            json={"approved": True},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["blocking_evidence"]["first_error_line"] == (
+        "PDN-0185 failed before metrics writeback"
+    )
+    persisted = json.loads(
+        (tmp_path / ".xylon" / "timing" / "runs" / "run_execute_failure" / "manifest.json").read_text()
+    )
+    assert persisted["state"] == "failed"
+    assert persisted["failure"]["blocking_evidence"]["stage"] == "native_readback"
+
+
 def test_busy_execution_returns_409_without_starting_subprocess(tmp_path: Path, monkeypatch) -> None:
     _import_project(tmp_path, monkeypatch)
     monkeypatch.setattr(
@@ -748,7 +793,17 @@ def test_candidate_execution_failure_is_persisted_without_changing_baseline(
     )
 
     def fail_candidate(_repo_root, *, run_dir, plan):
-        raise adapter.LibreLaneExecutionError("bounded candidate failed")
+        raise adapter.LibreLaneExecutionError(
+            "bounded candidate failed",
+            evidence={
+                "stage": "native_readback",
+                "first_error_line": "CTS repair candidate stopped before metrics writeback",
+                "stderr_excerpt": "CTS repair candidate stopped before metrics writeback",
+                "tool_returncode": 1,
+                "config_identity_sha256": plan.config_identity_sha256,
+                "plan_identity_sha256": plan.plan_identity_sha256,
+            },
+        )
 
     monkeypatch.setattr(routes.openroad, "execute_plan", fail_candidate)
     with TestClient(app) as client:
@@ -761,12 +816,16 @@ def test_candidate_execution_failure_is_persisted_without_changing_baseline(
         )
 
     assert response.status_code == 422
+    assert response.json()["detail"]["blocking_evidence"]["first_error_line"] == (
+        "CTS repair candidate stopped before metrics writeback"
+    )
     run_root = tmp_path / ".xylon" / "timing" / "runs" / "run_repair_failure"
     persisted = json.loads((run_root / "manifest.json").read_text())
     assert persisted["state"] == "candidate_failed"
     assert persisted["candidate"]["state"] == "failed"
     assert persisted["candidate"]["proposal_id"] == proposal_id
     assert persisted["failure"]["code"] == "LibreLaneRepairExecutionFailed"
+    assert persisted["failure"]["blocking_evidence"]["stage"] == "native_readback"
     baseline_config = json.loads((run_root / "config.json").read_text())
     candidate_config = json.loads((run_root / persisted["candidate"]["root"] / "config.json").read_text())
     assert baseline_config["PL_TARGET_DENSITY"] == 0.6

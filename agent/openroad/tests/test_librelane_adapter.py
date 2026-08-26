@@ -414,9 +414,11 @@ def test_execute_plan_rejects_stale_native_readback_after_failed_launcher(tmp_pa
             ),
         )
     assert caught.value.evidence["stage"] == "native_readback"
-    assert caught.value.evidence["first_error"] == "native flow stopped before readback"
+    assert caught.value.evidence["first_error_line"] == "native flow stopped before readback"
+    assert caught.value.evidence["stderr_excerpt"] == "native flow stopped before readback"
     assert caught.value.evidence["tool_returncode"] == 1
     assert caught.value.evidence["config_identity_sha256"] == plan.config_identity_sha256
+    assert caught.value.evidence["plan_identity_sha256"] == plan.plan_identity_sha256
 
 
 def test_execute_plan_rejects_missing_readback_after_launcher_success(tmp_path: Path) -> None:
@@ -449,9 +451,10 @@ def test_execute_plan_rejects_missing_readback_after_launcher_success(tmp_path: 
             runner=lambda command, **kwargs: subprocess.CompletedProcess(command, 0, stdout="", stderr=""),
         )
     assert caught.value.evidence["stage"] == "native_readback"
-    assert caught.value.evidence["first_error"] == (
+    assert caught.value.evidence["first_error_line"] == (
         "LibreLane resolved config and native metrics artifacts are missing"
     )
+    assert caught.value.evidence["tool_returncode"] == 0
 
 
 def test_readback_requires_native_librelane_outputs(tmp_path: Path) -> None:
