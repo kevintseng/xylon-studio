@@ -4,6 +4,7 @@ import test from 'node:test'
 
 const pageSource = readFileSync(new URL('../app/openroad/page.tsx', import.meta.url), 'utf8')
 const librelaneJourneySource = readFileSync(new URL('../components/librelane-project-journey.tsx', import.meta.url), 'utf8')
+const librelaneErrorSource = readFileSync(new URL('./librelane-project-error.ts', import.meta.url), 'utf8')
 const timingSource = readFileSync(new URL('../components/timing-workbench.tsx', import.meta.url), 'utf8')
 const resourceDashboardSource = readFileSync(new URL('../components/resource-status-dashboard.tsx', import.meta.url), 'utf8')
 const agentSource = readFileSync(new URL('../components/timing-agent-panel.tsx', import.meta.url), 'utf8')
@@ -51,8 +52,20 @@ test('LibreLane journey exposes the bounded prepare execute proposal and repair 
   assert.match(librelaneJourneySource, /clearProjectSelection\(\)\s+if \(selected\.length/)
   assert.match(librelaneJourneySource, /importGeneration\.current/)
   assert.match(librelaneJourneySource, /disabled=\{busy !== null \|\| importing\}/)
-  assert.match(librelaneJourneySource, /function localizeError/)
+  assert.match(librelaneJourneySource, /localizeLibreLaneError\(displayError\(caught\), locale, t\)/)
+  assert.match(librelaneErrorSource, /project_id already exists/)
+  assert.match(librelaneErrorSource, /timing\.project\.idConflict/)
   assert.match(librelaneJourneySource, /LibreLaneReadinessBlocked/)
+})
+
+test('LibreLane journey keeps provenance and version evidence wired into visible technical details', () => {
+  assert.match(librelaneJourneySource, /run\.sourceRevision\.slice\(0, 12\)/)
+  assert.match(librelaneJourneySource, /librelane\.journey\.sourceRevision/)
+  assert.match(librelaneJourneySource, /Baseline artifacts/)
+  assert.match(librelaneJourneySource, /Candidate artifacts/)
+  assert.match(librelaneJourneySource, /baselineArtifacts\.metrics\.path/)
+  assert.match(librelaneJourneySource, /candidateArtifacts\.metrics\.path/)
+  assert.match(librelaneJourneySource, /sha256:\{run\.(baselineArtifacts|candidateArtifacts)/)
 })
 
 test('advanced MCP records keep cleanup evidence and an actionable visible alert', () => {

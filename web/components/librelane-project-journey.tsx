@@ -4,6 +4,7 @@ import { useMemo, useRef, useState, type ChangeEvent } from 'react'
 
 import { useI18n } from '@/lib/i18n'
 import { localizeLibreLaneNextAction } from '@/lib/librelane-next-action'
+import { localizeLibreLaneError, type LibreLaneVisibleError } from '@/lib/librelane-project-error'
 import {
   createLibreLaneRepairProposal,
   executeLibreLaneProjectRun,
@@ -31,11 +32,7 @@ const LIBRELANE_API_URL = resolveLibreLaneProjectApiUrl(process.env.NEXT_PUBLIC_
 type BusyAction = 'prepare' | 'baseline' | 'proposal' | 'repair' | null
 type StageState = 'pending' | 'active' | 'complete' | 'blocked'
 
-interface VisibleError {
-  code: string
-  message: string
-  recovery: string
-}
+type VisibleError = LibreLaneVisibleError
 
 function displayError(error: unknown): VisibleError {
   if (error instanceof LibreLaneApiError || error instanceof TimingApiError) {
@@ -60,23 +57,6 @@ function formatProposalChange(parameter: string, from: number, to: number, local
     return locale === 'zh-TW' ? 'CTS timing repair 關閉 → 開啟' : 'CTS timing repair off → on'
   }
   return `${parameter} ${from.toFixed(2)} → ${to.toFixed(2)}`
-}
-
-function localizeError(error: VisibleError, locale: string, translate: (key: string) => string): VisibleError {
-  if (locale !== 'zh-TW') return error
-  if (error.code === 'ProjectImportInvalid' && /project_id already exists/i.test(error.message)) {
-    return { code: error.code, message: translate('timing.project.idConflict'), recovery: translate('timing.project.idConflictRecovery') }
-  }
-  if (error.code === 'ProjectImportInvalid' || error.code === 'LibreLaneProjectPreparationInvalid') {
-    return { code: error.code, message: translate('timing.project.preflightBlocked'), recovery: translate('timing.project.preflightRecovery') }
-  }
-  if (error.code === 'LibreLaneReadinessBlocked' || error.code === 'LibreLaneRepairReadinessBlocked') {
-    return { code: error.code, message: translate('librelane.journey.error.readiness'), recovery: translate('librelane.journey.error.readinessRecovery') }
-  }
-  if (error.code.startsWith('LibreLane')) {
-    return { code: error.code, message: translate('librelane.journey.error.generic'), recovery: translate('librelane.journey.error.genericRecovery') }
-  }
-  return error
 }
 
 function formatNs(value: unknown): string {
@@ -145,7 +125,7 @@ export function LibreLaneProjectJourney() {
     && /^[A-Za-z_][A-Za-z0-9_$]*$/.test(clockPort)
     && Number.isFinite(Number(clockPeriod))
     && Number(clockPeriod) > 0
-  const visibleError = (caught: unknown) => localizeError(displayError(caught), locale, t)
+  const visibleError = (caught: unknown) => localizeLibreLaneError(displayError(caught), locale, t)
   const proposalReady = run?.state === 'proposal_ready' && run.proposal !== null
   const stageStates = useMemo(() => summarizeState(run), [run])
   const baselineWns = metricValue(run?.baselineMetrics ?? null, 'timing__setup__wns')
