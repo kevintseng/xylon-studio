@@ -20,7 +20,7 @@ test('LibreLane Docker shim injects fixed resource and network limits', async ()
   await writeFile(fakeDocker, `#!/usr/bin/env bash\nprintf '%s\\n' "$*" > ${JSON.stringify(log)}\n`)
   await chmod(fakeDocker, 0o700)
   try {
-    await execFileAsync('bash', [dockerShim, 'run', '--name', 'test', 'image', 'command'], {
+    await execFileAsync('bash', [dockerShim, 'run', '--name', 'test', pinnedImage, 'command'], {
       env: { ...process.env, XYLON_LIBRELANE_DOCKER_REAL: fakeDocker },
     })
     const args = await readFile(log, 'utf8')
@@ -30,12 +30,29 @@ test('LibreLane Docker shim injects fixed resource and network limits', async ()
     assert.match(args, /--network none/)
     for (const override of ['--network', '--network=host', '--cpus=2', '--memory=16g', '--platform=linux/amd64', '--tmpfs=/tmp:rw']) {
       await assert.rejects(
-        execFileAsync('bash', [dockerShim, 'run', override, 'image', 'command'], {
+        execFileAsync('bash', [dockerShim, 'run', override, pinnedImage, 'command'], {
           env: { ...process.env, XYLON_LIBRELANE_DOCKER_REAL: fakeDocker },
         }),
         /resource\/security override is not allowed/,
       )
     }
+  } finally {
+    await rm(temp, { recursive: true, force: true })
+  }
+})
+
+test('LibreLane Docker shim rejects an unpinned run image', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'xylon-librelane-docker-'))
+  const fakeDocker = path.join(temp, 'docker')
+  await writeFile(fakeDocker, '#!/usr/bin/env bash\nexit 99\n')
+  await chmod(fakeDocker, 0o700)
+  try {
+    await assert.rejects(
+      execFileAsync('bash', [dockerShim, 'run', '--name', 'test', 'evil/image:latest', 'command'], {
+        env: { ...process.env, XYLON_LIBRELANE_DOCKER_REAL: fakeDocker },
+      }),
+      /permits only the pinned LibreLane image/,
+    )
   } finally {
     await rm(temp, { recursive: true, force: true })
   }

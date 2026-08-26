@@ -39,6 +39,34 @@ case "${1:-}" in
     ;;
 esac
 
+image_arg=""
+skip_next=0
+for argument in "$@"; do
+  if [[ "${skip_next}" -eq 1 ]]; then
+    skip_next=0
+    continue
+  fi
+  case "${argument}" in
+    --name|--volume|-v|--env|-e|--label|--workdir|-w|--user|-u|--entrypoint|--hostname|-h|--add-host|--device|--mount|--publish|-p|--expose|--link|--log-driver|--log-opt|--shm-size|--ulimit|--stop-signal|--stop-timeout)
+      skip_next=1
+      ;;
+    --*=*)
+      ;;
+    --*)
+      ;;
+    -*)
+      ;;
+    *)
+      image_arg="${argument}"
+      break
+      ;;
+  esac
+done
+[[ "${image_arg}" == "${pinned_image}" ]] || {
+  echo "LibreLane Docker shim permits only the pinned LibreLane image" >&2
+  exit 2
+}
+
 for argument in "$@"; do
   case "${argument}" in
     --privileged|--privileged=*|--network|--network=*|--cpus|--cpus=*|--memory|--memory=*|--memory-swap|--memory-swap=*|--pids-limit|--pids-limit=*|--platform|--platform=*|--read-only|--read-only=*|--cap-add|--cap-add=*|--security-opt|--security-opt=*|--tmpfs|--tmpfs=*)
