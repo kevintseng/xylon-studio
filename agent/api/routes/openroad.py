@@ -38,6 +38,11 @@ from agent.openroad.project_store import (
     ProjectStoreError,
     store_project_bundle,
 )
+from agent.api.execution import (
+    EdaSlotBusyError,
+    acquire_exclusive_eda_slot,
+    run_in_exclusive_eda_slot,
+)
 
 router = APIRouter(tags=["openroad"])
 
@@ -832,54 +837,65 @@ async def post_librelane_project_execution(
             "message": "Xylon will not start LibreLane until the user explicitly approves this run.",
             "recovery": "Review the prepared project and call this endpoint again with approved=true.",
         })
-    try:
-        run_root, payload = _load_prepared_librelane_run(run_id)
-        probe = probe_librelane()
-        readiness = await asyncio.to_thread(collect_librelane_readiness, REPO_ROOT, probe=probe)
-        if readiness.get("state") != "ready":
-            payload["state"] = "blocked"
+    async def operation() -> dict[str, Any]:
+        try:
+            run_root, payload = _load_prepared_librelane_run(run_id)
+            probe = probe_librelane()
+            readiness = await asyncio.to_thread(collect_librelane_readiness, REPO_ROOT, probe=probe)
+            if readiness.get("state") != "ready":
+                payload["state"] = "blocked"
+                payload["readiness"] = readiness
+                payload["failure"] = {
+                    "code": "LibreLaneReadinessBlocked",
+                    "message": "Xylon did not start LibreLane because the measured readiness gate is blocked.",
+                    "recovery": str(readiness.get("next_action", "Resolve the first readiness blocker, then retry.")),
+                }
+                _persist_librelane_run(run_root, payload)
+                raise HTTPException(status_code=409, detail=payload["failure"])
+            project = _build_prepared_librelane_project(run_root, payload)
+            plan = build_execution_plan(probe, run_dir=run_root, project=project)
+            payload["state"] = "running"
             payload["readiness"] = readiness
-            payload["failure"] = {
-                "code": "LibreLaneReadinessBlocked",
-                "message": "Xylon did not start LibreLane because the measured readiness gate is blocked.",
-                "recovery": str(readiness.get("next_action", "Resolve the first readiness blocker, then retry.")),
+            payload["runtime_identity"] = asdict(plan.identity)
+            payload["execution"] = {
+                "approved": True,
+                "started_at": datetime.now(UTC).isoformat(),
+                "plan_identity_sha256": plan.plan_identity_sha256,
             }
             _persist_librelane_run(run_root, payload)
-            raise HTTPException(status_code=409, detail=payload["failure"])
-        project = _build_prepared_librelane_project(run_root, payload)
-        plan = build_execution_plan(probe, run_dir=run_root, project=project)
-        payload["state"] = "running"
-        payload["readiness"] = readiness
-        payload["runtime_identity"] = asdict(plan.identity)
-        payload["execution"] = {
-            "approved": True,
-            "started_at": datetime.now(UTC).isoformat(),
-            "plan_identity_sha256": plan.plan_identity_sha256,
-        }
-        _persist_librelane_run(run_root, payload)
-        result = await asyncio.to_thread(execute_plan, REPO_ROOT, run_dir=run_root, plan=plan)
-        payload["state"] = "succeeded"
-        payload["execution"]["finished_at"] = datetime.now(UTC).isoformat()
-        payload["execution"]["result"] = result
-        payload["failure"] = None
-        payload["next_action"] = "Review the native timing metrics and request one bounded repair if needed."
-        _persist_librelane_run(run_root, payload)
-        return payload
-    except HTTPException:
-        raise
-    except (OSError, json.JSONDecodeError, KeyError, ProjectStoreError, LibreLaneAdapterError, LibreLaneExecutionError) as error:
-        if "run_root" in locals() and "payload" in locals():
-            payload["state"] = "failed"
-            payload["failure"] = {
-                "code": "LibreLaneExecutionFailed",
+            result = await asyncio.to_thread(execute_plan, REPO_ROOT, run_dir=run_root, plan=plan)
+            payload["state"] = "succeeded"
+            payload["execution"]["finished_at"] = datetime.now(UTC).isoformat()
+            payload["execution"]["result"] = result
+            payload["failure"] = None
+            payload["next_action"] = "Review the native timing metrics and request one bounded repair if needed."
+            _persist_librelane_run(run_root, payload)
+            return payload
+        except HTTPException:
+            raise
+        except (OSError, json.JSONDecodeError, KeyError, ProjectStoreError, LibreLaneAdapterError, LibreLaneExecutionError) as error:
+            if "run_root" in locals() and "payload" in locals():
+                payload["state"] = "failed"
+                payload["failure"] = {
+                    "code": "LibreLaneExecutionFailed",
+                    "message": str(error),
+                    "recovery": "Inspect the bounded execution evidence and correct the first reported failure before requesting another run.",
+                }
+                _persist_librelane_run(run_root, payload)
+            raise HTTPException(status_code=422, detail={
+                "error": "LibreLaneExecutionFailed",
                 "message": str(error),
                 "recovery": "Inspect the bounded execution evidence and correct the first reported failure before requesting another run.",
-            }
-            _persist_librelane_run(run_root, payload)
-        raise HTTPException(status_code=422, detail={
-            "error": "LibreLaneExecutionFailed",
-            "message": str(error),
-            "recovery": "Inspect the bounded execution evidence and correct the first reported failure before requesting another run.",
+                "run_id": run_id,
+            }) from error
+
+    try:
+        return await run_in_exclusive_eda_slot(operation)
+    except EdaSlotBusyError as error:
+        raise HTTPException(status_code=409, detail={
+            "error": "LibreLaneResourceBusy",
+            "message": "Another Xylon high-load EDA job is already running; no second subprocess was started.",
+            "recovery": "Wait for the active job to finish, then retry this approved run.",
             "run_id": run_id,
         }) from error
 
@@ -928,6 +944,15 @@ async def post_librelane_repair_execution(
             "error": "LibreLaneRepairApprovalInvalid",
             "message": str(error),
             "recovery": "Approve the exact unexpired saved proposal, or create a fresh baseline run and proposal.",
+            "run_id": run_id,
+        }) from error
+    try:
+        release_eda_slot = await acquire_exclusive_eda_slot()
+    except EdaSlotBusyError as error:
+        raise HTTPException(status_code=409, detail={
+            "error": "LibreLaneResourceBusy",
+            "message": "Another Xylon high-load EDA job is already running; no candidate subprocess was started.",
+            "recovery": "Wait for the active job to finish, then retry this approved repair.",
             "run_id": run_id,
         }) from error
     candidate_staged = False
@@ -1047,6 +1072,8 @@ async def post_librelane_repair_execution(
             "recovery": "Keep the baseline unchanged and correct the first candidate failure before creating a fresh repair proposal.",
             "run_id": run_id,
         }) from error
+    finally:
+        await release_eda_slot()
 
 
 @router.post("/openroad/project-preflight")
