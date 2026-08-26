@@ -596,6 +596,7 @@ export function LibreLaneProjectJourney() {
                           {t('librelane.journey.keepBaseline')}
                         </button>
                       </div>
+                      <p className="mt-3 text-xs leading-5 text-slate-500">{t('librelane.journey.decisionLater')}</p>
                     </div>
                   ) : null}
                   {run.decision ? (
