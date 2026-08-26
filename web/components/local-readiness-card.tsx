@@ -44,9 +44,9 @@ function StatusRing({
   } as const
 
   return (
-    <div className="rounded-xl border border-slate-700/80 bg-slate-950/55 p-3 sm:p-4">
+    <div className="min-w-0 rounded-xl border border-slate-700/80 bg-slate-950/55 p-2 sm:p-3">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-xs font-semibold text-slate-300">{label}</p>
+        <p className="min-w-0 truncate text-xs font-semibold text-slate-300">{label}</p>
         {clampedPercent !== null && <span className="text-[11px] font-medium text-slate-500">{Math.round(clampedPercent)}%</span>}
       </div>
       <div className="mt-3 flex justify-center">
@@ -195,8 +195,8 @@ export function LocalReadinessCard({
         </div>
       </div>
 
-      <div className="mt-4 grid gap-3">
-        <div className="grid gap-3 sm:grid-cols-3">
+      <div className="mt-4 grid grid-cols-1 gap-3">
+        <div className="grid grid-cols-3 gap-2 sm:gap-3">
           <StatusRing
             label={t('pipeline.readiness.metric.cpu')}
             percent={cpuPercent}
@@ -236,7 +236,7 @@ export function LocalReadinessCard({
             )}
           </div>
           <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
-            <span className={`rounded-full border px-2.5 py-1 text-xs ${
+            <span className={`shrink-0 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs ${
               readiness.runtime_healthy
                 ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
                 : 'border-rose-500/40 bg-rose-500/10 text-rose-300'
@@ -247,19 +247,19 @@ export function LocalReadinessCard({
                   : 'pipeline.readiness.runtime.unavailable',
               )}
             </span>
-            <span className="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 text-xs text-slate-300">
+            <span className="shrink-0 whitespace-nowrap rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 text-xs text-slate-300">
               {t('pipeline.readiness.policy.serial')}
             </span>
-            <span className="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 text-xs text-slate-300">
+            <span className="shrink-0 whitespace-nowrap rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 text-xs text-slate-300">
               {t('pipeline.readiness.policy.cpu')}
             </span>
-            <span className="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 text-xs text-slate-300">
+            <span className="shrink-0 whitespace-nowrap rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 text-xs text-slate-300">
               {t('pipeline.readiness.policy.memory')}
             </span>
-            <span className="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 text-xs text-slate-300">
+            <span className="shrink-0 whitespace-nowrap rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 text-xs text-slate-300">
               {t('pipeline.readiness.policy.offline')}
             </span>
-            <span className="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 text-xs text-slate-300">
+            <span className="shrink-0 whitespace-nowrap rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 text-xs text-slate-300">
               {t('pipeline.readiness.policy.cleanup')}
             </span>
           </div>
