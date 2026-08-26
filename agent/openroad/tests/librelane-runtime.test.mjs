@@ -11,6 +11,7 @@ const repoRoot = path.resolve(import.meta.dirname, '../..', '..')
 const sandbox = path.join(repoRoot, 'runtime/librelane/bin/docker-sandbox')
 const dockerShim = path.join(repoRoot, 'runtime/librelane/bin/docker')
 const launcher = path.join(repoRoot, 'scripts/xylon-librelane')
+const pinnedImage = 'ghcr.io/librelane/librelane@sha256:322b81f76d22053e5b92f9eaa6e4fb0440084fd02d77a4de0caa4ba7644c88c3'
 
 test('LibreLane Docker shim injects fixed resource and network limits', async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'xylon-librelane-docker-'))
@@ -74,14 +75,14 @@ test('LibreLane Docker shim allows only exact read-only Docker probes', async ()
     })
     assert.equal(await readFile(log, 'utf8'), 'info --format {{json .}}\n')
 
-    await execFileAsync('bash', [dockerShim, 'images', 'pinned-image'], {
+    await execFileAsync('bash', [dockerShim, 'images', pinnedImage], {
       env: {
         ...process.env,
         XYLON_LIBRELANE_DOCKER_REAL: fakeDocker,
-        LIBRELANE_IMAGE_OVERRIDE: 'pinned-image',
+        LIBRELANE_IMAGE_OVERRIDE: pinnedImage,
       },
     })
-    assert.equal(await readFile(log, 'utf8'), 'images pinned-image\n')
+    assert.equal(await readFile(log, 'utf8'), `image inspect ${pinnedImage}\n`)
   } finally {
     await rm(temp, { recursive: true, force: true })
   }
@@ -104,7 +105,7 @@ test('LibreLane Docker shim rejects malformed read-only Docker probes', async ()
         env: {
           ...process.env,
           XYLON_LIBRELANE_DOCKER_REAL: fakeDocker,
-          LIBRELANE_IMAGE_OVERRIDE: 'pinned-image',
+          LIBRELANE_IMAGE_OVERRIDE: pinnedImage,
         },
       }),
       /allows only 'docker images' for the pinned LibreLane image/,

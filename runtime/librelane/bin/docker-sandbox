@@ -3,6 +3,7 @@ set -euo pipefail
 
 real_docker="${XYLON_LIBRELANE_DOCKER_REAL:?XYLON_LIBRELANE_DOCKER_REAL is required}"
 [[ -x "${real_docker}" ]] || { echo "LibreLane Docker engine is not executable" >&2; exit 2; }
+pinned_image="ghcr.io/librelane/librelane@sha256:322b81f76d22053e5b92f9eaa6e4fb0440084fd02d77a4de0caa4ba7644c88c3"
 
 case "${1:-}" in
   --version)
@@ -17,15 +18,17 @@ case "${1:-}" in
     exec "${real_docker}" info --format "{{json .}}"
     ;;
   images)
-    [[ -n "${LIBRELANE_IMAGE_OVERRIDE:-}" ]] || {
-      echo "LibreLane Docker shim requires LIBRELANE_IMAGE_OVERRIDE for image probes" >&2
+    [[ "${LIBRELANE_IMAGE_OVERRIDE:-}" == "${pinned_image}" ]] || {
+      echo "LibreLane Docker shim permits image probes only for the pinned LibreLane image" >&2
       exit 2
     }
-    [[ "$#" -eq 2 && "${2:-}" == "${LIBRELANE_IMAGE_OVERRIDE}" ]] || {
+    [[ "$#" -eq 2 && "${2:-}" == "${pinned_image}" ]] || {
       echo "LibreLane Docker shim allows only 'docker images' for the pinned LibreLane image" >&2
       exit 2
     }
-    exec "${real_docker}" images "${LIBRELANE_IMAGE_OVERRIDE}"
+    "${real_docker}" image inspect "${pinned_image}" >/dev/null || exit 1
+    printf 'REPOSITORY TAG IMAGE ID CREATED SIZE\n%s\n' "${pinned_image}"
+    exit 0
     ;;
   run)
     shift
