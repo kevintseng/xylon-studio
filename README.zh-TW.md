@@ -24,6 +24,13 @@ Xylon 是在本機執行的 OpenROAD 時序助理。提供真實 RTL、SDC、頂
 5. 若有違規，審閱一個確切的 `PLACE_DENSITY 0.60 → 0.65` 提案。
 6. 只有確定要跑 candidate 才確認；完成後比較相同指標的前後差異。
 
+### LibreLane 執行流程
+
+Xylon v0.6 也提供固定版本的 LibreLane 3.0.10 流程。工作台會先檢查本機
+ARM64 映像檔、Python、sky130A PDK 與可用資源；任何一項不符合時，只顯示
+第一個阻塞原因，不會啟動 EDA。使用者批准準備好的 run 後，系統才會執行
+一次受控的 LibreLane 工作，並讀回原生 timing 結果，不會從 log 猜測數據。
+
 支援這個流程的功能包括：
 
 - **多檔專案匯入：**工作台接受 `.v`、`.sv`、`.vh`、`.svh` 與 `.sdc`，會在啟動 EDA 前檢查頂層模組與 clock；preflight 後只要檔案被改動，就會拒絕啟動並要求重新匯入。

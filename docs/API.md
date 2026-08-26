@@ -205,6 +205,22 @@ local includes into the existing timing input contract, and then uses the same
 resource admission and pinned ORFS baseline path as an inline run. This is still
 the bounded `sky130hd` timing slice, not a general LibreLane flow.
 
+## LibreLane project handoff (v0.6)
+
+The v0.6 LibreLane boundary is explicit and fail-closed:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/openroad/librelane-readiness` | Measure the pinned LibreLane 3.0.10 image, Python, sky130A PDK, and local resource gate without starting a flow |
+| `POST /api/openroad/librelane-project-runs` | Copy one imported project into an owned run directory and persist the exact config/provenance |
+| `POST /api/openroad/librelane-project-runs/{run_id}/execute` | Start the prepared run only when the request contains `approved: true` and readiness is still `ready` |
+
+If readiness is blocked, preparation records the first blocker and starts no
+subprocess. Execution rechecks the same gate immediately before launch. A
+successful response contains the pinned runtime identity, plan hash, native
+LibreLane resolved configuration, and native metrics readback. No timing result
+is inferred from logs or mocked output.
+
 ## Setup-timing journey
 
 The timing API accepts bounded inline RTL and SDC, one top module, and the

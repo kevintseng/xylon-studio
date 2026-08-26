@@ -27,6 +27,15 @@ live at `/openroad` and `/pipeline` after `scripts/xylon start`.
 6. Confirm it only if you want a candidate run, then compare the same metrics
    before and after.
 
+### LibreLane execution boundary
+
+Xylon v0.6 also exposes a pinned LibreLane 3.0.10 path for the imported project.
+The workbench first checks the local ARM64 image, Python environment, sky130A PDK,
+and available resources. If any check fails, it shows the first blocker and does
+not start EDA. After the user approves a prepared run, Xylon launches one bounded
+LibreLane job and reads back native timing artifacts; it does not invent metrics
+from logs.
+
 The supported paths behind that journey are:
 
 - **Multi-file project import:** the workbench accepts `.v`, `.sv`, `.vh`, `.svh`, and `.sdc` files, checks the declared top module and clock before EDA, and refuses to start if any file changes after preflight.

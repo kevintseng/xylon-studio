@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,9 +16,14 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent.openroad.librelane_adapter import (
+    IDENTITY_RE,
     LibreLaneAdapterError,
+    LibreLaneExecutionError,
+    LibreLaneMaterializedProject,
     build_config,
+    build_execution_plan,
     build_identity,
+    execute_plan,
     probe_librelane,
 )
 from agent.openroad.librelane_adapter import (
@@ -96,6 +102,12 @@ class LibreLaneProjectPreparationRequest(BaseModel):
 
     run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$")
     project_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,63}$")
+
+
+class LibreLaneExecutionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    approved: bool = False
 
 
 def _path_within_repo(candidate: Path) -> bool:
@@ -394,6 +406,69 @@ def _stage_librelane_preparation(
         raise
 
 
+def _load_prepared_librelane_run(run_id: str) -> tuple[Path, dict[str, Any]]:
+    if not IDENTITY_RE.fullmatch(run_id):
+        raise ProjectStoreError("invalid LibreLane run identity")
+    run_root = REPO_ROOT / ".xylon" / "timing" / "runs" / run_id
+    manifest_path = run_root / "manifest.json"
+    if run_root.is_symlink() or not run_root.is_dir() or manifest_path.is_symlink() or not manifest_path.is_file():
+        raise ProjectStoreError("prepared LibreLane run is unavailable")
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ProjectStoreError("prepared LibreLane run manifest is unreadable") from error
+    if not isinstance(payload, dict) or payload.get("run_id") != run_id:
+        raise ProjectStoreError("prepared LibreLane run manifest is invalid")
+    if payload.get("state") != "prepared":
+        raise ProjectStoreError("LibreLane run is not awaiting execution")
+    return run_root, payload
+
+
+def _build_prepared_librelane_project(run_root: Path, payload: dict[str, Any]) -> LibreLaneMaterializedProject:
+    preparation = payload.get("preparation")
+    if not isinstance(preparation, dict):
+        raise ProjectStoreError("prepared LibreLane run has no preparation record")
+    request = preparation.get("adapter_request")
+    if not isinstance(request, dict):
+        raise ProjectStoreError("prepared LibreLane run has no adapter request")
+    config_path = str(preparation.get("config_path", ""))
+    adapter_request = parse_librelane_request(request)
+    config = (run_root / config_path).resolve()
+    if config.is_symlink() or not config.is_file() or not config.is_relative_to(run_root.resolve()):
+        raise ProjectStoreError("prepared LibreLane config is unavailable")
+    digest = hashlib.sha256(config.read_bytes()).hexdigest()
+    if digest != preparation.get("config_sha256"):
+        raise ProjectStoreError("prepared LibreLane config hash no longer matches")
+    manifest = payload.get("manifest")
+    if not isinstance(manifest, dict):
+        raise ProjectStoreError("prepared LibreLane run has no design manifest")
+    rtl = manifest.get("rtl")
+    include_dirs = manifest.get("include_dirs")
+    if not isinstance(rtl, list) or not all(isinstance(path, str) for path in rtl):
+        raise ProjectStoreError("prepared LibreLane run has invalid RTL paths")
+    if not isinstance(include_dirs, list) or not all(isinstance(path, str) for path in include_dirs):
+        raise ProjectStoreError("prepared LibreLane run has invalid include paths")
+    sdc = manifest.get("sdc")
+    top = manifest.get("top")
+    source_revision = payload.get("source_revision")
+    if not isinstance(sdc, str) or not isinstance(top, str) or not isinstance(source_revision, str):
+        raise ProjectStoreError("prepared LibreLane run is missing design identity")
+    return LibreLaneMaterializedProject(
+        request=adapter_request,
+        top=top,
+        source_revision=source_revision,
+        design_path=f"inputs/project/{rtl[0]}",
+        sdc_path=f"inputs/project/{sdc}",
+        config_path=config_path,
+    )
+
+
+def _persist_librelane_run(run_root: Path, payload: dict[str, Any]) -> None:
+    manifest_path = run_root / "manifest.json"
+    manifest_path.write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    manifest_path.chmod(0o600)
+
+
 @router.get("/openroad/snapshot")
 async def get_openroad_snapshot() -> dict[str, Any]:
     """Return the canonical local OpenROAD snapshot contract."""
@@ -441,6 +516,69 @@ async def post_librelane_project_preparation(
             "message": str(error),
             "recovery": "Import the project again, keep one declared clock, and correct the first readiness or project blocker before preparing LibreLane.",
             "project_id": request.project_id,
+        }) from error
+
+
+@router.post("/openroad/librelane-project-runs/{run_id}/execute")
+async def post_librelane_project_execution(
+    run_id: str,
+    request: LibreLaneExecutionRequest,
+) -> dict[str, Any]:
+    """Execute one prepared run only after explicit approval and readiness recheck."""
+    if not request.approved:
+        raise HTTPException(status_code=403, detail={
+            "error": "LibreLaneApprovalRequired",
+            "message": "Xylon will not start LibreLane until the user explicitly approves this run.",
+            "recovery": "Review the prepared project and call this endpoint again with approved=true.",
+        })
+    try:
+        run_root, payload = _load_prepared_librelane_run(run_id)
+        probe = probe_librelane()
+        readiness = await asyncio.to_thread(collect_librelane_readiness, REPO_ROOT, probe=probe)
+        if readiness.get("state") != "ready":
+            payload["readiness"] = readiness
+            payload["failure"] = {
+                "code": "LibreLaneReadinessBlocked",
+                "message": "Xylon did not start LibreLane because the measured readiness gate is blocked.",
+                "recovery": str(readiness.get("next_action", "Resolve the first readiness blocker, then retry.")),
+            }
+            _persist_librelane_run(run_root, payload)
+            raise HTTPException(status_code=409, detail=payload["failure"])
+        project = _build_prepared_librelane_project(run_root, payload)
+        plan = build_execution_plan(probe, run_dir=run_root, project=project)
+        payload["state"] = "running"
+        payload["readiness"] = readiness
+        payload["runtime_identity"] = asdict(plan.identity)
+        payload["execution"] = {
+            "approved": True,
+            "started_at": datetime.now(UTC).isoformat(),
+            "plan_identity_sha256": plan.plan_identity_sha256,
+        }
+        _persist_librelane_run(run_root, payload)
+        result = await asyncio.to_thread(execute_plan, REPO_ROOT, run_dir=run_root, plan=plan)
+        payload["state"] = "succeeded"
+        payload["execution"]["finished_at"] = datetime.now(UTC).isoformat()
+        payload["execution"]["result"] = result
+        payload["failure"] = None
+        payload["next_action"] = "Review the native timing metrics and request one bounded repair if needed."
+        _persist_librelane_run(run_root, payload)
+        return payload
+    except HTTPException:
+        raise
+    except (OSError, json.JSONDecodeError, KeyError, ProjectStoreError, LibreLaneAdapterError, LibreLaneExecutionError) as error:
+        if "run_root" in locals() and "payload" in locals():
+            payload["state"] = "failed"
+            payload["failure"] = {
+                "code": "LibreLaneExecutionFailed",
+                "message": str(error),
+                "recovery": "Inspect the bounded execution evidence and correct the first reported failure before requesting another run.",
+            }
+            _persist_librelane_run(run_root, payload)
+        raise HTTPException(status_code=422, detail={
+            "error": "LibreLaneExecutionFailed",
+            "message": str(error),
+            "recovery": "Inspect the bounded execution evidence and correct the first reported failure before requesting another run.",
+            "run_id": run_id,
         }) from error
 
 
