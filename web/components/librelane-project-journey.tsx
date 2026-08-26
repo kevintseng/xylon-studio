@@ -291,7 +291,7 @@ export function LibreLaneProjectJourney() {
   const comparison = run?.comparison
   const comparisonMessage = comparison?.setupWns.timingMet
     ? t('librelane.journey.timingMet')
-    : comparison?.setupWns.improved
+    : comparison && comparison.setupWns.delta > 0.001
       ? t('timing.comparison.stillViolating')
       : comparison && comparison.setupWns.delta < -0.001
         ? t('timing.outcome.regressed')
