@@ -11,12 +11,52 @@ import {
   normalizeLibreLaneRun,
   prepareLibreLaneProjectRun,
   recordLibreLaneDecision,
+  resolveLibreLaneAssistantApiUrl,
   resolveLibreLaneProjectApiUrl,
+  runLibreLaneAssistant,
 } from './librelane-project-client.ts'
 
 test('LibreLane project client uses only the selected local OpenROAD root', () => {
   assert.equal(resolveLibreLaneProjectApiUrl(undefined), 'http://127.0.0.1:5001/api/openroad')
   assert.equal(resolveLibreLaneProjectApiUrl('http://localhost:5100/'), 'http://localhost:5100/api/openroad')
+})
+
+test('LibreLane assistant client uses the dedicated assistant endpoint and preserves the egress boundary', async () => {
+  assert.equal(resolveLibreLaneAssistantApiUrl(undefined), 'http://127.0.0.1:5001/api/assistant')
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input, init) => {
+    assert.equal(String(input), 'http://127.0.0.1:5001/api/assistant/librelane')
+    assert.equal(init?.method, 'POST')
+    assert.deepEqual(JSON.parse(String(init?.body)), {
+      schema_version: 'xylon-librelane-assistant-request/v1',
+      message: '請檢查目前的 LibreLane 時序證據',
+      locale: 'zh-TW',
+      provider: { protocol: 'openai-compatible', base_url: 'http://127.0.0.1:11434/v1', model: 'local-model' },
+      project_run_id: 'run_12345678',
+    })
+    return new Response(JSON.stringify({
+      schema_version: 'xylon-librelane-assistant/v1', state: 'project_status_ready',
+      intent: { supported: true, intent: 'inspect_project', normalized_goal: '檢查目前證據', needs: ['project_run'] },
+      skill: { id: 'openroad-setup-timing', version: '2', sha256: 'a'.repeat(64) },
+      egress: { sent: ['user_message'], excluded: ['rtl', 'sdc', 'credentials', 'raw_logs', 'timing_metrics', 'tool_arguments'] },
+      observed: { run_id: 'run_12345678', state: 'succeeded', next_action: 'Review native metrics.' },
+      human_handoff: { required: false, action: 'review_the_current_librelane_evidence' },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
+  try {
+    const result = await runLibreLaneAssistant('http://127.0.0.1:5001/api/assistant', {
+      message: '請檢查目前的 LibreLane 時序證據',
+      locale: 'zh-TW',
+      provider: { protocol: 'openai-compatible', baseUrl: 'http://127.0.0.1:11434/v1', model: 'local-model' },
+      projectRunId: 'run_12345678',
+    })
+    assert.equal(result.state, 'project_status_ready')
+    assert.deepEqual(result.observed, { run_id: 'run_12345678', state: 'succeeded', next_action: 'Review native metrics.' })
+    assert.ok(result.egress.excluded.includes('rtl'))
+    assert.ok(result.egress.excluded.includes('tool_arguments'))
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })
 
 test('LibreLane run normalization keeps bounded preparation and comparison evidence', () => {

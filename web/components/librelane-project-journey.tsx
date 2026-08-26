@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 
 import { useI18n } from '@/lib/i18n'
+import { LibreLaneAgentPanel } from '@/components/librelane-agent-panel'
 import { localizeLibreLaneNextAction } from '@/lib/librelane-next-action'
 import { localizeLibreLaneError, type LibreLaneVisibleError } from '@/lib/librelane-project-error'
 import {
@@ -505,6 +506,14 @@ export function LibreLaneProjectJourney() {
                 </button>
               ) : null}
             </div>
+
+            <LibreLaneAgentPanel
+              projectRunId={run?.runId ?? null}
+              disabled={busy !== null || importing || refreshing}
+              onResult={(result) => {
+                if (result.observed && typeof result.observed.run_id === 'string') void refreshRun()
+              }}
+            />
           </div>
 
           <div className="space-y-6">

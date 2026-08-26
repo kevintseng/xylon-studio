@@ -283,6 +283,35 @@ completed (`grt`) and the checksummed report, checkpoint, and effective SDC read
 back from that stage. Improvement remains separate from `timing_clean`; neither
 state is a signoff claim.
 
+## LibreLane project assistant
+
+`POST /api/assistant/librelane` accepts one plain-language request and a loopback
+OpenAI-compatible model configuration. The model returns only a versioned intent;
+Xylon then invokes deterministic project tools using the saved `project_run_id`.
+Supported intents are `inspect_project`, `propose_repair`, `review_comparison`, and
+`rerun_selected`. A selected rerun requires `approved: true`; no other model output
+can start EDA.
+
+The model receives only the user message, locale, and versioned OpenROAD skill and
+knowledge. RTL, SDC, credentials, raw logs, timing metrics, and tool arguments are
+excluded. The response includes public run state, next action, skill digest, and an
+egress record; source and reports remain in the local owned run directory.
+
+```json
+{
+  "schema_version": "xylon-librelane-assistant-request/v1",
+  "message": "Inspect the current timing result and suggest one bounded repair.",
+  "locale": "en",
+  "provider": {
+    "protocol": "openai-compatible",
+    "model": "an-installed-local-model",
+    "base_url": "http://127.0.0.1:11434/v1"
+  },
+  "project_run_id": "run_aaaaaaaaaaaaaaaa",
+  "approved": false
+}
+```
+
 ## Local timing assistant
 
 `POST /api/assistant/timing` asks one loopback OpenAI-compatible model to map a

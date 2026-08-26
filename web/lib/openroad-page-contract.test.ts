@@ -4,6 +4,7 @@ import test from 'node:test'
 
 const pageSource = readFileSync(new URL('../app/openroad/page.tsx', import.meta.url), 'utf8')
 const librelaneJourneySource = readFileSync(new URL('../components/librelane-project-journey.tsx', import.meta.url), 'utf8')
+const librelaneAgentSource = readFileSync(new URL('../components/librelane-agent-panel.tsx', import.meta.url), 'utf8')
 const librelaneErrorSource = readFileSync(new URL('./librelane-project-error.ts', import.meta.url), 'utf8')
 const timingSource = readFileSync(new URL('../components/timing-workbench.tsx', import.meta.url), 'utf8')
 const resourceDashboardSource = readFileSync(new URL('../components/resource-status-dashboard.tsx', import.meta.url), 'utf8')
@@ -68,6 +69,10 @@ test('LibreLane journey exposes the bounded prepare execute proposal and repair 
   assert.match(librelaneJourneySource, /caught\.runId/)
   assert.match(librelaneJourneySource, /savedRun\.manifest\.top/)
   assert.match(librelaneJourneySource, /run\.state === 'comparison_ready' && run\.proposal && !run\.decision/)
+  assert.match(librelaneJourneySource, /<LibreLaneAgentPanel/)
+  assert.match(librelaneAgentSource, /runLibreLaneAssistant/)
+  assert.match(librelaneAgentSource, /librelane\.agent\.privacy/)
+  assert.match(librelaneJourneySource, /projectRunId=\{run\?\.runId \?\? null\}/)
 })
 
 test('LibreLane journey keeps provenance and version evidence wired into visible technical details', () => {

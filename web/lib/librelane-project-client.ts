@@ -158,6 +158,21 @@ export interface LibreLaneProposalEnvelope {
   proposal: LibreLaneBoundedProposal
 }
 
+export interface LibreLaneAssistantResult {
+  schemaVersion: 'xylon-librelane-assistant/v1'
+  state: string
+  intent: {
+    supported: boolean
+    intent: string
+    normalizedGoal: string
+    needs: string[]
+  }
+  skill: { id: string; version: string; sha256: string }
+  egress: { sent: string[]; excluded: string[] }
+  observed: Record<string, unknown> | null
+  humanHandoff: { required: boolean; action: string }
+}
+
 export class LibreLaneApiError extends Error {
   readonly code: string
   readonly recovery: string
@@ -463,6 +478,34 @@ function normalizeReadbackArtifacts(value: unknown, label: string): LibreLaneArt
   return normalizeArtifacts((readback as Record<string, unknown>).artifacts, label)
 }
 
+function normalizeLibreLaneAssistant(input: unknown): LibreLaneAssistantResult {
+  const value = record(input, 'librelane assistant response')
+  if (value.schema_version !== 'xylon-librelane-assistant/v1') throw new Error('librelane assistant schema is invalid')
+  const intent = record(value.intent, 'librelane assistant intent')
+  const skill = record(value.skill, 'librelane assistant skill')
+  const egress = record(value.egress, 'librelane assistant egress')
+  const handoff = record(value.human_handoff, 'librelane assistant handoff')
+  const needs = Array.isArray(intent.needs) && intent.needs.every((item) => typeof item === 'string')
+    ? intent.needs as string[]
+    : []
+  const sent = Array.isArray(egress.sent) && egress.sent.every((item) => typeof item === 'string') ? egress.sent as string[] : []
+  const excluded = Array.isArray(egress.excluded) && egress.excluded.every((item) => typeof item === 'string') ? egress.excluded as string[] : []
+  if (typeof intent.supported !== 'boolean' || typeof intent.intent !== 'string' || typeof intent.normalized_goal !== 'string') throw new Error('librelane assistant intent is invalid')
+  if (typeof skill.id !== 'string' || typeof skill.version !== 'string' || typeof skill.sha256 !== 'string') throw new Error('librelane assistant skill is invalid')
+  if (typeof handoff.required !== 'boolean' || typeof handoff.action !== 'string') throw new Error('librelane assistant handoff is invalid')
+  return {
+    schemaVersion: 'xylon-librelane-assistant/v1',
+    state: string(value.state, 'state'),
+    intent: { supported: intent.supported, intent: intent.intent, normalizedGoal: intent.normalized_goal, needs },
+    skill: { id: skill.id, version: skill.version, sha256: skill.sha256 },
+    egress: { sent, excluded },
+    observed: value.observed && typeof value.observed === 'object' && !Array.isArray(value.observed)
+      ? value.observed as Record<string, unknown>
+      : null,
+    humanHandoff: { required: handoff.required, action: handoff.action },
+  }
+}
+
 export function normalizeLibreLaneRun(input: unknown): LibreLaneRun {
   const value = record(input, 'librelane run')
   const stateValue = string(value.state, 'state')
@@ -515,6 +558,11 @@ export function normalizeLibreLaneProposalEnvelope(input: unknown): LibreLanePro
 export function resolveLibreLaneProjectApiUrl(configured: string | undefined): string {
   const baseUrl = resolveLocalApiUrl(configured || DEFAULT_LOCAL_API_URL)
   return `${baseUrl.replace(/\/$/, '')}/api/openroad`
+}
+
+export function resolveLibreLaneAssistantApiUrl(configured: string | undefined): string {
+  const baseUrl = resolveLocalApiUrl(configured || DEFAULT_LOCAL_API_URL)
+  return `${baseUrl.replace(/\/$/, '')}/api/assistant`
 }
 
 async function librelaneJsonRequest(url: string, init?: RequestInit): Promise<unknown> {
@@ -611,5 +659,32 @@ export async function executeLibreLaneSelected(
   return normalizeLibreLaneRun(await librelaneJsonRequest(`${apiUrl}/librelane-project-runs/${runId}/selected-execute`, {
     method: 'POST',
     body: JSON.stringify({ approved: true }),
+  }))
+}
+
+export async function runLibreLaneAssistant(
+  apiUrl: string,
+  input: {
+    message: string
+    locale: 'en' | 'zh-TW'
+    provider: { protocol: 'openai-compatible'; baseUrl: string; model: string }
+    projectRunId?: string | null
+    approved?: boolean
+  },
+): Promise<LibreLaneAssistantResult> {
+  return normalizeLibreLaneAssistant(await librelaneJsonRequest(`${apiUrl}/librelane`, {
+    method: 'POST',
+    body: JSON.stringify({
+      schema_version: 'xylon-librelane-assistant-request/v1',
+      message: input.message,
+      locale: input.locale,
+      provider: {
+        protocol: input.provider.protocol,
+        base_url: input.provider.baseUrl,
+        model: input.provider.model,
+      },
+      ...(input.projectRunId ? { project_run_id: input.projectRunId } : {}),
+      ...(input.approved ? { approved: true } : {}),
+    }),
   }))
 }

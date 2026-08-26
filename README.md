@@ -48,6 +48,10 @@ The supported paths behind that journey are:
   recipe, read WNS, TNS, and the worst setup path, then prepare one bounded
   one allowlisted candidate when violations exist: either
   `PL_TARGET_DENSITY 0.60 → 0.65` or `RUN_POST_CTS_RESIZER_TIMING false → true`.
+- **Project assistant:** the primary LibreLane journey also accepts plain-language
+  requests to inspect the current run, prepare one bounded proposal, review a
+  comparison, or rerun the selected configuration. It never sends project source
+  or measured metrics to the model, and selected reruns still require explicit approval.
 - **Human-controlled improvement:** the LibreLane API can create one expiring,
   hash-bound proposal from a negative native WNS baseline. The only supported
   strategies are placement density (`PL_TARGET_DENSITY 0.60 → 0.65`) and CTS
@@ -161,6 +165,8 @@ or inconclusive evidence never becomes a completed stage.
 - `/pipeline` — RTL verification.
 - `POST /api/assistant/timing` — loopback-model intent plus deterministic timing
   orchestration; there is no confirmation tool.
+- `POST /api/assistant/librelane` — loopback-model intent plus deterministic
+  LibreLane project status, proposal, comparison, and explicitly approved selected rerun.
 - `/api/timing/runs/*` — typed baseline, status, proposal, confirmation, and
   candidate endpoints.
 - `/api/openroad/librelane-project-runs/*` — pinned LibreLane preparation,
