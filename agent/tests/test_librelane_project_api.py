@@ -281,3 +281,61 @@ def test_approved_execution_persists_native_result_and_state(tmp_path: Path, mon
     persisted = json.loads((tmp_path / ".xylon" / "timing" / "runs" / "run_execute" / "manifest.json").read_text())
     assert persisted["state"] == "succeeded"
     assert persisted["source_revision"] == imported["preflight"]["manifest"]["source_revision"]
+
+
+def test_execute_time_readiness_block_is_persisted_as_retryable_blocked_state(tmp_path: Path, monkeypatch) -> None:
+    _import_project(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        routes.openroad,
+        "probe_librelane",
+        lambda: LibreLaneProbe("available", "/opt/librelane/python", "3.0.10", "ok"),
+    )
+    ready = {
+        "schema_version": "xylon-librelane-readiness/v1",
+        "state": "ready",
+        "backend": {"name": "LibreLane", "version": "3.0.10"},
+        "checks": {"python": True, "docker": True, "image": True, "pdk": True, "resources": True},
+        "resource_blockers": [],
+        "blockers": [],
+        "next_action": "Start one pinned LibreLane reference run from the imported project.",
+    }
+    blocked = {
+        **ready,
+        "state": "blocked",
+        "checks": {**ready["checks"], "resources": False},
+        "resource_blockers": ["memory available is below the safety floor"],
+        "blockers": ["memory available is below the safety floor"],
+        "next_action": "Resolve the first listed blocker, then check LibreLane readiness again.",
+    }
+    readiness = ready
+    monkeypatch.setattr(routes.openroad, "collect_librelane_readiness", lambda _repo_root, probe=None: readiness)
+    with TestClient(app) as client:
+        prepared = client.post(
+            "/api/openroad/librelane-project-runs",
+            json={"run_id": "run_retryable", "project_id": "counter-librelane"},
+        )
+        assert prepared.status_code == 201
+        readiness = blocked
+        response = client.post(
+            "/api/openroad/librelane-project-runs/run_retryable/execute",
+            json={"approved": True},
+        )
+    assert response.status_code == 409
+    persisted_path = tmp_path / ".xylon" / "timing" / "runs" / "run_retryable" / "manifest.json"
+    persisted = json.loads(persisted_path.read_text(encoding="utf-8"))
+    assert persisted["state"] == "blocked"
+    assert persisted["failure"]["code"] == "LibreLaneReadinessBlocked"
+
+    readiness = ready
+    with TestClient(app) as client:
+        monkeypatch.setattr(routes.openroad, "execute_plan", lambda *_args, **_kwargs: {
+            "state": "succeeded",
+            "run_id": "run_retryable",
+            "readback": {"metrics": {"timing__setup__wns": 0.1}},
+        })
+        retry = client.post(
+            "/api/openroad/librelane-project-runs/run_retryable/execute",
+            json={"approved": True},
+        )
+    assert retry.status_code == 200
+    assert retry.json()["state"] == "succeeded"

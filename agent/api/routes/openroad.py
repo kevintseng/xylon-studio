@@ -419,7 +419,12 @@ def _load_prepared_librelane_run(run_id: str) -> tuple[Path, dict[str, Any]]:
         raise ProjectStoreError("prepared LibreLane run manifest is unreadable") from error
     if not isinstance(payload, dict) or payload.get("run_id") != run_id:
         raise ProjectStoreError("prepared LibreLane run manifest is invalid")
-    if payload.get("state") != "prepared":
+    state = payload.get("state")
+    if state == "blocked":
+        failure = payload.get("failure")
+        if not isinstance(failure, dict) or failure.get("code") != "LibreLaneReadinessBlocked":
+            raise ProjectStoreError("LibreLane run is not awaiting execution")
+    elif state != "prepared":
         raise ProjectStoreError("LibreLane run is not awaiting execution")
     return run_root, payload
 
@@ -536,6 +541,7 @@ async def post_librelane_project_execution(
         probe = probe_librelane()
         readiness = await asyncio.to_thread(collect_librelane_readiness, REPO_ROOT, probe=probe)
         if readiness.get("state") != "ready":
+            payload["state"] = "blocked"
             payload["readiness"] = readiness
             payload["failure"] = {
                 "code": "LibreLaneReadinessBlocked",
