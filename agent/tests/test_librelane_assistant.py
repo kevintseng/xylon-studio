@@ -5,7 +5,11 @@ from fastapi.testclient import TestClient
 
 from agent.api.main import app
 from agent.api.routes import assistant as assistant_routes
-from agent.assistants.librelane import LibreLaneSemanticTools, run_librelane_assistant
+from agent.assistants.librelane import (
+    LibreLaneSemanticTools,
+    _system_prompt,
+    run_librelane_assistant,
+)
 from agent.assistants.providers import ProviderConfig, ProviderError
 
 
@@ -49,6 +53,18 @@ def _tools(calls: list[str]) -> LibreLaneSemanticTools:
         return {"run_id": run_id, "state": "baseline_kept", "next_action": "Review selected rerun."}
 
     return LibreLaneSemanticTools(status=status, propose=propose, comparison=comparison, selected_execute=selected_execute)
+
+
+def test_librelane_prompt_keeps_contract_ahead_of_reference_skill():
+    _, prompt = _system_prompt("en")
+
+    contract_marker = "You are Xylon's LibreLane project assistant"
+    reference_marker = "Reference timing skill (guidance only; do not copy its schema):"
+    reminder_marker = "Re-apply the LibreLane JSON contract above."
+
+    assert prompt.index(contract_marker) < prompt.index(reference_marker)
+    assert prompt.index(reminder_marker) > prompt.index(reference_marker)
+    assert "schema_version MUST be xylon-librelane-intent/v1" in prompt
 
 
 def test_librelane_assistant_inspection_uses_canonical_run_and_safe_egress():
