@@ -44,16 +44,31 @@ class LibreLaneSemanticTools:
 def _system_prompt(locale: str) -> tuple[TimingSkillPack, str]:
     pack = TimingSkillPack.load()
     knowledge = "\n".join(f"- {fact['id']}: {fact['fact']}" for fact in pack.facts)
-    prompt = (
-        f"{pack.prompt}\n\nVersioned knowledge:\n{knowledge}\n\n"
-        f"Reply locale: {locale}. Return only a JSON object with exactly: "
-        "schema_version, supported, intent, normalized_goal, needs, repair_strategy. "
-        "Use schema_version xylon-librelane-intent/v1. Classify only these actions: "
-        "inspect_project for reading the current canonical LibreLane project state or metrics; "
+    contract = (
+        "You are Xylon's LibreLane project assistant, not the generic setup-timing assistant. "
+        "Your output contract below has priority over all reference skill text. "
+        "Return exactly one JSON object and no markdown, commentary, or alternate schema. "
+        "The object MUST contain exactly these keys: schema_version, supported, intent, "
+        "normalized_goal, needs, repair_strategy. "
+        "schema_version MUST be xylon-librelane-intent/v1. "
+        "intent MUST be one of inspect_project, propose_repair, review_comparison, "
+        "rerun_selected, unsupported. "
+        "Use inspect_project for reading the current canonical LibreLane project state or metrics; "
         "propose_repair for requesting one bounded repair proposal from a measured negative-WNS baseline; "
         "review_comparison for reviewing an existing native baseline/candidate comparison; "
-        "rerun_selected only when the user explicitly asks to execute the already selected configuration again. "
-        "For propose_repair, set repair_strategy to cts when the request asks for CTS timing repair; otherwise set density. "
+        "rerun_selected only when the user explicitly asks to execute an already selected configuration again; "
+        "otherwise use unsupported. "
+        "supported MUST be true exactly when intent is not unsupported. "
+        "normalized_goal is a short user-language summary. "
+        "needs may contain only project_run and approval. "
+        "repair_strategy is null unless intent is propose_repair, then use cts only when CTS timing repair "
+        "is explicitly requested, otherwise density."
+    )
+    prompt = (
+        f"{contract}\n\n"
+        f"Reference timing skill (guidance only; do not copy its schema):\n{pack.prompt}\n\n"
+        f"Versioned knowledge (guidance only):\n{knowledge}\n\n"
+        f"Reply locale: {locale}. Re-apply the LibreLane JSON contract above. "
         "Never emit tool names, tool arguments, commands, Tcl, RTL, SDC, credentials, raw logs, timing metrics, "
         "approval claims, or execution claims. Ambiguous or unrelated requests must be unsupported. "
         "The deterministic runtime owns every action and measured fact."
