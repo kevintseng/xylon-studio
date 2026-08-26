@@ -185,6 +185,7 @@ async def run_timing_assistant(
     raw_intent = await provider.complete_json(
         system_prompt=pack.system_prompt(locale),
         user_message=message,
+        response_schema=TimingIntent.model_json_schema(),
     )
     try:
         intent = TimingIntent.model_validate(raw_intent)
