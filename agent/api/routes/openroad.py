@@ -637,7 +637,11 @@ def _create_librelane_proposal(
     }
     payload["proposal"] = proposal
     payload["state"] = "proposal_ready"
-    payload["next_action"] = "Review the bounded placement-density proposal, then approve one candidate rerun."
+    payload["next_action"] = (
+        "Review the bounded CTS timing repair proposal, then approve one candidate rerun."
+        if strategy == "cts"
+        else "Review the bounded placement-density proposal, then approve one candidate rerun."
+    )
     _persist_librelane_run(run_root, payload)
     return proposal
 

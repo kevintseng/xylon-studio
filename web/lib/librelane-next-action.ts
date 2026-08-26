@@ -12,7 +12,7 @@ export function localizeLibreLaneNextAction(action: string, locale: string, tran
   if (/review the native timing metrics and request one bounded repair if needed/i.test(action)) {
     return translate('librelane.journey.nextAction.reviewBaseline')
   }
-  if (/review the bounded placement-density proposal, then approve one candidate rerun/i.test(action)) {
+  if (/review the bounded (?:placement-density|cts timing repair) proposal, then approve one candidate rerun/i.test(action)) {
     return translate('librelane.journey.nextAction.reviewProposal')
   }
   if (/review the measured comparison before choosing whether to keep the candidate settings/i.test(action)) {
