@@ -572,6 +572,27 @@ def test_negative_wns_baseline_creates_bound_cts_timing_proposal(tmp_path: Path,
     assert proposal["rationale"]["hypothesis"] == "啟用 post-CTS timing repair 可能透過 buffer 與 cell sizing 改善最差 setup path。"
 
 
+def test_cts_proposal_accepts_legacy_baseline_without_repair_flag(tmp_path: Path, monkeypatch) -> None:
+    _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id="run_cts_legacy", wns=-0.24)
+    config_path = tmp_path / ".xylon" / "timing" / "runs" / "run_cts_legacy" / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config.pop("RUN_POST_CTS_RESIZER_TIMING")
+    config_path.write_text(json.dumps(config, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    manifest_path = config_path.with_name("manifest.json")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["preparation"]["config_sha256"] = hashlib.sha256(config_path.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/openroad/librelane-project-runs/run_cts_legacy/proposal",
+            json={"strategy": "cts"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["proposal"]["action"]["parameter"] == "RUN_POST_CTS_RESIZER_TIMING"
+
+
 def test_repair_proposal_rejects_timing_clean_baseline(tmp_path: Path, monkeypatch) -> None:
     _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id="run_clean_timing", wns=0.02)
 

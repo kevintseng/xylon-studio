@@ -595,7 +595,10 @@ def _create_librelane_proposal(
         raise ProjectStoreError("baseline LibreLane config is invalid")
     if strategy == "density" and config.get("PL_TARGET_DENSITY") != 0.60:
         raise ProjectStoreError("baseline LibreLane density is outside the supported repair boundary")
-    if strategy == "cts" and config.get(LIBRELANE_CTS_REPAIR_PARAMETER) is not False:
+    # Configs created before the CTS repair flag was introduced omit the key. Treat
+    # that historical/default shape as the same disabled state as an explicit False;
+    # candidate staging still writes True only after the user approves the proposal.
+    if strategy == "cts" and config.get(LIBRELANE_CTS_REPAIR_PARAMETER, False) is not False:
         raise ProjectStoreError("baseline LibreLane CTS timing repair is outside the supported repair boundary")
     created_at = datetime.now(UTC)
     expires_at = created_at.timestamp() + LIBRELANE_PROPOSAL_TTL_SECONDS
