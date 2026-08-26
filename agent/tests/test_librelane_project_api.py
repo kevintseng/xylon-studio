@@ -879,6 +879,17 @@ def _prepare_comparison_for_decision(tmp_path: Path, monkeypatch, *, run_id: str
     return proposal_id
 
 
+def _persist_decision(tmp_path: Path, monkeypatch, *, run_id: str, decision: str) -> tuple[str, dict]:
+    proposal_id = _prepare_comparison_for_decision(tmp_path, monkeypatch, run_id=run_id)
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/openroad/librelane-project-runs/{run_id}/decision",
+            json={"decision": decision, "proposal_id": proposal_id},
+        )
+    assert response.status_code == 200
+    return proposal_id, response.json()
+
+
 def test_comparison_decision_accepts_candidate_and_survives_reload(tmp_path: Path, monkeypatch) -> None:
     run_id = "run_decision_accept"
     proposal_id = _prepare_comparison_for_decision(tmp_path, monkeypatch, run_id=run_id)
@@ -897,9 +908,12 @@ def test_comparison_decision_accepts_candidate_and_survives_reload(tmp_path: Pat
     assert result["decision"]["choice"] == "accept_candidate"
     assert result["decision"]["proposal_id"] == proposal_id
     assert result["decision"]["selected_config_path"].startswith("candidate/")
+    assert result["decision"]["selected_inputs_path"].startswith("candidate/")
     selected = run_root / result["decision"]["selected_config_path"]
     assert selected.is_file()
     assert result["decision"]["selected_config_sha256"] == hashlib.sha256(selected.read_bytes()).hexdigest()
+    selected_inputs = run_root / result["decision"]["selected_inputs_path"]
+    assert result["decision"]["selected_inputs_sha256"] == routes.openroad._librelane_inputs_sha256(selected_inputs)
     assert reloaded.status_code == 200
     assert reloaded.json()["state"] == "candidate_accepted"
     assert reloaded.json()["decision"] == result["decision"]
@@ -924,6 +938,8 @@ def test_comparison_decision_keeps_baseline_without_overwriting_candidate_eviden
     assert result["decision"]["choice"] == "keep_baseline"
     assert result["decision"]["selected_config_path"] == "config.json"
     assert result["decision"]["selected_config_sha256"] == hashlib.sha256(baseline_before).hexdigest()
+    assert result["decision"]["selected_inputs_path"] == "inputs"
+    assert result["decision"]["selected_inputs_sha256"] == routes.openroad._librelane_inputs_sha256(run_root / "inputs")
     assert (run_root / "config.json").read_bytes() == baseline_before
     assert (run_root / result["candidate"]["root"] / "config.json").is_file()
 
@@ -944,3 +960,89 @@ def test_comparison_decision_requires_measured_comparison(tmp_path: Path, monkey
     assert prepared.status_code == 201
     assert response.status_code == 422
     assert response.json()["detail"]["error"] == "LibreLaneDecisionInvalid"
+
+
+@pytest.mark.parametrize(
+    ("decision", "expected_density"),
+    [
+        ("accept_candidate", 0.65),
+        ("keep_baseline", 0.6),
+    ],
+)
+def test_selected_decision_execution_stages_owned_run_and_persists_result(
+    tmp_path: Path,
+    monkeypatch,
+    decision: str,
+    expected_density: float,
+) -> None:
+    run_id = f"run_selected_{'candidate' if decision == 'accept_candidate' else 'baseline'}"
+    proposal_id, decided = _persist_decision(tmp_path, monkeypatch, run_id=run_id, decision=decision)
+    run_root = tmp_path / ".xylon" / "timing" / "runs" / run_id
+    executed_roots: list[Path] = []
+    monkeypatch.setattr(routes.openroad, "collect_librelane_readiness", lambda _repo_root, probe=None: _ready_payload())
+
+    def fake_selected_execute(_repo_root, *, run_dir, plan):
+        executed_roots.append(run_dir)
+        return {
+            "state": "succeeded",
+            "run_id": run_id,
+            "readback": {
+                "resolved": {"PDK": "sky130A", "STD_CELL_LIBRARY": "sky130_fd_sc_hd"},
+                "metrics": {"timing__setup__wns": 0.08, "timing__setup__tns": 0.0},
+                "paths": {"resolved": "resolved.json", "metrics": "metrics.csv"},
+            },
+        }
+
+    monkeypatch.setattr(routes.openroad, "execute_plan", fake_selected_execute)
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/openroad/librelane-project-runs/{run_id}/selected-execute",
+            json={"approved": True},
+        )
+
+    assert response.status_code == 200
+    assert executed_roots
+    result = response.json()
+    selected_execution = result["selected_execution"]
+    assert result["decision"]["proposal_id"] == proposal_id
+    assert selected_execution["state"] == "succeeded"
+    assert selected_execution["decision_choice"] == decision
+    assert selected_execution["result"]["readback"]["metrics"]["timing__setup__wns"] == 0.08
+    selected_root = run_root / selected_execution["root"]
+    assert executed_roots == [selected_root]
+    staged_config = json.loads((selected_root / "config.json").read_text())
+    assert staged_config["PL_TARGET_DENSITY"] == expected_density
+    assert selected_execution["selected_config_path"] == decided["decision"]["selected_config_path"]
+    assert selected_execution["selected_config_sha256"] == decided["decision"]["selected_config_sha256"]
+    assert selected_execution["selected_inputs_path"] == decided["decision"]["selected_inputs_path"]
+    assert selected_execution["selected_inputs_sha256"] == decided["decision"]["selected_inputs_sha256"]
+    persisted = json.loads((run_root / "manifest.json").read_text())
+    assert persisted["selected_execution"]["state"] == "succeeded"
+    assert persisted["selected_execution"]["proposal_id"] == proposal_id
+    assert persisted["selected_execution"]["root"] == selected_execution["root"]
+
+
+def test_selected_decision_execution_rejects_selected_config_hash_drift(tmp_path: Path, monkeypatch) -> None:
+    run_id = "run_selected_drift"
+    _, decided = _persist_decision(tmp_path, monkeypatch, run_id=run_id, decision="accept_candidate")
+    run_root = tmp_path / ".xylon" / "timing" / "runs" / run_id
+    selected_config = run_root / decided["decision"]["selected_config_path"]
+    config = json.loads(selected_config.read_text())
+    config["PL_TARGET_DENSITY"] = 0.7
+    selected_config.write_text(json.dumps(config) + "\n")
+    monkeypatch.setattr(routes.openroad, "collect_librelane_readiness", lambda _repo_root, probe=None: _ready_payload())
+    monkeypatch.setattr(
+        routes.openroad,
+        "execute_plan",
+        lambda *_args, **_kwargs: pytest.fail("hash drift must fail before execute_plan"),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/openroad/librelane-project-runs/{run_id}/selected-execute",
+            json={"approved": True},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["error"] == "LibreLaneSelectedExecutionInvalid"
+    assert "selected LibreLane config hash no longer matches the saved decision" in response.json()["detail"]["message"]

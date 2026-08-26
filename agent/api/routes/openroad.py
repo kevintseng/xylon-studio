@@ -790,6 +790,92 @@ def _config_identity(run_root: Path, relative_path: str, label: str) -> tuple[st
     return relative_path, hashlib.sha256(config_path.read_bytes()).hexdigest()
 
 
+def _directory_identity(run_root: Path, relative_path: str, label: str) -> tuple[str, str]:
+    declared = run_root / relative_path
+    directory_path = declared.resolve()
+    if declared.is_symlink() or not directory_path.is_dir() or not directory_path.is_relative_to(run_root.resolve()):
+        raise ProjectStoreError(f"{label} LibreLane inputs are unavailable")
+    return relative_path, _librelane_inputs_sha256(directory_path)
+
+
+def _load_selected_librelane_decision(
+    run_root: Path,
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any], str, str, str, str]:
+    if payload.get("state") not in {"candidate_accepted", "baseline_kept"}:
+        raise ProjectStoreError("a persisted LibreLane selection is required before rerunning the selected configuration")
+    decision = payload.get("decision")
+    if not isinstance(decision, dict):
+        raise ProjectStoreError("selected LibreLane decision is unavailable")
+    selected_config_path = decision.get("selected_config_path")
+    selected_inputs_path = decision.get("selected_inputs_path")
+    if not isinstance(selected_config_path, str) or not isinstance(selected_inputs_path, str):
+        raise ProjectStoreError("selected LibreLane provenance is incomplete")
+    _, selected_config_sha256 = _config_identity(run_root, selected_config_path, "selected")
+    if decision.get("selected_config_sha256") != selected_config_sha256:
+        raise ProjectStoreError("selected LibreLane config hash no longer matches the saved decision")
+    _, selected_inputs_sha256 = _directory_identity(run_root, selected_inputs_path, "selected")
+    if decision.get("selected_inputs_sha256") != selected_inputs_sha256:
+        raise ProjectStoreError("selected LibreLane inputs hash no longer matches the saved decision")
+    return decision, selected_config_path, selected_config_sha256, selected_inputs_path, selected_inputs_sha256
+
+
+def _stage_selected_librelane_execution(
+    run_root: Path,
+    payload: dict[str, Any],
+) -> tuple[Path, LibreLaneMaterializedProject, dict[str, str]]:
+    decision, selected_config_path, selected_config_sha256, selected_inputs_path, selected_inputs_sha256 = (
+        _load_selected_librelane_decision(run_root, payload)
+    )
+    execution_id = str(decision.get("proposal_id", "selected"))[:16]
+    selected_root = run_root / "selected" / execution_id
+    if selected_root.exists() or selected_root.is_symlink():
+        raise ProjectStoreError("selected LibreLane rerun directory already exists")
+    selected_inputs_root = (run_root / selected_inputs_path).resolve()
+    selected_config = (run_root / selected_config_path).resolve()
+    manifest = payload.get("manifest")
+    if not isinstance(manifest, dict):
+        raise ProjectStoreError("selected LibreLane design manifest is missing")
+    rtl = manifest.get("rtl")
+    sdc = manifest.get("sdc")
+    top = manifest.get("top")
+    source_revision = payload.get("source_revision")
+    if not isinstance(rtl, list) or not rtl or not all(isinstance(path, str) for path in rtl):
+        raise ProjectStoreError("selected LibreLane RTL manifest is invalid")
+    if not isinstance(sdc, str) or not isinstance(top, str) or not isinstance(source_revision, str):
+        raise ProjectStoreError("selected LibreLane design identity is missing")
+    preparation = payload.get("preparation")
+    if not isinstance(preparation, dict):
+        raise ProjectStoreError("selected LibreLane preparation provenance is missing")
+    adapter_request = preparation.get("adapter_request")
+    if not isinstance(adapter_request, dict):
+        raise ProjectStoreError("selected LibreLane adapter request is missing")
+    request = parse_librelane_request(adapter_request)
+    try:
+        shutil.copytree(selected_inputs_root, selected_root / "inputs", symlinks=False)
+        candidate_config = selected_root / "config.json"
+        candidate_config.write_bytes(selected_config.read_bytes())
+        candidate_config.chmod(0o600)
+        project = LibreLaneMaterializedProject(
+            request={**request, "config_path": "config.json"},
+            top=top,
+            source_revision=source_revision,
+            design_path=f"inputs/project/{rtl[0]}",
+            sdc_path=f"inputs/project/{sdc}",
+            config_path="config.json",
+        )
+        provenance = {
+            "selected_config_path": selected_config_path,
+            "selected_config_sha256": selected_config_sha256,
+            "selected_inputs_path": selected_inputs_path,
+            "selected_inputs_sha256": selected_inputs_sha256,
+        }
+        return selected_root, project, provenance
+    except Exception:
+        shutil.rmtree(selected_root, ignore_errors=True)
+        raise
+
+
 @router.get("/openroad/snapshot")
 async def get_openroad_snapshot() -> dict[str, Any]:
     """Return the canonical local OpenROAD snapshot contract."""
@@ -1154,10 +1240,13 @@ async def post_librelane_decision(
         )
         if candidate.get("config_sha256") != candidate_sha256:
             raise ProjectStoreError("candidate LibreLane config hash no longer matches its execution record")
-        selected_path, selected_sha256 = (
-            (candidate_path, candidate_sha256)
+        baseline_inputs_path, baseline_inputs_sha256 = _directory_identity(run_root, "inputs", "baseline")
+        candidate_inputs_path = f"{candidate_root}/inputs"
+        _, candidate_inputs_sha256 = _directory_identity(run_root, candidate_inputs_path, "candidate")
+        selected_path, selected_sha256, selected_inputs_path, selected_inputs_sha256 = (
+            (candidate_path, candidate_sha256, candidate_inputs_path, candidate_inputs_sha256)
             if request.decision == "accept_candidate"
-            else (baseline_path, baseline_sha256)
+            else (baseline_path, baseline_sha256, baseline_inputs_path, baseline_inputs_sha256)
         )
         decided_at = datetime.now(UTC).isoformat()
         payload["decision"] = {
@@ -1171,6 +1260,8 @@ async def post_librelane_decision(
             "candidate_config_sha256": candidate_sha256,
             "selected_config_path": selected_path,
             "selected_config_sha256": selected_sha256,
+            "selected_inputs_path": selected_inputs_path,
+            "selected_inputs_sha256": selected_inputs_sha256,
         }
         payload["state"] = "candidate_accepted" if request.decision == "accept_candidate" else "baseline_kept"
         payload["next_action"] = (
@@ -1185,6 +1276,105 @@ async def post_librelane_decision(
             "error": "LibreLaneDecisionInvalid",
             "message": str(error),
             "recovery": "Review the measured comparison and choose keep candidate or keep baseline once.",
+            "run_id": run_id,
+        }) from error
+
+
+@router.post("/openroad/librelane-project-runs/{run_id}/selected-execute")
+async def post_librelane_selected_execution(
+    run_id: str,
+    request: LibreLaneExecutionRequest,
+) -> dict[str, Any]:
+    """Execute the persisted selected configuration once after explicit approval."""
+    if not request.approved:
+        raise HTTPException(status_code=403, detail={
+            "error": "LibreLaneSelectionApprovalRequired",
+            "message": "Xylon will not rerun the selected configuration until the user explicitly approves it.",
+            "recovery": "Review the saved selected configuration and call this endpoint again with approved=true.",
+        })
+
+    async def operation() -> dict[str, Any]:
+        selected_staged = False
+        try:
+            run_root, payload = _load_librelane_run(run_id)
+            _load_selected_librelane_decision(run_root, payload)
+            probe = probe_librelane()
+            readiness = await asyncio.to_thread(collect_librelane_readiness, REPO_ROOT, probe=probe)
+            if readiness.get("state") != "ready":
+                payload["selected_execution"] = {
+                    "schema_version": "xylon-librelane-selected-execution/v1",
+                    "state": "blocked",
+                    "checked_at": datetime.now(UTC).isoformat(),
+                    "readiness": readiness,
+                }
+                payload["failure"] = {
+                    "code": "LibreLaneSelectedExecutionReadinessBlocked",
+                    "message": "Xylon did not stage or start the selected LibreLane rerun because the readiness gate is blocked.",
+                    "recovery": str(readiness.get("next_action", "Resolve the first readiness blocker, then retry.")),
+                }
+                payload["next_action"] = payload["failure"]["recovery"]
+                _persist_librelane_run(run_root, payload)
+                raise HTTPException(status_code=409, detail=payload["failure"])
+            selected_root, project, provenance = _stage_selected_librelane_execution(run_root, payload)
+            selected_staged = True
+            plan = build_execution_plan(probe, run_dir=selected_root, project=project)
+            payload["selected_execution"] = {
+                "schema_version": "xylon-librelane-selected-execution/v1",
+                "state": "running",
+                "approved": True,
+                "decision_choice": payload["decision"]["choice"],
+                "proposal_id": payload["decision"]["proposal_id"],
+                "source_revision": payload.get("source_revision"),
+                "root": selected_root.relative_to(run_root).as_posix(),
+                "config_path": project.config_path,
+                "config_sha256": hashlib.sha256((selected_root / project.config_path).read_bytes()).hexdigest(),
+                "runtime_identity": asdict(plan.identity),
+                "plan_identity_sha256": plan.plan_identity_sha256,
+                "started_at": datetime.now(UTC).isoformat(),
+                **provenance,
+            }
+            payload["readiness"] = readiness
+            payload["failure"] = None
+            payload["next_action"] = "Wait for the selected LibreLane rerun to finish and inspect its native timing metrics."
+            _persist_librelane_run(run_root, payload)
+            result = await asyncio.to_thread(execute_plan, REPO_ROOT, run_dir=selected_root, plan=plan)
+            payload["selected_execution"]["state"] = "succeeded"
+            payload["selected_execution"]["finished_at"] = datetime.now(UTC).isoformat()
+            payload["selected_execution"]["result"] = result
+            payload["failure"] = None
+            payload["next_action"] = "Review the selected LibreLane rerun evidence and compare it with the saved baseline/candidate history."
+            _persist_librelane_run(run_root, payload)
+            return payload
+        except HTTPException:
+            raise
+        except (OSError, json.JSONDecodeError, KeyError, ProjectStoreError, LibreLaneAdapterError, LibreLaneExecutionError) as error:
+            if selected_staged and "run_root" in locals() and "payload" in locals():
+                selected_execution = payload.get("selected_execution")
+                if isinstance(selected_execution, dict):
+                    selected_execution["state"] = "failed"
+                    selected_execution["finished_at"] = datetime.now(UTC).isoformat()
+                payload["failure"] = {
+                    "code": "LibreLaneSelectedExecutionFailed",
+                    "message": str(error),
+                    "recovery": "Inspect the selected rerun evidence and correct the first reported failure before preparing a new decision flow.",
+                    "blocking_evidence": getattr(error, "evidence", None),
+                }
+                payload["next_action"] = payload["failure"]["recovery"]
+                _persist_librelane_run(run_root, payload)
+            raise HTTPException(status_code=422, detail={
+                "error": "LibreLaneSelectedExecutionInvalid",
+                "message": str(error),
+                "recovery": "Ensure the saved decision still matches the selected config and inputs, then retry the approved rerun.",
+                "run_id": run_id,
+            }) from error
+
+    try:
+        return await run_in_exclusive_eda_slot(operation)
+    except EdaSlotBusyError as error:
+        raise HTTPException(status_code=409, detail={
+            "error": "LibreLaneResourceBusy",
+            "message": "Another Xylon high-load EDA job is already running; no selected rerun subprocess was started.",
+            "recovery": "Wait for the active job to finish, then retry this approved selected rerun.",
             "run_id": run_id,
         }) from error
 
