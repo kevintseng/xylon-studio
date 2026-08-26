@@ -75,6 +75,12 @@ test('LibreLane journey exposes the bounded prepare execute proposal and repair 
   assert.match(librelaneJourneySource, /projectRunId=\{run\?\.runId \?\? null\}/)
 })
 
+test('LibreLane journey localizes stage status chips instead of rendering raw state tokens', () => {
+  assert.match(librelaneJourneySource, /function StateChip\(\{ state \}: \{ state: StageState \}\)/)
+  assert.match(librelaneJourneySource, /t\(`timing\.stage\.status\.\$\{state\}`\)/)
+  assert.match(librelaneJourneySource, /const \{ t \} = useI18n\(\)/)
+})
+
 test('LibreLane journey preserves manual project identity fields across file import', () => {
   const clearSelectionSource = sourceSection(
     librelaneJourneySource,

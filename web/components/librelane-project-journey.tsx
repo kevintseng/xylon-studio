@@ -98,6 +98,7 @@ function summarizeState(run: LibreLaneRun | null): StageState[] {
 }
 
 function StateChip({ state }: { state: StageState }) {
+  const { t } = useI18n()
   const className = state === 'complete'
     ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
     : state === 'active'
@@ -105,7 +106,7 @@ function StateChip({ state }: { state: StageState }) {
       : state === 'blocked'
         ? 'border-amber-500/30 bg-amber-500/10 text-amber-100'
         : 'border-slate-800 bg-slate-900/80 text-slate-400'
-  return <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${className}`}>{state}</span>
+  return <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${className}`}>{t(`timing.stage.status.${state}`)}</span>
 }
 
 export function LibreLaneProjectJourney() {
