@@ -787,6 +787,21 @@ async def get_librelane_readiness() -> dict[str, object]:
     return await asyncio.to_thread(collect_librelane_readiness, REPO_ROOT)
 
 
+@router.get("/openroad/librelane-project-runs/{run_id}")
+async def get_librelane_project_run(run_id: str) -> dict[str, Any]:
+    """Reload one persisted LibreLane run so a refresh can resume the journey."""
+    try:
+        _, payload = _load_librelane_run(run_id)
+        return payload
+    except (OSError, json.JSONDecodeError, KeyError, ProjectStoreError) as error:
+        raise HTTPException(status_code=404, detail={
+            "error": "LibreLaneRunNotFound",
+            "message": "The saved LibreLane run could not be loaded.",
+            "recovery": "Import the project again to create a new run.",
+            "run_id": run_id,
+        }) from error
+
+
 @router.post("/openroad/librelane-project-runs", status_code=201)
 async def post_librelane_project_preparation(
     request: LibreLaneProjectPreparationRequest,

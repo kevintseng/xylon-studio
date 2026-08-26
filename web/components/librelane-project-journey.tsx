@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 
 import { useI18n } from '@/lib/i18n'
 import { localizeLibreLaneNextAction } from '@/lib/librelane-next-action'
@@ -9,6 +9,7 @@ import {
   createLibreLaneRepairProposal,
   executeLibreLaneProjectRun,
   executeLibreLaneRepair,
+  getLibreLaneProjectRun,
   LibreLaneApiError,
   type LibreLaneMetricMap,
   type LibreLaneRepairStrategy,
@@ -28,6 +29,7 @@ import {
 
 const OPENROAD_API_URL = resolveOpenroadApiUrl(process.env.NEXT_PUBLIC_API_URL)
 const LIBRELANE_API_URL = resolveLibreLaneProjectApiUrl(process.env.NEXT_PUBLIC_API_URL)
+const LIBRELANE_RUN_STORAGE_KEY = 'xylon.librelane.active-run'
 
 type BusyAction = 'prepare' | 'baseline' | 'proposal' | 'repair' | null
 type StageState = 'pending' | 'active' | 'complete' | 'blocked'
@@ -36,7 +38,12 @@ type VisibleError = LibreLaneVisibleError
 
 function displayError(error: unknown): VisibleError {
   if (error instanceof LibreLaneApiError || error instanceof TimingApiError) {
-    return { code: error.code, message: error.message, recovery: error.recovery }
+    return {
+      code: error.code,
+      message: error.message,
+      recovery: error.recovery,
+      ...(error instanceof LibreLaneApiError ? { blockingEvidence: error.blockingEvidence } : {}),
+    }
   }
   if (error instanceof Error) {
     return {
@@ -125,16 +132,40 @@ export function LibreLaneProjectJourney() {
     && /^[A-Za-z_][A-Za-z0-9_$]*$/.test(clockPort)
     && Number.isFinite(Number(clockPeriod))
     && Number(clockPeriod) > 0
-  const visibleError = (caught: unknown) => localizeLibreLaneError(displayError(caught), locale, t)
+  const visibleError = useCallback((caught: unknown) => localizeLibreLaneError(displayError(caught), locale, t), [locale, t])
   const proposalReady = run?.state === 'proposal_ready' && run.proposal !== null
   const stageStates = useMemo(() => summarizeState(run), [run])
   const baselineWns = metricValue(run?.baselineMetrics ?? null, 'timing__setup__wns')
   const baselineTns = metricValue(run?.baselineMetrics ?? null, 'timing__setup__tns')
 
+  useEffect(() => {
+    const savedRunId = window.localStorage.getItem(LIBRELANE_RUN_STORAGE_KEY)
+    if (!savedRunId) return
+    let cancelled = false
+    void getLibreLaneProjectRun(LIBRELANE_API_URL, savedRunId)
+      .then((savedRun) => {
+        if (!cancelled) {
+          setRun(savedRun)
+          if (savedRun.projectId) setProjectId(savedRun.projectId)
+          if (savedRun.failure) setError(visibleError(savedRun.failure))
+        }
+      })
+      .catch(() => {
+        window.localStorage.removeItem(LIBRELANE_RUN_STORAGE_KEY)
+      })
+    return () => { cancelled = true }
+  }, [visibleError])
+
+  const persistRun = (nextRun: LibreLaneRun) => {
+    setRun(nextRun)
+    window.localStorage.setItem(LIBRELANE_RUN_STORAGE_KEY, nextRun.runId)
+  }
+
   const resetJourney = () => {
     if (busy) return
     setRun(null)
     setError(null)
+    window.localStorage.removeItem(LIBRELANE_RUN_STORAGE_KEY)
   }
 
   const clearProjectSelection = () => {
@@ -218,7 +249,7 @@ export function LibreLaneProjectJourney() {
           422,
         )
       }
-      setRun(await prepareLibreLaneProjectRun(LIBRELANE_API_URL, { runId, projectId }))
+      persistRun(await prepareLibreLaneProjectRun(LIBRELANE_API_URL, { runId, projectId }))
     } catch (caught) {
       setError(visibleError(caught))
     } finally {
@@ -231,7 +262,7 @@ export function LibreLaneProjectJourney() {
     setBusy('baseline')
     setError(null)
     try {
-      setRun(await executeLibreLaneProjectRun(LIBRELANE_API_URL, run.runId))
+      persistRun(await executeLibreLaneProjectRun(LIBRELANE_API_URL, run.runId))
     } catch (caught) {
       const nextError = visibleError(caught)
       setError(nextError)
@@ -261,6 +292,7 @@ export function LibreLaneProjectJourney() {
         nextAction: next.nextAction,
         failure: null,
       } : current)
+      window.localStorage.setItem(LIBRELANE_RUN_STORAGE_KEY, next.runId)
     } catch (caught) {
       setError(visibleError(caught))
     } finally {
@@ -273,7 +305,7 @@ export function LibreLaneProjectJourney() {
     setBusy('repair')
     setError(null)
     try {
-      setRun(await executeLibreLaneRepair(LIBRELANE_API_URL, { runId: run.runId, proposalId: run.proposal.proposalId }))
+      persistRun(await executeLibreLaneRepair(LIBRELANE_API_URL, { runId: run.runId, proposalId: run.proposal.proposalId }))
     } catch (caught) {
       const nextError = visibleError(caught)
       setError(nextError)
@@ -438,6 +470,11 @@ export function LibreLaneProjectJourney() {
                 <p className="mt-3 text-sm leading-6">{error.message}</p>
                 <p className="mt-4 text-sm font-semibold">{t('timing.failure.next')}</p>
                 <p className="mt-1 text-sm leading-6">{error.recovery}</p>
+                {error.blockingEvidence?.firstError ? (
+                  <p className="mt-3 rounded-xl border border-red-300/20 bg-slate-950/40 px-3 py-2 font-mono text-xs text-red-100">
+                    {error.blockingEvidence.stage ? `${error.blockingEvidence.stage}: ` : ''}{error.blockingEvidence.firstError}
+                  </p>
+                ) : null}
                 <details className="mt-4 text-xs text-red-200">
                   <summary className="cursor-pointer font-semibold">{t('timing.failure.details')}</summary>
                   <code className="mt-2 block break-all font-mono">{error.code}</code>

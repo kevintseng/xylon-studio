@@ -5,6 +5,7 @@ import {
   createLibreLaneRepairProposal,
   executeLibreLaneProjectRun,
   executeLibreLaneRepair,
+  getLibreLaneProjectRun,
   normalizeLibreLaneRun,
   prepareLibreLaneProjectRun,
   resolveLibreLaneProjectApiUrl,
@@ -242,12 +243,14 @@ test('LibreLane project client calls the exact bounded endpoints', async (contex
   await executeLibreLaneProjectRun('http://127.0.0.1:5001/api/openroad', 'run_12345678')
   await createLibreLaneRepairProposal('http://127.0.0.1:5001/api/openroad', 'run_12345678')
   await executeLibreLaneRepair('http://127.0.0.1:5001/api/openroad', { runId: 'run_12345678', proposalId: 'd'.repeat(64) })
+  await getLibreLaneProjectRun('http://127.0.0.1:5001/api/openroad', 'run_12345678')
 
   assert.deepEqual(calls.map((call) => [call.url, call.method]), [
     ['http://127.0.0.1:5001/api/openroad/librelane-project-runs', 'POST'],
     ['http://127.0.0.1:5001/api/openroad/librelane-project-runs/run_12345678/execute', 'POST'],
     ['http://127.0.0.1:5001/api/openroad/librelane-project-runs/run_12345678/proposal', 'POST'],
     ['http://127.0.0.1:5001/api/openroad/librelane-project-runs/run_12345678/repair', 'POST'],
+    ['http://127.0.0.1:5001/api/openroad/librelane-project-runs/run_12345678', 'GET'],
   ])
   assert.deepEqual(calls[0]?.body, { run_id: 'run_12345678', project_id: 'counter-demo' })
   assert.deepEqual(calls[1]?.body, { approved: true })

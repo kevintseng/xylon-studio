@@ -60,13 +60,26 @@ export interface LibreLaneArtifacts {
   metrics: LibreLaneArtifactRef
 }
 
+export interface LibreLaneBlockingEvidence {
+  stage?: string
+  firstError?: string | null
+  toolReturncode?: number
+  configIdentitySha256?: string
+  planIdentitySha256?: string
+}
+
 export interface LibreLaneRun {
   runId: string
   projectId: string | null
   state: LibreLaneRunState
   sourceRevision: string | null
   nextAction: string
-  failure: { code: string; message: string; recovery: string } | null
+  failure: {
+    code: string
+    message: string
+    recovery: string
+    blockingEvidence?: LibreLaneBlockingEvidence | null
+  } | null
   manifest: {
     top: string
     platform: string
@@ -112,14 +125,23 @@ export class LibreLaneApiError extends Error {
   readonly recovery: string
   readonly status: number
   readonly runId: string | null
+  readonly blockingEvidence: LibreLaneBlockingEvidence | null
 
-  constructor(code: string, message: string, recovery: string, status: number, runId: string | null = null) {
+  constructor(
+    code: string,
+    message: string,
+    recovery: string,
+    status: number,
+    runId: string | null = null,
+    blockingEvidence: LibreLaneBlockingEvidence | null = null,
+  ) {
     super(message)
     this.name = 'LibreLaneApiError'
     this.code = code
     this.recovery = recovery
     this.status = status
     this.runId = runId
+    this.blockingEvidence = blockingEvidence
   }
 }
 
@@ -225,11 +247,29 @@ function comparison(value: unknown): LibreLaneComparison {
 function normalizeFailure(value: unknown): LibreLaneRun['failure'] {
   if (value === null || value === undefined) return null
   const input = record(value, 'failure')
+  const evidence = input.blocking_evidence
+  const normalizedEvidence = evidence && typeof evidence === 'object' && !Array.isArray(evidence)
+    ? (() => {
+      const item = evidence as Record<string, unknown>
+      return {
+        stage: typeof item.stage === 'string' ? item.stage : undefined,
+        firstError: typeof item.first_error === 'string' ? item.first_error : null,
+        toolReturncode: typeof item.tool_returncode === 'number' ? item.tool_returncode : undefined,
+        configIdentitySha256: typeof item.config_identity_sha256 === 'string' ? item.config_identity_sha256 : undefined,
+        planIdentitySha256: typeof item.plan_identity_sha256 === 'string' ? item.plan_identity_sha256 : undefined,
+      }
+    })()
+    : null
   return {
     code: string(input.code, 'failure.code'),
     message: string(input.message, 'failure.message'),
     recovery: string(input.recovery, 'failure.recovery'),
+    blockingEvidence: normalizedEvidence,
   }
+}
+
+export async function getLibreLaneProjectRun(apiUrl: string, runId: string): Promise<LibreLaneRun> {
+  return normalizeLibreLaneRun(await librelaneJsonRequest(`${apiUrl}/librelane-project-runs/${runId}`))
 }
 
 function normalizeManifest(value: unknown): LibreLaneRun['manifest'] {
@@ -387,6 +427,16 @@ async function librelaneJsonRequest(url: string, init?: RequestInit): Promise<un
       typeof detail.recovery === 'string' ? detail.recovery : 'Review the local LibreLane setup and retry.',
       response.status,
       typeof detail.run_id === 'string' ? detail.run_id : null,
+      detail.blocking_evidence && typeof detail.blocking_evidence === 'object'
+        ? {
+          stage: typeof (detail.blocking_evidence as Record<string, unknown>).stage === 'string'
+            ? (detail.blocking_evidence as Record<string, unknown>).stage as string
+            : undefined,
+          firstError: typeof (detail.blocking_evidence as Record<string, unknown>).first_error === 'string'
+            ? (detail.blocking_evidence as Record<string, unknown>).first_error as string
+            : null,
+        }
+        : null,
     )
   }
   return payload
