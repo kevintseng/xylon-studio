@@ -7,7 +7,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 const repoRoot = path.resolve(import.meta.dirname, '..', '..')
 const launcher = path.join(repoRoot, 'scripts', 'xylon-openroad')
-const XYLON_VERSION = '0.5.0'
+const XYLON_VERSION = '0.6.0'
 const transport = new StdioClientTransport({
   command: launcher,
   args: ['mcp'],

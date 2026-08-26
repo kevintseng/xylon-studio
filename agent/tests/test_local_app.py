@@ -794,7 +794,7 @@ def _unused_port() -> int:
 
 def _http_service_command(port: int, marker: str, *, api: bool) -> list[str]:
     response = (
-        b'{"status":"healthy","service":"xylonstudio-api","version":"0.5.0"}'
+        b'{"status":"healthy","service":"xylonstudio-api","version":"0.6.0"}'
         if api
         else b"XylonStudio"
     )

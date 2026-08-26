@@ -43,7 +43,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title="XylonStudio API",
     description="Local Verilator and Yosys verification with reproducible evidence",
-    version="0.5.0",
+    version="0.6.0",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -118,7 +118,7 @@ async def root():
     """Root endpoint."""
     return {
         "name": "XylonStudio API",
-        "version": "0.5.0",
+        "version": "0.6.0",
         "status": "running",
         "docs": "/docs"
     }
@@ -130,7 +130,7 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "xylonstudio-api",
-        "version": "0.5.0"
+        "version": "0.6.0"
     }
 
 

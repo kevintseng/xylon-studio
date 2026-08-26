@@ -1,6 +1,6 @@
 # XylonStudio Local API
 
-Version: 0.5.0
+Version: 0.6.0
 Local base URL used by the web app: `http://127.0.0.1:5001`
 
 The API exposes the canonical local RTL-verification pipeline, a bounded
@@ -21,7 +21,7 @@ The supported API binds to `127.0.0.1`; it is not an authenticated network servi
 {
   "status": "healthy",
   "service": "xylonstudio-api",
-  "version": "0.5.0"
+  "version": "0.6.0"
 }
 ```
 
