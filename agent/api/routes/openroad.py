@@ -528,7 +528,18 @@ def _librelane_setup_wns(payload: dict[str, Any]) -> float:
 
 def _create_librelane_proposal(run_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     if payload.get("state") != "succeeded":
-        raise ProjectStoreError("a succeeded LibreLane baseline is required before proposing a repair")
+        existing = payload.get("proposal")
+        if payload.get("state") == "proposal_ready" and isinstance(existing, dict) and existing.get("state") == "awaiting_approval":
+            try:
+                expires_at = datetime.fromisoformat(str(existing.get("expires_at")))
+            except ValueError as error:
+                raise ProjectStoreError("LibreLane repair proposal expiry is invalid") from error
+            if expires_at.tzinfo is None or datetime.now(UTC) < expires_at:
+                raise ProjectStoreError("this LibreLane baseline already has a repair proposal")
+            payload["proposal"] = None
+            payload["state"] = "succeeded"
+        else:
+            raise ProjectStoreError("a succeeded LibreLane baseline is required before proposing a repair")
     if payload.get("proposal") is not None:
         raise ProjectStoreError("this LibreLane baseline already has a repair proposal")
     baseline_wns = _librelane_setup_wns(payload)

@@ -516,6 +516,24 @@ def test_expired_repair_proposal_is_rejected_without_candidate(tmp_path: Path, m
     assert "candidate" not in persisted
 
 
+def test_expired_repair_proposal_can_be_regenerated_from_same_baseline(tmp_path: Path, monkeypatch) -> None:
+    _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id="run_repair_regenerate", wns=-0.1)
+    run_root = tmp_path / ".xylon" / "timing" / "runs" / "run_repair_regenerate"
+    with TestClient(app) as client:
+        first = client.post("/api/openroad/librelane-project-runs/run_repair_regenerate/proposal")
+        assert first.status_code == 200
+    persisted = json.loads((run_root / "manifest.json").read_text())
+    persisted["proposal"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+    (run_root / "manifest.json").write_text(json.dumps(persisted) + "\n")
+
+    with TestClient(app) as client:
+        regenerated = client.post("/api/openroad/librelane-project-runs/run_repair_regenerate/proposal")
+
+    assert regenerated.status_code == 200
+    assert regenerated.json()["proposal"]["proposal_id"] == first.json()["proposal"]["proposal_id"]
+    assert regenerated.json()["proposal"]["state"] == "awaiting_approval"
+
+
 def test_baseline_drift_invalidates_repair_proposal_without_candidate(tmp_path: Path, monkeypatch) -> None:
     _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id="run_repair_drift", wns=-0.1)
     run_root = tmp_path / ".xylon" / "timing" / "runs" / "run_repair_drift"
