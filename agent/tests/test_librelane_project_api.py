@@ -461,6 +461,55 @@ def test_repair_requires_explicit_exact_proposal_approval(tmp_path: Path, monkey
     assert "candidate" not in persisted
 
 
+def test_expired_repair_proposal_is_rejected_without_candidate(tmp_path: Path, monkeypatch) -> None:
+    _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id="run_repair_expired", wns=-0.1)
+    run_root = tmp_path / ".xylon" / "timing" / "runs" / "run_repair_expired"
+    with TestClient(app) as client:
+        proposal_response = client.post("/api/openroad/librelane-project-runs/run_repair_expired/proposal")
+        assert proposal_response.status_code == 200
+        proposal_id = proposal_response.json()["proposal"]["proposal_id"]
+    persisted = json.loads((run_root / "manifest.json").read_text())
+    persisted["proposal"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+    (run_root / "manifest.json").write_text(json.dumps(persisted) + "\n")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/openroad/librelane-project-runs/run_repair_expired/repair",
+            json={"approved": True, "proposal_id": proposal_id},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["error"] == "LibreLaneRepairApprovalInvalid"
+    persisted = json.loads((run_root / "manifest.json").read_text())
+    assert persisted["state"] == "proposal_ready"
+    assert "candidate" not in persisted
+
+
+def test_baseline_drift_invalidates_repair_proposal_without_candidate(tmp_path: Path, monkeypatch) -> None:
+    _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id="run_repair_drift", wns=-0.1)
+    run_root = tmp_path / ".xylon" / "timing" / "runs" / "run_repair_drift"
+    with TestClient(app) as client:
+        proposal_response = client.post("/api/openroad/librelane-project-runs/run_repair_drift/proposal")
+        assert proposal_response.status_code == 200
+        proposal_id = proposal_response.json()["proposal"]["proposal_id"]
+    config_path = run_root / "config.json"
+    config = json.loads(config_path.read_text())
+    config["PL_TARGET_DENSITY"] = 0.61
+    config_path.write_text(json.dumps(config) + "\n")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/openroad/librelane-project-runs/run_repair_drift/repair",
+            json={"approved": True, "proposal_id": proposal_id},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["error"] == "LibreLaneRepairApprovalInvalid"
+    persisted = json.loads((run_root / "manifest.json").read_text())
+    assert persisted["state"] == "proposal_ready"
+    assert "candidate" not in persisted
+
+
 def test_readiness_block_keeps_proposal_retryable_then_returns_native_comparison(
     tmp_path: Path,
     monkeypatch,
