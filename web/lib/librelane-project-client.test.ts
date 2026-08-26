@@ -9,6 +9,7 @@ import {
   LibreLaneApiError,
   normalizeLibreLaneRun,
   prepareLibreLaneProjectRun,
+  recordLibreLaneDecision,
   resolveLibreLaneProjectApiUrl,
 } from './librelane-project-client.ts'
 
@@ -173,6 +174,50 @@ test('LibreLane normalization rejects an invalid proposal timestamp', () => {
   }), /valid timestamp/)
 })
 
+test('LibreLane decision client records and reloads the selected config identity', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input, init) => {
+    assert.equal(String(input), 'http://127.0.0.1:5001/api/openroad/librelane-project-runs/run_decision/decision')
+    assert.equal(init?.method, 'POST')
+    assert.deepEqual(JSON.parse(String(init?.body)), { decision: 'keep_baseline', proposal_id: 'c'.repeat(64) })
+    return new Response(JSON.stringify({
+      run_id: 'run_decision', project_id: 'counter-demo', state: 'baseline_kept',
+      source_revision: 'a'.repeat(64), next_action: 'Baseline configuration remains selected; candidate evidence is preserved for comparison only.',
+      failure: null,
+      manifest: null,
+      preparation: null,
+      runtime_identity: null,
+      execution: null,
+      proposal: {
+        proposal_id: 'c'.repeat(64), state: 'applied', created_at: '2026-08-26T09:00:00Z', expires_at: '2026-08-26T09:15:00Z',
+        binding: { baseline_wns: -0.2 },
+        action: { parameter: 'PL_TARGET_DENSITY', from: 0.6, to: 0.65, scope: 'one_candidate_librelane_rerun' },
+        rationale: { hypothesis: 'Increase placement effort.', expected_signal: 'WNS improves.' }, tradeoffs: ['Runtime may increase.'],
+      },
+      comparison: {
+        baseline_metrics: { timing__setup__wns: -0.2 }, candidate_metrics: { timing__setup__wns: -0.1 },
+        setup_wns: { baseline: -0.2, candidate: -0.1, delta: 0.1, improved: true, timing_met: false },
+      },
+      decision: {
+        schema_version: 'xylon-librelane-decision/v1', state: 'rejected', choice: 'keep_baseline', decided_at: '2026-08-26T09:10:00Z',
+        proposal_id: 'c'.repeat(64), source_revision: 'a'.repeat(64), baseline_config_sha256: 'b'.repeat(64), candidate_config_sha256: 'd'.repeat(64),
+        selected_config_path: 'config.json', selected_config_sha256: 'b'.repeat(64),
+      },
+      candidate: { state: 'succeeded', proposal_id: 'c'.repeat(64), root: 'candidate/abcd' },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
+  try {
+    const run = await recordLibreLaneDecision('http://127.0.0.1:5001/api/openroad', {
+      runId: 'run_decision', proposalId: 'c'.repeat(64), decision: 'keep_baseline',
+    })
+    assert.equal(run.state, 'baseline_kept')
+    assert.equal(run.decision?.selectedConfigPath, 'config.json')
+    assert.equal(run.decision?.selectedConfigSha256, 'b'.repeat(64))
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('LibreLane project client calls the exact bounded endpoints', async (context) => {
   const originalFetch = globalThis.fetch
   const calls: Array<{ url: string; method: string; body: unknown }> = []
@@ -274,9 +319,10 @@ test('LibreLane API errors preserve the first blocker for immediate display', as
     },
   }), { status: 422, headers: { 'Content-Type': 'application/json' } })) as typeof fetch
   try {
-    await assert.rejects(
+      await assert.rejects(
       getLibreLaneProjectRun('http://127.0.0.1:5001/api/openroad', 'run_failure'),
       (error: unknown) => error instanceof LibreLaneApiError
+        && error.runId === 'run_failure'
         && error.blockingEvidence?.firstError === 'PDN-0185 failed before metrics writeback',
     )
   } finally {

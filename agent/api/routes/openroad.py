@@ -15,6 +15,11 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent.api.execution import (
+    EdaSlotBusyError,
+    acquire_exclusive_eda_slot,
+    run_in_exclusive_eda_slot,
+)
 from agent.openroad.librelane_adapter import (
     IDENTITY_RE,
     LibreLaneAdapterError,
@@ -37,11 +42,6 @@ from agent.openroad.project_store import (
     SUPPORTED_PROJECT_FILE_EXTENSIONS,
     ProjectStoreError,
     store_project_bundle,
-)
-from agent.api.execution import (
-    EdaSlotBusyError,
-    acquire_exclusive_eda_slot,
-    run_in_exclusive_eda_slot,
 )
 
 router = APIRouter(tags=["openroad"])
@@ -119,6 +119,13 @@ class LibreLaneRepairApprovalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     approved: bool = False
+    proposal_id: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class LibreLaneDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["accept_candidate", "keep_baseline"]
     proposal_id: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
@@ -775,6 +782,14 @@ def _candidate_metrics(result: dict[str, Any]) -> dict[str, Any]:
     return metrics
 
 
+def _config_identity(run_root: Path, relative_path: str, label: str) -> tuple[str, str]:
+    declared = run_root / relative_path
+    config_path = declared.resolve()
+    if declared.is_symlink() or not config_path.is_file() or not config_path.is_relative_to(run_root.resolve()):
+        raise ProjectStoreError(f"{label} LibreLane config is unavailable")
+    return relative_path, hashlib.sha256(config_path.read_bytes()).hexdigest()
+
+
 @router.get("/openroad/snapshot")
 async def get_openroad_snapshot() -> dict[str, Any]:
     """Return the canonical local OpenROAD snapshot contract."""
@@ -1093,6 +1108,85 @@ async def post_librelane_repair_execution(
         }) from error
     finally:
         await release_eda_slot()
+
+
+@router.post("/openroad/librelane-project-runs/{run_id}/decision")
+async def post_librelane_decision(
+    run_id: str,
+    request: LibreLaneDecisionRequest,
+) -> dict[str, Any]:
+    """Persist the user's keep-candidate or keep-baseline decision after comparison."""
+    try:
+        run_root, payload = _load_librelane_run(run_id)
+        if payload.get("state") != "comparison_ready":
+            raise ProjectStoreError("a measured comparison is required before choosing a configuration")
+        proposal = payload.get("proposal")
+        candidate = payload.get("candidate")
+        comparison = payload.get("comparison")
+        if (
+            not isinstance(proposal, dict)
+            or proposal.get("proposal_id") != request.proposal_id
+            or proposal.get("state") != "applied"
+            or not isinstance(candidate, dict)
+            or candidate.get("proposal_id") != request.proposal_id
+            or candidate.get("state") != "succeeded"
+            or not isinstance(comparison, dict)
+        ):
+            raise ProjectStoreError("the requested decision does not match the measured candidate comparison")
+        preparation = payload.get("preparation")
+        if not isinstance(preparation, dict):
+            raise ProjectStoreError("baseline LibreLane preparation provenance is missing")
+        baseline_path, baseline_sha256 = _config_identity(
+            run_root,
+            str(preparation.get("config_path", "")),
+            "baseline",
+        )
+        if preparation.get("config_sha256") != baseline_sha256:
+            raise ProjectStoreError("baseline LibreLane config hash no longer matches its preparation record")
+        candidate_root = candidate.get("root")
+        candidate_config_path = candidate.get("config_path")
+        if not isinstance(candidate_root, str) or not isinstance(candidate_config_path, str):
+            raise ProjectStoreError("candidate LibreLane configuration provenance is missing")
+        candidate_path, candidate_sha256 = _config_identity(
+            run_root,
+            f"{candidate_root}/{candidate_config_path}",
+            "candidate",
+        )
+        if candidate.get("config_sha256") != candidate_sha256:
+            raise ProjectStoreError("candidate LibreLane config hash no longer matches its execution record")
+        selected_path, selected_sha256 = (
+            (candidate_path, candidate_sha256)
+            if request.decision == "accept_candidate"
+            else (baseline_path, baseline_sha256)
+        )
+        decided_at = datetime.now(UTC).isoformat()
+        payload["decision"] = {
+            "schema_version": "xylon-librelane-decision/v1",
+            "state": "accepted" if request.decision == "accept_candidate" else "rejected",
+            "choice": request.decision,
+            "decided_at": decided_at,
+            "proposal_id": request.proposal_id,
+            "source_revision": payload.get("source_revision"),
+            "baseline_config_sha256": baseline_sha256,
+            "candidate_config_sha256": candidate_sha256,
+            "selected_config_path": selected_path,
+            "selected_config_sha256": selected_sha256,
+        }
+        payload["state"] = "candidate_accepted" if request.decision == "accept_candidate" else "baseline_kept"
+        payload["next_action"] = (
+            "Candidate configuration is selected for the next explicitly requested run; baseline remains preserved."
+            if request.decision == "accept_candidate"
+            else "Baseline configuration remains selected; candidate evidence is preserved for comparison only."
+        )
+        _persist_librelane_run(run_root, payload)
+        return payload
+    except (OSError, json.JSONDecodeError, KeyError, ProjectStoreError) as error:
+        raise HTTPException(status_code=422, detail={
+            "error": "LibreLaneDecisionInvalid",
+            "message": str(error),
+            "recovery": "Review the measured comparison and choose keep candidate or keep baseline once.",
+            "run_id": run_id,
+        }) from error
 
 
 @router.post("/openroad/project-preflight")

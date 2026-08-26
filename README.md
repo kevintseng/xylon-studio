@@ -26,6 +26,8 @@ live at `/openroad` and `/pipeline` after `scripts/xylon start`.
 5. If a violation exists, review one exact `PL_TARGET_DENSITY 0.60 → 0.65` proposal.
 6. Confirm it only if you want a candidate run, then compare the same metrics
    before and after.
+7. Choose **Keep candidate** or **Keep baseline**. Xylon records that choice and
+   the selected configuration; it never silently replaces the baseline.
 
 ### LibreLane execution boundary
 
@@ -50,7 +52,9 @@ The supported paths behind that journey are:
   strategies are placement density (`PL_TARGET_DENSITY 0.60 → 0.65`) and CTS
   timing repair (`RUN_POST_CTS_RESIZER_TIMING false → true`). The exact proposal
   ID and explicit approval are required before an isolated candidate rerun; the
-  response compares native metrics before and after.
+  response compares native metrics before and after. After comparison, the user
+  explicitly keeps the candidate or keeps the baseline; the selected config and
+  both config hashes are persisted for the next requested run.
 - **RTL verification:** pinned Verilator lint, optional independent C++
   self-check, measured coverage, optional Yosys structure, and a checksummed
   exact-rerun bundle.
@@ -108,6 +112,8 @@ OpenROAD. Xylon does not download or silently select a model.
    candidate run.
 6. Explicitly ask the assistant to execute the confirmed change, or use the
    dedicated candidate button. Status and explanation requests never start EDA.
+7. After the comparison, choose **Keep candidate** or **Keep baseline** so the
+   next run has an explicit configuration choice.
 
 ## When OpenROAD cannot start
 
@@ -157,7 +163,8 @@ or inconclusive evidence never becomes a completed stage.
 - `/api/timing/runs/*` — typed baseline, status, proposal, confirmation, and
   candidate endpoints.
 - `/api/openroad/librelane-project-runs/*` — pinned LibreLane preparation,
-  approved baseline execution, bounded repair proposal, and candidate comparison.
+  approved baseline execution, bounded repair proposal, candidate comparison,
+  and explicit keep-candidate/keep-baseline decision.
 - `POST /api/openroad/projects` and `POST /api/timing/project-runs` — bounded
   project import, revalidation, and timing start from a local project ID.
 - `GET /api/openroad/snapshot` — read-only MCP execution record.

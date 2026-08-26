@@ -18,5 +18,11 @@ export function localizeLibreLaneNextAction(action: string, locale: string, tran
   if (/review the measured comparison before choosing whether to keep the candidate settings/i.test(action)) {
     return translate('librelane.journey.nextAction.reviewComparison')
   }
+  if (/candidate configuration is selected for the next explicitly requested run/i.test(action)) {
+    return translate('librelane.journey.decisionCandidate')
+  }
+  if (/baseline configuration remains selected/i.test(action)) {
+    return translate('librelane.journey.decisionBaseline')
+  }
   return action
 }

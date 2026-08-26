@@ -23,6 +23,8 @@ Xylon 是在本機執行的 OpenROAD 時序助理。提供真實 RTL、SDC、頂
 4. 查看實測 WNS、TNS 與最差 setup 路徑。
 5. 若有違規，審閱一個確切的 `PL_TARGET_DENSITY 0.60 → 0.65` 提案。
 6. 只有確定要跑 candidate 才確認；完成後比較相同指標的前後差異。
+7. 選擇「保留 candidate」或「保留 baseline」。系統會記錄選擇與實際採用的設定，
+   不會默默覆蓋原本的 baseline。
 
 ### LibreLane 執行流程
 
@@ -41,7 +43,8 @@ Xylon v0.6 已建立固定版本的 LibreLane 3.0.10 後端介面。`/openroad` 
   `PL_TARGET_DENSITY 0.60 → 0.65` candidate 提案。
 - **由使用者決定是否改善：**API 要求使用者提交完全相同的提案 ID 並明確批准；
   系統會再次檢查資源與輸入是否被改動，才建立隔離的 candidate，最後用 native
-  指標比較前後結果。
+  指標比較前後結果。比較後，使用者還要明確選擇保留 candidate 或 baseline；系統會
+  保存採用的設定路徑與兩份設定雜湊，供下一次明確要求的流程使用。
 - **RTL 驗證：**固定版本的 Verilator lint、選用的獨立 C++ 自我檢查、實測覆蓋率、
   選用的 Yosys 結構統計，以及經雜湊檢查、可精確重跑的證據包。
 - **進階 OpenROAD MCP 紀錄：**獨立的受限 MCP 執行環境仍可用於診斷，但不可拿來
@@ -94,6 +97,7 @@ Xylon 不會自行下載或暗中選擇模型。
 4. 輸入：「檢查 setup 時序、找出最差路徑，並告訴我下一步怎麼改善。」
 5. 查看實測 WNS／TNS 與確切提案；只有確定要執行一次候選改善時才輸入代碼。
 6. 明確要求助理執行已確認的改善，或使用專用執行按鈕。只詢問狀態或說明不會啟動 EDA。
+7. 比較完成後選擇「保留 candidate」或「保留 baseline」，讓下一次流程有清楚的設定來源。
 
 ## OpenROAD 無法啟動時
 
@@ -138,6 +142,7 @@ Candidate 有改善不等於 timing closure。目前 setup 邊界沒有違規，
 - `POST /api/assistant/timing`：本機模型理解需求，再由受限程式執行時序流程；沒有確認工具。
 - `/api/timing/runs/*`：baseline、狀態、提案、確認與 candidate 的固定介面。
 - `POST /api/openroad/projects` 與 `POST /api/timing/project-runs`：受限專案匯入、重新驗證，以及從本機專案 ID 啟動時序分析。
+- `/api/openroad/librelane-project-runs/*`：固定版本 LibreLane 的準備、baseline 執行、受限改善提案、前後比較，以及保留 candidate／baseline 的明確決定。
 - `GET /api/openroad/snapshot`：唯讀 MCP 執行紀錄。
 
 詳細規格請見 [API 說明](docs/API.md)、[安全邊界](SECURITY.md) 與

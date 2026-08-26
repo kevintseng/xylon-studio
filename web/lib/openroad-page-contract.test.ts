@@ -44,6 +44,10 @@ test('LibreLane journey exposes the bounded prepare execute proposal and repair 
     'librelane\\.journey\\.action\\.runCandidate',
     'timing\\.project\\.detected',
     'timing\\.failure\\.details',
+    'recordLibreLaneDecision',
+    'librelane\\.journey\\.keepCandidate',
+    'librelane\\.journey\\.keepBaseline',
+    'librelane\\.journey\\.refresh',
   ]) {
     assert.match(librelaneJourneySource, new RegExp(required))
   }
@@ -56,6 +60,11 @@ test('LibreLane journey exposes the bounded prepare execute proposal and repair 
   assert.match(librelaneErrorSource, /project_id already exists/)
   assert.match(librelaneErrorSource, /timing\.project\.idConflict/)
   assert.match(librelaneJourneySource, /LibreLaneReadinessBlocked/)
+  assert.match(librelaneJourneySource, /reloadRunAfterApiError\(caught\)/)
+  assert.match(librelaneJourneySource, /caught instanceof LibreLaneApiError/)
+  assert.match(librelaneJourneySource, /caught\.runId/)
+  assert.match(librelaneJourneySource, /savedRun\.manifest\.top/)
+  assert.match(librelaneJourneySource, /run\.state === 'comparison_ready' && run\.proposal && !run\.decision/)
 })
 
 test('LibreLane journey keeps provenance and version evidence wired into visible technical details', () => {

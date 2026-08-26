@@ -216,6 +216,7 @@ The v0.6 LibreLane boundary is explicit and fail-closed:
 | `POST /api/openroad/librelane-project-runs/{run_id}/execute` | Start the prepared run only when the request contains `approved: true` and readiness is still `ready` |
 | `POST /api/openroad/librelane-project-runs/{run_id}/proposal` | Create one expiring, hash-bound repair proposal from a succeeded baseline with negative native setup WNS |
 | `POST /api/openroad/librelane-project-runs/{run_id}/repair` | After exact approval, rerun one isolated allowlisted density or CTS timing-repair candidate and persist the native comparison |
+| `POST /api/openroad/librelane-project-runs/{run_id}/decision` | After a measured comparison, persist an explicit `accept_candidate` or `keep_baseline` choice and the selected config identity |
 
 If readiness is blocked, preparation records the first blocker and starts no
 subprocess. Execution rechecks the same gate immediately before launch. A
@@ -231,8 +232,11 @@ the inputs into an owned candidate directory. The only supported changes are
 `PL_TARGET_DENSITY 0.60 -> 0.65` or `RUN_POST_CTS_RESIZER_TIMING false -> true`.
 A blocked readiness check leaves the proposal retryable and starts no subprocess.
 A successful candidate response includes baseline metrics, candidate metrics, and
-the measured setup-WNS delta. This is a bounded experiment, not timing closure or
-signoff.
+the measured setup-WNS delta. The run then requires one explicit decision: send
+`decision=accept_candidate` to select the candidate, or `decision=keep_baseline` to
+retain the original configuration. The response records both config hashes, the
+selected path, the proposal ID, and the source revision; it does not overwrite the
+baseline. This is a bounded experiment, not timing closure or signoff.
 
 ## Setup-timing journey
 

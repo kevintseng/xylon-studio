@@ -11,6 +11,7 @@ import {
   executeLibreLaneRepair,
   getLibreLaneProjectRun,
   LibreLaneApiError,
+  recordLibreLaneDecision,
   type LibreLaneMetricMap,
   type LibreLaneRepairStrategy,
   type LibreLaneRun,
@@ -31,7 +32,7 @@ const OPENROAD_API_URL = resolveOpenroadApiUrl(process.env.NEXT_PUBLIC_API_URL)
 const LIBRELANE_API_URL = resolveLibreLaneProjectApiUrl(process.env.NEXT_PUBLIC_API_URL)
 const LIBRELANE_RUN_STORAGE_KEY = 'xylon.librelane.active-run'
 
-type BusyAction = 'prepare' | 'baseline' | 'proposal' | 'repair' | null
+type BusyAction = 'prepare' | 'baseline' | 'proposal' | 'repair' | 'decision' | null
 type StageState = 'pending' | 'active' | 'complete' | 'blocked'
 
 type VisibleError = LibreLaneVisibleError
@@ -78,19 +79,19 @@ function metricValue(metrics: LibreLaneMetricMap | null, key: string): number | 
 
 function summarizeState(run: LibreLaneRun | null): StageState[] {
   if (!run) return ['active', 'pending', 'pending', 'pending', 'pending']
-  const readyForProposal = run.state === 'succeeded' || run.state === 'proposal_ready' || run.state === 'comparison_ready' || run.state === 'candidate_failed'
+  const readyForProposal = run.state === 'succeeded' || run.state === 'proposal_ready' || run.state === 'comparison_ready' || run.state === 'candidate_accepted' || run.state === 'baseline_kept' || run.state === 'candidate_failed'
   return [
     'complete',
     run.state === 'blocked' ? 'blocked' : 'complete',
     run.state === 'running' ? 'active' : readyForProposal ? 'complete' : run.state === 'failed' ? 'blocked' : 'pending',
     run.state === 'proposal_ready' || run.state === 'candidate_staged' || run.state === 'candidate_running'
       ? 'active'
-      : run.state === 'comparison_ready'
+      : ['comparison_ready', 'candidate_accepted', 'baseline_kept'].includes(run.state)
         ? 'complete'
         : run.state === 'candidate_failed'
           ? 'blocked'
           : 'pending',
-    run.state === 'comparison_ready' ? 'complete' : run.state === 'candidate_failed' ? 'blocked' : 'pending',
+    ['comparison_ready', 'candidate_accepted', 'baseline_kept'].includes(run.state) ? 'complete' : run.state === 'candidate_failed' ? 'blocked' : 'pending',
   ]
 }
 
@@ -119,6 +120,7 @@ export function LibreLaneProjectJourney() {
   const [fileState, setFileState] = useState<string | null>(null)
   const [run, setRun] = useState<LibreLaneRun | null>(null)
   const [busy, setBusy] = useState<BusyAction>(null)
+  const [refreshing, setRefreshing] = useState(false)
   const [importing, setImporting] = useState(false)
   const [error, setError] = useState<VisibleError | null>(null)
   const importGeneration = useRef(0)
@@ -147,6 +149,18 @@ export function LibreLaneProjectJourney() {
         if (!cancelled) {
           setRun(savedRun)
           if (savedRun.projectId) setProjectId(savedRun.projectId)
+          if (savedRun.manifest) {
+            setTopModule(savedRun.manifest.top)
+            setRtlPaths(savedRun.manifest.rtlPaths)
+            setIncludeDirs(savedRun.manifest.includeDirs)
+            setSdcPath(savedRun.manifest.sdcPath)
+            if (savedRun.manifest.clock) {
+              setClockName(savedRun.manifest.clock.name)
+              setClockPort(savedRun.manifest.clock.port)
+              setClockPeriod(String(savedRun.manifest.clock.periodNs))
+            }
+            setFileState(t('librelane.journey.restored'))
+          }
           if (savedRun.failure) setError(visibleError(savedRun.failure))
         }
       })
@@ -154,11 +168,22 @@ export function LibreLaneProjectJourney() {
         window.localStorage.removeItem(LIBRELANE_RUN_STORAGE_KEY)
       })
     return () => { cancelled = true }
-  }, [visibleError])
+  }, [t, visibleError])
 
   const persistRun = (nextRun: LibreLaneRun) => {
     setRun(nextRun)
     window.localStorage.setItem(LIBRELANE_RUN_STORAGE_KEY, nextRun.runId)
+  }
+
+  const reloadRunAfterApiError = async (caught: unknown): Promise<boolean> => {
+    if (!(caught instanceof LibreLaneApiError) || !caught.runId) return false
+    try {
+      persistRun(await getLibreLaneProjectRun(LIBRELANE_API_URL, caught.runId))
+      return true
+    } catch {
+      // Keep the immediate, evidence-backed error visible when the follow-up readback is unavailable.
+      return false
+    }
   }
 
   const resetJourney = () => {
@@ -179,6 +204,22 @@ export function LibreLaneProjectJourney() {
     setClockPort('clk')
     setClockPeriod('10')
     setFileState(null)
+  }
+
+  const refreshRun = async () => {
+    const savedRunId = run?.runId ?? window.localStorage.getItem(LIBRELANE_RUN_STORAGE_KEY)
+    if (!savedRunId || refreshing || busy) return
+    setRefreshing(true)
+    try {
+      const refreshed = await getLibreLaneProjectRun(LIBRELANE_API_URL, savedRunId)
+      persistRun(refreshed)
+      if (refreshed.failure) setError(visibleError(refreshed.failure))
+      else setError(null)
+    } catch (caught) {
+      setError(visibleError(caught))
+    } finally {
+      setRefreshing(false)
+    }
   }
 
   const importProjectFiles = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -266,14 +307,16 @@ export function LibreLaneProjectJourney() {
     } catch (caught) {
       const nextError = visibleError(caught)
       setError(nextError)
-      setRun((current) => current ? {
-        ...current,
-        state: nextError.code === 'LibreLaneReadinessBlocked' ? 'blocked' : current.state,
-        failure: nextError.code === 'LibreLaneReadinessBlocked'
-          ? { code: nextError.code, message: nextError.message, recovery: nextError.recovery }
-          : current.failure,
-        nextAction: nextError.recovery,
-      } : current)
+      if (!await reloadRunAfterApiError(caught)) {
+        setRun((current) => current ? {
+          ...current,
+          state: nextError.code === 'LibreLaneReadinessBlocked' ? 'blocked' : current.state,
+          failure: nextError.code === 'LibreLaneReadinessBlocked'
+            ? { code: nextError.code, message: nextError.message, recovery: nextError.recovery }
+            : current.failure,
+          nextAction: nextError.recovery,
+        } : current)
+      }
     } finally {
       setBusy(null)
     }
@@ -309,11 +352,38 @@ export function LibreLaneProjectJourney() {
     } catch (caught) {
       const nextError = visibleError(caught)
       setError(nextError)
-      setRun((current) => current ? {
-        ...current,
-        failure: { code: nextError.code, message: nextError.message, recovery: nextError.recovery },
-        nextAction: nextError.recovery,
-      } : current)
+      if (!await reloadRunAfterApiError(caught)) {
+        setRun((current) => current ? {
+          ...current,
+          failure: { code: nextError.code, message: nextError.message, recovery: nextError.recovery },
+          nextAction: nextError.recovery,
+        } : current)
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const decide = async (decision: 'accept_candidate' | 'keep_baseline') => {
+    if (!run || !run.proposal || busy || run.state !== 'comparison_ready') return
+    setBusy('decision')
+    setError(null)
+    try {
+      persistRun(await recordLibreLaneDecision(LIBRELANE_API_URL, {
+        runId: run.runId,
+        proposalId: run.proposal.proposalId,
+        decision,
+      }))
+    } catch (caught) {
+      const nextError = visibleError(caught)
+      setError(nextError)
+      if (!await reloadRunAfterApiError(caught)) {
+        setRun((current) => current ? {
+          ...current,
+          failure: { code: nextError.code, message: nextError.message, recovery: nextError.recovery },
+          nextAction: nextError.recovery,
+        } : current)
+      }
     } finally {
       setBusy(null)
     }
@@ -414,6 +484,11 @@ export function LibreLaneProjectJourney() {
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{t('librelane.journey.nextEyebrow')}</p>
               <h3 className="mt-2 text-xl font-semibold text-slate-50">{t('librelane.journey.nextTitle')}</h3>
               <p className="mt-3 text-sm leading-6 text-slate-300">{nextAction}</p>
+              {run ? (
+                <button type="button" onClick={() => void refreshRun()} disabled={refreshing || busy !== null} className="mt-4 rounded-xl border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:border-cyan-400/40 hover:bg-cyan-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 disabled:cursor-wait disabled:opacity-60">
+                  {refreshing ? t('librelane.journey.refreshing') : t('librelane.journey.refresh')}
+                </button>
+              ) : null}
               {run?.runId ? <p className="mt-4 break-all font-mono text-xs text-slate-500">{t('timing.runId')}: {run.runId}</p> : null}
               {run?.sourceRevision ? <p className="mt-2 break-all font-mono text-xs text-slate-500">{t('librelane.journey.sourceRevision')}: {run.sourceRevision.slice(0, 12)}</p> : null}
             </section>
@@ -460,6 +535,26 @@ export function LibreLaneProjectJourney() {
                   <p className={`mt-4 rounded-2xl px-4 py-3 text-sm leading-6 ${comparison.setupWns.timingMet ? 'bg-emerald-500/10 text-emerald-100' : 'bg-amber-500/10 text-amber-100'}`}>
                     {comparisonMessage}
                   </p>
+                  {run.state === 'comparison_ready' && run.proposal && !run.decision ? (
+                    <div className="mt-4 rounded-2xl border border-slate-700 bg-slate-950/50 p-4">
+                      <p className="text-sm font-semibold text-slate-100">{t('librelane.journey.decisionTitle')}</p>
+                      <p className="mt-1 text-xs leading-5 text-slate-400">{t('librelane.journey.decisionDetail')}</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button type="button" onClick={() => void decide('accept_candidate')} disabled={busy !== null} className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-emerald-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200 disabled:cursor-wait disabled:opacity-60">
+                          {busy === 'decision' ? t('librelane.journey.deciding') : t('librelane.journey.keepCandidate')}
+                        </button>
+                        <button type="button" onClick={() => void decide('keep_baseline')} disabled={busy !== null} className="rounded-xl border border-slate-600 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:border-cyan-400/40 hover:bg-cyan-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 disabled:cursor-wait disabled:opacity-60">
+                          {t('librelane.journey.keepBaseline')}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                  {run.decision ? (
+                    <div className="mt-4 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-100">
+                      {run.decision.choice === 'accept_candidate' ? t('librelane.journey.decisionCandidate') : t('librelane.journey.decisionBaseline')}
+                      <p className="mt-2 break-all font-mono text-[11px] text-emerald-200/80">{run.decision.selectedConfigPath} · sha256:{run.decision.selectedConfigSha256.slice(0, 12)}</p>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </section>
@@ -513,6 +608,15 @@ export function LibreLaneProjectJourney() {
                       <dd className="mt-1 space-y-1 font-mono">
                         <div>{run.candidateArtifacts.resolved.path} · sha256:{run.candidateArtifacts.resolved.sha256.slice(0, 12)} · {run.candidateArtifacts.resolved.bytes} B</div>
                         <div>{run.candidateArtifacts.metrics.path} · sha256:{run.candidateArtifacts.metrics.sha256.slice(0, 12)} · {run.candidateArtifacts.metrics.bytes} B</div>
+                      </dd>
+                    </div>
+                  ) : null}
+                  {run.decision ? (
+                    <div>
+                      <dt className="font-semibold text-slate-200">{t('librelane.journey.decisionTitle')}</dt>
+                      <dd className="mt-1 space-y-1 font-mono">
+                        <div>{run.decision.choice} · {run.decision.decidedAt}</div>
+                        <div>{run.decision.selectedConfigPath} · sha256:{run.decision.selectedConfigSha256}</div>
                       </dd>
                     </div>
                   ) : null}

@@ -8,6 +8,8 @@ export type LibreLaneRunState =
   | 'candidate_staged'
   | 'candidate_running'
   | 'comparison_ready'
+  | 'candidate_accepted'
+  | 'baseline_kept'
   | 'candidate_failed'
   | 'blocked'
   | 'failed'
@@ -47,6 +49,18 @@ export interface LibreLaneComparison {
     improved: boolean
     timingMet: boolean
   }
+}
+
+export interface LibreLaneDecision {
+  state: 'accepted' | 'rejected'
+  choice: 'accept_candidate' | 'keep_baseline'
+  decidedAt: string
+  proposalId: string
+  sourceRevision: string
+  baselineConfigSha256: string
+  candidateConfigSha256: string
+  selectedConfigPath: string
+  selectedConfigSha256: string
 }
 
 export interface LibreLaneArtifactRef {
@@ -100,6 +114,7 @@ export interface LibreLaneRun {
   baselineArtifacts: LibreLaneArtifacts | null
   proposal: LibreLaneBoundedProposal | null
   comparison: LibreLaneComparison | null
+  decision: LibreLaneDecision | null
   candidateArtifacts: LibreLaneArtifacts | null
   candidate: {
     state: string
@@ -110,7 +125,8 @@ export interface LibreLaneRun {
 
 const LIBRELANE_RUN_STATES = new Set<LibreLaneRunState>([
   'prepared', 'running', 'succeeded', 'proposal_ready', 'candidate_staged',
-  'candidate_running', 'comparison_ready', 'candidate_failed', 'blocked', 'failed',
+  'candidate_running', 'comparison_ready', 'candidate_accepted', 'baseline_kept',
+  'candidate_failed', 'blocked', 'failed',
 ])
 
 export interface LibreLaneProposalEnvelope {
@@ -171,6 +187,12 @@ function timestamp(value: unknown, label: string): string {
   const parsed = string(value, label)
   if (!Number.isFinite(Date.parse(parsed))) throw new Error(`${label} must be a valid timestamp`)
   return parsed
+}
+
+function sha256(value: unknown, label: string): string {
+  const parsed = string(value, label)
+  if (!/^[a-f0-9]{64}$/i.test(parsed)) throw new Error(`${label} must be a 64-character hexadecimal digest`)
+  return parsed.toLowerCase()
 }
 
 function stringArray(value: unknown, label: string): string[] {
@@ -267,6 +289,27 @@ function normalizeFailure(value: unknown): LibreLaneRun['failure'] {
     message: string(input.message, 'failure.message'),
     recovery: string(input.recovery, 'failure.recovery'),
     blockingEvidence: normalizedEvidence,
+  }
+}
+
+function normalizeDecision(value: unknown): LibreLaneDecision | null {
+  if (value === null || value === undefined) return null
+  const input = record(value, 'decision')
+  const state = string(input.state, 'decision.state')
+  const choice = string(input.choice, 'decision.choice')
+  if (!['accepted', 'rejected'].includes(state) || !['accept_candidate', 'keep_baseline'].includes(choice)) {
+    throw new Error('decision state is invalid')
+  }
+  return {
+    state: state as LibreLaneDecision['state'],
+    choice: choice as LibreLaneDecision['choice'],
+    decidedAt: timestamp(input.decided_at, 'decision.decided_at'),
+    proposalId: string(input.proposal_id, 'decision.proposal_id'),
+    sourceRevision: string(input.source_revision, 'decision.source_revision'),
+    baselineConfigSha256: sha256(input.baseline_config_sha256, 'decision.baseline_config_sha256'),
+    candidateConfigSha256: sha256(input.candidate_config_sha256, 'decision.candidate_config_sha256'),
+    selectedConfigPath: string(input.selected_config_path, 'decision.selected_config_path'),
+    selectedConfigSha256: sha256(input.selected_config_sha256, 'decision.selected_config_sha256'),
   }
 }
 
@@ -374,6 +417,7 @@ export function normalizeLibreLaneRun(input: unknown): LibreLaneRun {
     baselineArtifacts: normalizeReadbackArtifacts(value.execution, 'execution.result.readback.artifacts'),
     proposal: value.proposal ? proposal(value.proposal) : null,
     comparison: value.comparison ? comparison(value.comparison) : null,
+    decision: normalizeDecision(value.decision),
     candidateArtifacts: normalizeReadbackArtifacts(value.candidate, 'candidate.result.readback.artifacts'),
     candidate: value.candidate && typeof value.candidate === 'object'
       ? {
@@ -481,5 +525,15 @@ export async function executeLibreLaneRepair(
   return normalizeLibreLaneRun(await librelaneJsonRequest(`${apiUrl}/librelane-project-runs/${input.runId}/repair`, {
     method: 'POST',
     body: JSON.stringify({ approved: true, proposal_id: input.proposalId }),
+  }))
+}
+
+export async function recordLibreLaneDecision(
+  apiUrl: string,
+  input: { runId: string; proposalId: string; decision: 'accept_candidate' | 'keep_baseline' },
+): Promise<LibreLaneRun> {
+  return normalizeLibreLaneRun(await librelaneJsonRequest(`${apiUrl}/librelane-project-runs/${input.runId}/decision`, {
+    method: 'POST',
+    body: JSON.stringify({ decision: input.decision, proposal_id: input.proposalId }),
   }))
 }
