@@ -300,8 +300,11 @@ function normalizeArtifacts(value: unknown, label: string): LibreLaneArtifacts |
 
 function normalizeReadbackArtifacts(value: unknown, label: string): LibreLaneArtifacts | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const result = value as Record<string, unknown>
-  const readback = result.readback
+  const execution = value as Record<string, unknown>
+  const result = execution.result
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return null
+  const resultRecord = result as Record<string, unknown>
+  const readback = resultRecord.readback
   if (!readback || typeof readback !== 'object' || Array.isArray(readback)) return null
   return normalizeArtifacts((readback as Record<string, unknown>).artifacts, label)
 }
