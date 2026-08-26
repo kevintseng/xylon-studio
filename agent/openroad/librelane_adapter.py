@@ -369,12 +369,23 @@ def _bounded_output(value: str | None) -> str:
 
 
 def _first_error_line(stderr: str, stdout: str) -> str | None:
+    """Return the first actionable tool error, not a preflight/status banner."""
+
+    fallback: str | None = None
     for stream in (stderr, stdout):
         for line in stream.splitlines():
             normalized = " ".join(line.split())
-            if normalized:
+            if not normalized:
+                continue
+            fallback = fallback or normalized[:512]
+            # LibreLane/OpenROAD diagnostics use both prose and coded forms such
+            # as ``[IFP-0002]``.  Prefer those over resource JSON or informational
+            # banners so the UI names the first actionable blocker.
+            if re.search(r"\b(error|failed|failure|fatal|exception|traceback|violation)\b", normalized, re.IGNORECASE):
                 return normalized[:512]
-    return None
+            if re.search(r"\[[A-Z][A-Z0-9_]*-\d{3,}\]", normalized):
+                return normalized[:512]
+    return fallback
 
 
 def _failure_evidence(

@@ -457,6 +457,15 @@ def test_execute_plan_rejects_missing_readback_after_launcher_success(tmp_path: 
     assert caught.value.evidence["tool_returncode"] == 0
 
 
+def test_first_error_line_prefers_tool_blocker_over_preflight_banner() -> None:
+    line = adapter._first_error_line(
+        "",
+        '{"status":"ready","resource":{"memory_free_percent":92}}\n'
+        "[IFP-0002] standard-cell instance does not fit in the core area",
+    )
+    assert line == "[IFP-0002] standard-cell instance does not fit in the core area"
+
+
 def test_readback_requires_native_librelane_outputs(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     signoff = run_dir / "signoff" / "counter" / "openlane-signoff"
