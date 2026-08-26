@@ -40,6 +40,23 @@ test('LibreLane Docker shim injects fixed resource and network limits', async ()
   }
 })
 
+test('LibreLane Docker shim rejects non-run Docker verbs', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'xylon-librelane-docker-'))
+  const fakeDocker = path.join(temp, 'docker')
+  await writeFile(fakeDocker, '#!/usr/bin/env bash\nexit 99\n')
+  await chmod(fakeDocker, 0o700)
+  try {
+    await assert.rejects(
+      execFileAsync('bash', [dockerShim, 'ps'], {
+        env: { ...process.env, XYLON_LIBRELANE_DOCKER_REAL: fakeDocker },
+      }),
+      /allows only bounded 'run' invocations/,
+    )
+  } finally {
+    await rm(temp, { recursive: true, force: true })
+  }
+})
+
 test('LibreLane launcher documents a bounded run and fails before missing resources', async () => {
   const source = await readFile(launcher, 'utf8')
   assert.match(source, /LIBRELANE_IMAGE_OVERRIDE/)

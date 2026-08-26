@@ -5,7 +5,8 @@ real_docker="${XYLON_LIBRELANE_DOCKER_REAL:?XYLON_LIBRELANE_DOCKER_REAL is requi
 [[ -x "${real_docker}" ]] || { echo "LibreLane Docker engine is not executable" >&2; exit 2; }
 
 if [[ "${1:-}" != "run" ]]; then
-  exec "${real_docker}" "$@"
+  echo "LibreLane Docker shim allows only bounded 'run' invocations" >&2
+  exit 2
 fi
 shift
 

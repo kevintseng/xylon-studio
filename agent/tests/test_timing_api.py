@@ -63,7 +63,10 @@ def test_timing_api_wires_analysis_proposal_confirmation_and_candidate(monkeypat
             "top_module": "demo",
             "platform": "sky130hd",
         })
-        proposal = client.post(f"/api/timing/runs/{run_id}/proposal")
+        proposal = client.post(
+            f"/api/timing/runs/{run_id}/proposal",
+            headers={"origin": "http://127.0.0.1:3000"},
+        )
         confirmation = client.post(
             f"/api/timing/runs/{run_id}/confirmation",
             json={
@@ -75,7 +78,7 @@ def test_timing_api_wires_analysis_proposal_confirmation_and_candidate(monkeypat
         candidate = client.post(f"/api/timing/runs/{run_id}/candidate", json={
             "proposal_id": proposal_id,
             "confirmation_id": confirmation_id,
-        })
+        }, headers={"origin": "http://127.0.0.1:3000"})
 
     assert analyze.status_code == 202
     assert analyze.json()["phase"] == "queued"
@@ -207,6 +210,7 @@ def test_timing_routes_reject_nonretryable_admission_without_queueing(monkeypatc
         cleanup_unverified = client.post(
             f"/api/timing/runs/{payload['run_id']}/candidate",
             json={"proposal_id": "b" * 64, "confirmation_id": "c" * 32},
+            headers={"origin": "http://127.0.0.1:3000"},
         )
 
     assert cleanup_unverified.status_code == 503
@@ -363,6 +367,23 @@ def test_timing_confirmation_requires_the_exact_local_browser_origin(monkeypatch
 
     assert missing.status_code == 403
     assert foreign.status_code == 403
+    bridge.assert_not_awaited()
+
+
+def test_timing_mutations_require_the_local_browser_origin(monkeypatch):
+    bridge = AsyncMock(return_value=_state("proposal_ready"))
+    monkeypatch.setattr(timing_routes, "_invoke_timing_bridge", bridge)
+    run_id = "a" * 32
+
+    with TestClient(app) as client:
+        missing_proposal_origin = client.post(f"/api/timing/runs/{run_id}/proposal")
+        missing_candidate_origin = client.post(
+            f"/api/timing/runs/{run_id}/candidate",
+            json={"proposal_id": "b" * 64, "confirmation_id": "c" * 32},
+        )
+
+    assert missing_proposal_origin.status_code == 403
+    assert missing_candidate_origin.status_code == 403
     bridge.assert_not_awaited()
 
 

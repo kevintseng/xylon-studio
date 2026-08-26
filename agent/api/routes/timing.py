@@ -814,7 +814,8 @@ async def cancel_timing_run(run_id: str, request: Request) -> dict:
 
 
 @router.post("/timing/runs/{run_id}/proposal")
-async def create_timing_proposal(run_id: str) -> dict:
+async def create_timing_proposal(run_id: str, request: Request) -> dict:
+    _require_local_browser_origin(request)
     return await _invoke_timing_bridge("propose", {"run_id": run_id})
 
 
@@ -829,7 +830,8 @@ async def confirm_timing_proposal(
 
 
 @router.post("/timing/runs/{run_id}/candidate", status_code=202)
-async def execute_timing_candidate(run_id: str, request: TimingCandidateRequest) -> dict:
+async def execute_timing_candidate(run_id: str, request: TimingCandidateRequest, browser_request: Request) -> dict:
+    _require_local_browser_origin(browser_request)
     current = await get_timing_run(run_id)
     await _reject_nonretryable_timing_admission()
     job = await _start_timing_job(
