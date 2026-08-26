@@ -1,10 +1,4 @@
-"""Strict, low-load LibreLane runtime identity checks.
-
-This module deliberately does not execute a LibreLane flow.  The current product
-runner is still the pinned ORFS/OpenROAD comparison fixture.  The adapter exists
-to make the next backend boundary explicit and to fail closed until a real
-LibreLane installation, PDK root, and output readback contract are available.
-"""
+"""Strict, low-load LibreLane runtime identity and readback checks."""
 
 from __future__ import annotations
 
@@ -391,6 +385,10 @@ def execute_plan(
     command = [str(launcher), *plan.command.arguments]
     environment = os.environ.copy()
     environment.setdefault("PYTHONUNBUFFERED", "1")
+    native_runs_root = owned_run / "runs"
+    existing_native_runs = {
+        path.name for path in native_runs_root.iterdir() if path.is_dir()
+    } if native_runs_root.is_dir() else set()
     try:
         result = runner(
             command,
@@ -407,15 +405,26 @@ def execute_plan(
         raise LibreLaneExecutionError("LibreLane launcher could not start") from error
     stdout = _bounded_output(result.stdout)
     stderr = _bounded_output(result.stderr)
-    if result.returncode != 0:
-        detail = _bounded(stderr or stdout or "the pinned LibreLane launcher returned a failure")
-        raise LibreLaneExecutionError(f"LibreLane execution failed: {detail}")
     try:
-        readback = readback_artifacts(owned_run, plan.project.top, plan.identity)
+        fresh_native_runs = {
+            path.name for path in native_runs_root.iterdir() if path.is_dir()
+        } - existing_native_runs if native_runs_root.is_dir() else set()
+        readback = readback_artifacts(
+            owned_run,
+            plan.project.top,
+            plan.identity,
+            fresh_native_runs=fresh_native_runs,
+        )
     except LibreLaneAdapterError as error:
+        if result.returncode != 0:
+            detail = _bounded(stderr or stdout or "the pinned LibreLane launcher returned a failure")
+            raise LibreLaneExecutionError(f"LibreLane execution failed: {detail}") from error
         raise LibreLaneExecutionError(str(error)) from error
+    flow_status = "completed" if result.returncode == 0 else "completed_with_violations"
     return {
         "state": "succeeded",
+        "flow_status": flow_status,
+        "tool_returncode": result.returncode,
         "run_id": plan.project.request["run_id"],
         "identity": asdict(plan.identity),
         "config_identity_sha256": plan.config_identity_sha256,
@@ -498,11 +507,28 @@ def readback_artifacts(
     run_dir: Path,
     design_name: str | None = None,
     identity: LibreLaneIdentity | None = None,
+    fresh_native_runs: set[str] | None = None,
 ) -> dict[str, object]:
     """Read LibreLane's native resolved config and signoff/final metrics artifacts."""
 
     root = run_dir.resolve()
     candidates: list[tuple[Path, Path, str, str]] = []
+    native_runs_root = root / "runs"
+    if native_runs_root.is_dir():
+        for native_run in sorted(native_runs_root.glob("RUN_*"), reverse=True):
+            if not native_run.is_dir() or (
+                fresh_native_runs is not None and native_run.name not in fresh_native_runs
+            ):
+                continue
+            for metrics_name in ("metrics.csv", "metrics.json"):
+                candidates.append(
+                    (
+                        native_run / "resolved.json",
+                        native_run / "final" / metrics_name,
+                        f"runs/{native_run.name}/resolved.json",
+                        f"runs/{native_run.name}/final/{metrics_name}",
+                    )
+                )
     if design_name is not None:
         if not VERILOG_IDENTIFIER_RE.fullmatch(design_name):
             raise LibreLaneAdapterError("design_name must be a valid Verilog identifier")
