@@ -289,6 +289,13 @@ export function LibreLaneProjectJourney() {
 
   const nextAction = localizeLibreLaneNextAction(run?.failure?.recovery ?? run?.nextAction ?? t('librelane.journey.idle'), locale, t)
   const comparison = run?.comparison
+  const comparisonMessage = comparison?.setupWns.timingMet
+    ? t('librelane.journey.timingMet')
+    : comparison?.setupWns.improved
+      ? t('timing.comparison.stillViolating')
+      : comparison && comparison.setupWns.delta < -0.001
+        ? t('timing.outcome.regressed')
+        : t('timing.outcome.unchanged')
 
   return (
     <section className="border-b border-slate-800 py-10 sm:py-14">
@@ -419,7 +426,7 @@ export function LibreLaneProjectJourney() {
                     </div>
                   </div>
                   <p className={`mt-4 rounded-2xl px-4 py-3 text-sm leading-6 ${comparison.setupWns.timingMet ? 'bg-emerald-500/10 text-emerald-100' : 'bg-amber-500/10 text-amber-100'}`}>
-                    {comparison.setupWns.timingMet ? t('librelane.journey.timingMet') : t('timing.comparison.stillViolating')}
+                    {comparisonMessage}
                   </p>
                 </div>
               ) : null}

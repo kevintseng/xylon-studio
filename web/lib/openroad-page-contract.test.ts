@@ -68,6 +68,12 @@ test('LibreLane journey keeps provenance and version evidence wired into visible
   assert.match(librelaneJourneySource, /sha256:\{run\.(baselineArtifacts|candidateArtifacts)/)
 })
 
+test('LibreLane comparison tells the truth when candidate WNS regresses', () => {
+  assert.match(librelaneJourneySource, /comparison\.setupWns\.delta < -0\.001/)
+  assert.match(librelaneJourneySource, /t\('timing\.outcome\.regressed'\)/)
+  assert.match(librelaneJourneySource, /t\('timing\.outcome\.unchanged'\)/)
+})
+
 test('advanced MCP records keep cleanup evidence and an actionable visible alert', () => {
   for (const required of [
     'session.interruptionReason',
