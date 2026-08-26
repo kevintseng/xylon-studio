@@ -880,12 +880,14 @@ async def post_librelane_project_execution(
                     "code": "LibreLaneExecutionFailed",
                     "message": str(error),
                     "recovery": "Inspect the bounded execution evidence and correct the first reported failure before requesting another run.",
+                    "blocking_evidence": getattr(error, "evidence", None),
                 }
                 _persist_librelane_run(run_root, payload)
             raise HTTPException(status_code=422, detail={
                 "error": "LibreLaneExecutionFailed",
                 "message": str(error),
                 "recovery": "Inspect the bounded execution evidence and correct the first reported failure before requesting another run.",
+                "blocking_evidence": getattr(error, "evidence", None),
                 "run_id": run_id,
             }) from error
 
@@ -1063,6 +1065,7 @@ async def post_librelane_repair_execution(
                 "code": "LibreLaneRepairExecutionFailed",
                 "message": str(error),
                 "recovery": "Inspect the candidate evidence; keep the baseline unchanged and create a fresh baseline before another repair attempt.",
+                "blocking_evidence": getattr(error, "evidence", None),
             }
             payload["next_action"] = payload["failure"]["recovery"]
             _persist_librelane_run(run_root, payload)
@@ -1070,6 +1073,7 @@ async def post_librelane_repair_execution(
             "error": "LibreLaneRepairExecutionFailed",
             "message": str(error),
             "recovery": "Keep the baseline unchanged and correct the first candidate failure before creating a fresh repair proposal.",
+            "blocking_evidence": getattr(error, "evidence", None),
             "run_id": run_id,
         }) from error
     finally:
