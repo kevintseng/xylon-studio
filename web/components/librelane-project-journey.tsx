@@ -471,6 +471,24 @@ export function LibreLaneProjectJourney() {
                     <dt className="font-semibold text-slate-200">{t('librelane.journey.runtime')}</dt>
                     <dd className="mt-1 font-mono">{run.runtimeIdentity ? JSON.stringify(run.runtimeIdentity) : '—'}</dd>
                   </div>
+                  {run.baselineArtifacts ? (
+                    <div>
+                      <dt className="font-semibold text-slate-200">Baseline artifacts</dt>
+                      <dd className="mt-1 space-y-1 font-mono">
+                        <div>{run.baselineArtifacts.resolved.path} · sha256:{run.baselineArtifacts.resolved.sha256.slice(0, 12)} · {run.baselineArtifacts.resolved.bytes} B</div>
+                        <div>{run.baselineArtifacts.metrics.path} · sha256:{run.baselineArtifacts.metrics.sha256.slice(0, 12)} · {run.baselineArtifacts.metrics.bytes} B</div>
+                      </dd>
+                    </div>
+                  ) : null}
+                  {run.candidateArtifacts ? (
+                    <div>
+                      <dt className="font-semibold text-slate-200">Candidate artifacts</dt>
+                      <dd className="mt-1 space-y-1 font-mono">
+                        <div>{run.candidateArtifacts.resolved.path} · sha256:{run.candidateArtifacts.resolved.sha256.slice(0, 12)} · {run.candidateArtifacts.resolved.bytes} B</div>
+                        <div>{run.candidateArtifacts.metrics.path} · sha256:{run.candidateArtifacts.metrics.sha256.slice(0, 12)} · {run.candidateArtifacts.metrics.bytes} B</div>
+                      </dd>
+                    </div>
+                  ) : null}
                 </dl>
               </details>
             ) : null}

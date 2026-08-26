@@ -548,8 +548,9 @@ def readback_artifacts(
         if not resolved.is_file() or not metrics.is_file():
             continue
         try:
-            resolved_payload = json.loads(_read_regular(resolved, resolved_rel).decode("utf-8"))
+            resolved_content = _read_regular(resolved, resolved_rel)
             metrics_content = _read_regular(metrics, metrics_rel)
+            resolved_payload = json.loads(resolved_content.decode("utf-8"))
             if metrics.suffix == ".csv":
                 metrics_payload = _metrics_csv(metrics_content)
             else:
@@ -566,5 +567,17 @@ def readback_artifacts(
             "resolved": resolved_payload,
             "metrics": metrics_payload,
             "paths": {"resolved": resolved_rel, "metrics": metrics_rel},
+            "artifacts": {
+                "resolved": {
+                    "path": resolved_rel,
+                    "sha256": hashlib.sha256(resolved_content).hexdigest(),
+                    "bytes": len(resolved_content),
+                },
+                "metrics": {
+                    "path": metrics_rel,
+                    "sha256": hashlib.sha256(metrics_content).hexdigest(),
+                    "bytes": len(metrics_content),
+                },
+            },
         }
     raise LibreLaneAdapterError("LibreLane resolved config and native metrics artifacts are missing")

@@ -49,6 +49,17 @@ export interface LibreLaneComparison {
   }
 }
 
+export interface LibreLaneArtifactRef {
+  path: string
+  sha256: string
+  bytes: number
+}
+
+export interface LibreLaneArtifacts {
+  resolved: LibreLaneArtifactRef
+  metrics: LibreLaneArtifactRef
+}
+
 export interface LibreLaneRun {
   runId: string
   projectId: string | null
@@ -73,8 +84,10 @@ export interface LibreLaneRun {
   } | null
   runtimeIdentity: Record<string, string> | null
   baselineMetrics: LibreLaneMetricMap | null
+  baselineArtifacts: LibreLaneArtifacts | null
   proposal: LibreLaneBoundedProposal | null
   comparison: LibreLaneComparison | null
+  candidateArtifacts: LibreLaneArtifacts | null
   candidate: {
     state: string
     proposalId: string | null
@@ -271,6 +284,28 @@ function normalizeBaselineMetrics(value: unknown): LibreLaneMetricMap | null {
   return metricValue ? metrics(metricValue, 'execution.result.readback.metrics') : null
 }
 
+function normalizeArtifacts(value: unknown, label: string): LibreLaneArtifacts | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const input = value as Record<string, unknown>
+  const artifact = (key: string): LibreLaneArtifactRef => {
+    const item = record(input[key], `${label}.${key}`)
+    return {
+      path: string(item.path, `${label}.${key}.path`),
+      sha256: string(item.sha256, `${label}.${key}.sha256`),
+      bytes: number(item.bytes, `${label}.${key}.bytes`),
+    }
+  }
+  return { resolved: artifact('resolved'), metrics: artifact('metrics') }
+}
+
+function normalizeReadbackArtifacts(value: unknown, label: string): LibreLaneArtifacts | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const result = value as Record<string, unknown>
+  const readback = result.readback
+  if (!readback || typeof readback !== 'object' || Array.isArray(readback)) return null
+  return normalizeArtifacts((readback as Record<string, unknown>).artifacts, label)
+}
+
 export function normalizeLibreLaneRun(input: unknown): LibreLaneRun {
   const value = record(input, 'librelane run')
   const stateValue = string(value.state, 'state')
@@ -287,8 +322,10 @@ export function normalizeLibreLaneRun(input: unknown): LibreLaneRun {
     preparation: normalizePreparation(value.preparation),
     runtimeIdentity: normalizeRuntimeIdentity(value.runtime_identity),
     baselineMetrics: normalizeBaselineMetrics(value.execution),
+    baselineArtifacts: normalizeReadbackArtifacts(value.execution, 'execution.result.readback.artifacts'),
     proposal: value.proposal ? proposal(value.proposal) : null,
     comparison: value.comparison ? comparison(value.comparison) : null,
+    candidateArtifacts: normalizeReadbackArtifacts(value.candidate, 'candidate.result.readback.artifacts'),
     candidate: value.candidate && typeof value.candidate === 'object'
       ? {
         state: typeof (value.candidate as Record<string, unknown>).state === 'string'

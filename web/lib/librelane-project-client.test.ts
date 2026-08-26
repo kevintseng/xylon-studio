@@ -44,6 +44,10 @@ test('LibreLane run normalization keeps bounded preparation and comparison evide
       result: {
         readback: {
           metrics: { timing__setup__wns: -0.2, timing__setup__tns: -1.4 },
+          artifacts: {
+            resolved: { path: 'runs/RUN_BASE/resolved.json', sha256: 'd'.repeat(64), bytes: 128 },
+            metrics: { path: 'runs/RUN_BASE/metrics.csv', sha256: 'e'.repeat(64), bytes: 256 },
+          },
         },
       },
     },
@@ -70,12 +74,24 @@ test('LibreLane run normalization keeps bounded preparation and comparison evide
       candidate_metrics: { timing__setup__wns: 0.05, timing__setup__tns: 0 },
       setup_wns: { baseline: -0.2, candidate: 0.05, delta: 0.25, improved: true, timing_met: true },
     },
-    candidate: { state: 'succeeded', proposal_id: 'c'.repeat(64), root: 'candidate/abcd' },
+    candidate: {
+      state: 'succeeded', proposal_id: 'c'.repeat(64), root: 'candidate/abcd',
+      result: {
+        readback: {
+          artifacts: {
+            resolved: { path: 'runs/RUN_CANDIDATE/resolved.json', sha256: 'f'.repeat(64), bytes: 130 },
+            metrics: { path: 'runs/RUN_CANDIDATE/metrics.csv', sha256: 'a'.repeat(64), bytes: 260 },
+          },
+        },
+      },
+    },
   })
 
   assert.equal(run.state, 'comparison_ready')
   assert.equal(run.manifest?.top, 'counter')
   assert.equal(run.baselineMetrics?.timing__setup__wns, -0.2)
+  assert.equal(run.baselineArtifacts?.metrics.sha256, 'e'.repeat(64))
+  assert.equal(run.candidateArtifacts?.resolved.sha256, 'f'.repeat(64))
   assert.equal(run.proposal?.action.parameter, 'PL_TARGET_DENSITY')
   assert.equal(run.comparison?.setupWns.delta, 0.25)
 })

@@ -461,6 +461,12 @@ def test_readback_requires_native_librelane_outputs(tmp_path: Path) -> None:
         "resolved": "signoff/counter/openlane-signoff/resolved.json",
         "metrics": "signoff/counter/metrics.csv",
     }
+    assert result["artifacts"]["resolved"]["path"] == "signoff/counter/openlane-signoff/resolved.json"
+    assert result["artifacts"]["resolved"]["bytes"] > 0
+    assert len(result["artifacts"]["resolved"]["sha256"]) == 64
+    assert result["artifacts"]["metrics"]["path"] == "signoff/counter/metrics.csv"
+    assert result["artifacts"]["metrics"]["bytes"] > 0
+    assert len(result["artifacts"]["metrics"]["sha256"]) == 64
     assert result["metrics"]["timing__setup__wns"] == 0.1
     (signoff / "resolved.json").write_text(
         '{"PDK": "gf180mcuC", "STD_CELL_LIBRARY": "gf180mcu_fd_sc_mcu9t5v0"}\n',
