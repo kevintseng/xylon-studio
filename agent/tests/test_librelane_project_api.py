@@ -47,6 +47,54 @@ def _import_project(tmp_path: Path, monkeypatch) -> dict:
     return response.json()
 
 
+def _ready_payload() -> dict:
+    return {
+        "schema_version": "xylon-librelane-readiness/v1",
+        "state": "ready",
+        "backend": {"name": "LibreLane", "version": "3.0.10"},
+        "checks": {"python": True, "docker": True, "image": True, "pdk": True, "resources": True},
+        "resource_blockers": [],
+        "blockers": [],
+        "next_action": "Start one pinned LibreLane reference run from the imported project.",
+    }
+
+
+def _prepare_succeeded_baseline(tmp_path: Path, monkeypatch, *, run_id: str, wns: float) -> None:
+    _import_project(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        routes.openroad,
+        "probe_librelane",
+        lambda: LibreLaneProbe("available", "/opt/librelane/python", "3.0.10", "ok"),
+    )
+    ready = _ready_payload()
+    monkeypatch.setattr(routes.openroad, "collect_librelane_readiness", lambda _repo_root, probe=None: ready)
+
+    def fake_baseline_execute(_repo_root, *, run_dir, plan):
+        return {
+            "state": "succeeded",
+            "run_id": run_id,
+            "readback": {
+                "resolved": {"PDK": "sky130A", "STD_CELL_LIBRARY": "sky130_fd_sc_hd"},
+                "metrics": {"timing__setup__wns": wns, "timing__setup__tns": min(wns * 3, 0)},
+                "paths": {"resolved": "resolved.json", "metrics": "metrics.csv"},
+            },
+        }
+
+    monkeypatch.setattr(routes.openroad, "execute_plan", fake_baseline_execute)
+    with TestClient(app) as client:
+        prepared = client.post(
+            "/api/openroad/librelane-project-runs",
+            json={"run_id": run_id, "project_id": "counter-librelane"},
+        )
+        assert prepared.status_code == 201
+        executed = client.post(
+            f"/api/openroad/librelane-project-runs/{run_id}/execute",
+            json={"approved": True},
+        )
+    assert executed.status_code == 200
+    assert executed.json()["state"] == "succeeded"
+
+
 def test_librelane_project_route_prepares_owned_config_handoff(tmp_path: Path, monkeypatch) -> None:
     imported = _import_project(tmp_path, monkeypatch)
     monkeypatch.setattr(
@@ -339,3 +387,196 @@ def test_execute_time_readiness_block_is_persisted_as_retryable_blocked_state(tm
         )
     assert retry.status_code == 200
     assert retry.json()["state"] == "succeeded"
+
+
+def test_negative_wns_baseline_creates_bound_placement_density_proposal(tmp_path: Path, monkeypatch) -> None:
+    _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id="run_proposal", wns=-0.24)
+
+    with TestClient(app) as client:
+        response = client.post("/api/openroad/librelane-project-runs/run_proposal/proposal")
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["state"] == "proposal_ready"
+    proposal = result["proposal"]
+    assert len(proposal["proposal_id"]) == 64
+    assert proposal["state"] == "awaiting_approval"
+    assert proposal["binding"]["baseline_wns"] == -0.24
+    assert proposal["action"] == {
+        "type": "librelane_flow_parameter",
+        "parameter": "PL_TARGET_DENSITY",
+        "from": 0.6,
+        "to": 0.65,
+        "scope": "one_candidate_librelane_rerun",
+        "functional_inputs_unchanged": True,
+    }
+    persisted = json.loads(
+        (tmp_path / ".xylon" / "timing" / "runs" / "run_proposal" / "manifest.json").read_text()
+    )
+    assert persisted["state"] == "proposal_ready"
+    assert persisted["proposal"]["proposal_id"] == proposal["proposal_id"]
+
+
+def test_repair_proposal_rejects_timing_clean_baseline(tmp_path: Path, monkeypatch) -> None:
+    _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id="run_clean_timing", wns=0.02)
+
+    with TestClient(app) as client:
+        response = client.post("/api/openroad/librelane-project-runs/run_clean_timing/proposal")
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["error"] == "LibreLaneRepairProposalInvalid"
+    persisted = json.loads(
+        (tmp_path / ".xylon" / "timing" / "runs" / "run_clean_timing" / "manifest.json").read_text()
+    )
+    assert persisted["state"] == "succeeded"
+    assert "proposal" not in persisted
+
+
+def test_repair_requires_explicit_exact_proposal_approval(tmp_path: Path, monkeypatch) -> None:
+    _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id="run_repair_approval", wns=-0.1)
+    with TestClient(app) as client:
+        proposal_response = client.post(
+            "/api/openroad/librelane-project-runs/run_repair_approval/proposal"
+        )
+        assert proposal_response.status_code == 200
+        proposal_id = proposal_response.json()["proposal"]["proposal_id"]
+        denied = client.post(
+            "/api/openroad/librelane-project-runs/run_repair_approval/repair",
+            json={"approved": False, "proposal_id": proposal_id},
+        )
+        mismatched = client.post(
+            "/api/openroad/librelane-project-runs/run_repair_approval/repair",
+            json={"approved": True, "proposal_id": "0" * 64},
+        )
+
+    assert denied.status_code == 403
+    assert denied.json()["detail"]["error"] == "LibreLaneRepairApprovalRequired"
+    assert mismatched.status_code == 422
+    assert mismatched.json()["detail"]["error"] == "LibreLaneRepairApprovalInvalid"
+    persisted = json.loads(
+        (tmp_path / ".xylon" / "timing" / "runs" / "run_repair_approval" / "manifest.json").read_text()
+    )
+    assert persisted["state"] == "proposal_ready"
+    assert persisted["proposal"]["state"] == "awaiting_approval"
+    assert "candidate" not in persisted
+
+
+def test_readiness_block_keeps_proposal_retryable_then_returns_native_comparison(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id="run_repair_retry", wns=-0.2)
+    ready = _ready_payload()
+    blocked = {
+        **ready,
+        "state": "blocked",
+        "checks": {**ready["checks"], "resources": False},
+        "resource_blockers": ["memory available is below the safety floor"],
+        "blockers": ["memory available is below the safety floor"],
+        "next_action": "Free memory, then check LibreLane readiness again.",
+    }
+    readiness = blocked
+    monkeypatch.setattr(routes.openroad, "collect_librelane_readiness", lambda _repo_root, probe=None: readiness)
+    executor_calls = 0
+
+    def fake_candidate_execute(_repo_root, *, run_dir, plan):
+        nonlocal executor_calls
+        executor_calls += 1
+        assert run_dir.name == plan.project.request["run_id"] or run_dir.parent.name == "candidate"
+        return {
+            "state": "succeeded",
+            "run_id": "run_repair_retry",
+            "readback": {
+                "resolved": {"PDK": "sky130A", "STD_CELL_LIBRARY": "sky130_fd_sc_hd"},
+                "metrics": {"timing__setup__wns": 0.05, "timing__setup__tns": 0.0},
+                "paths": {"resolved": "resolved.json", "metrics": "metrics.csv"},
+            },
+        }
+
+    monkeypatch.setattr(routes.openroad, "execute_plan", fake_candidate_execute)
+    with TestClient(app) as client:
+        proposal_response = client.post("/api/openroad/librelane-project-runs/run_repair_retry/proposal")
+        assert proposal_response.status_code == 200
+        proposal_id = proposal_response.json()["proposal"]["proposal_id"]
+        blocked_response = client.post(
+            "/api/openroad/librelane-project-runs/run_repair_retry/repair",
+            json={"approved": True, "proposal_id": proposal_id},
+        )
+    assert blocked_response.status_code == 409
+    assert executor_calls == 0
+    run_root = tmp_path / ".xylon" / "timing" / "runs" / "run_repair_retry"
+    blocked_manifest = json.loads((run_root / "manifest.json").read_text())
+    assert blocked_manifest["state"] == "proposal_ready"
+    assert blocked_manifest["proposal"]["state"] == "awaiting_approval"
+    assert blocked_manifest["proposal"]["last_attempt"]["state"] == "blocked"
+    assert not (run_root / "candidate").exists()
+
+    readiness = ready
+    with TestClient(app) as client:
+        retry = client.post(
+            "/api/openroad/librelane-project-runs/run_repair_retry/repair",
+            json={"approved": True, "proposal_id": proposal_id},
+        )
+    assert retry.status_code == 200
+    assert executor_calls == 1
+    result = retry.json()
+    assert result["state"] == "comparison_ready"
+    assert result["proposal"]["state"] == "applied"
+    assert result["comparison"]["setup_wns"] == {
+        "baseline": -0.2,
+        "candidate": 0.05,
+        "delta": 0.25,
+        "improved": True,
+        "timing_met": True,
+    }
+    assert result["comparison"]["baseline_metrics"]["timing__setup__wns"] == -0.2
+    assert result["comparison"]["candidate_metrics"]["timing__setup__wns"] == 0.05
+    baseline_config = json.loads((run_root / "config.json").read_text())
+    candidate_config = json.loads((run_root / result["candidate"]["root"] / "config.json").read_text())
+    assert baseline_config["PL_TARGET_DENSITY"] == 0.6
+    assert candidate_config["PL_TARGET_DENSITY"] == 0.65
+    assert {key: value for key, value in candidate_config.items() if key != "PL_TARGET_DENSITY"} == {
+        key: value for key, value in baseline_config.items() if key != "PL_TARGET_DENSITY"
+    }
+    persisted = json.loads((run_root / "manifest.json").read_text())
+    assert persisted["state"] == "comparison_ready"
+    assert persisted["candidate"]["state"] == "succeeded"
+    assert persisted["candidate"]["proposal_id"] == proposal_id
+    assert persisted["candidate"]["source_revision"] == persisted["source_revision"]
+
+
+def test_candidate_execution_failure_is_persisted_without_changing_baseline(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id="run_repair_failure", wns=-0.12)
+    monkeypatch.setattr(
+        routes.openroad,
+        "collect_librelane_readiness",
+        lambda _repo_root, probe=None: _ready_payload(),
+    )
+
+    def fail_candidate(_repo_root, *, run_dir, plan):
+        raise adapter.LibreLaneExecutionError("bounded candidate failed")
+
+    monkeypatch.setattr(routes.openroad, "execute_plan", fail_candidate)
+    with TestClient(app) as client:
+        proposal_response = client.post("/api/openroad/librelane-project-runs/run_repair_failure/proposal")
+        assert proposal_response.status_code == 200
+        proposal_id = proposal_response.json()["proposal"]["proposal_id"]
+        response = client.post(
+            "/api/openroad/librelane-project-runs/run_repair_failure/repair",
+            json={"approved": True, "proposal_id": proposal_id},
+        )
+
+    assert response.status_code == 422
+    run_root = tmp_path / ".xylon" / "timing" / "runs" / "run_repair_failure"
+    persisted = json.loads((run_root / "manifest.json").read_text())
+    assert persisted["state"] == "candidate_failed"
+    assert persisted["candidate"]["state"] == "failed"
+    assert persisted["candidate"]["proposal_id"] == proposal_id
+    assert persisted["failure"]["code"] == "LibreLaneRepairExecutionFailed"
+    baseline_config = json.loads((run_root / "config.json").read_text())
+    candidate_config = json.loads((run_root / persisted["candidate"]["root"] / "config.json").read_text())
+    assert baseline_config["PL_TARGET_DENSITY"] == 0.6
+    assert candidate_config["PL_TARGET_DENSITY"] == 0.65

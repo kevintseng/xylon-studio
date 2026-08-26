@@ -29,12 +29,13 @@ live at `/openroad` and `/pipeline` after `scripts/xylon start`.
 
 ### LibreLane execution boundary
 
-Xylon v0.6 also exposes a pinned LibreLane 3.0.10 path for the imported project.
-The workbench first checks the local ARM64 image, Python environment, sky130A PDK,
-and available resources. If any check fails, it shows the first blocker and does
-not start EDA. After the user approves a prepared run, Xylon launches one bounded
-LibreLane job and reads back native timing artifacts; it does not invent metrics
-from logs.
+Xylon v0.6 exposes a pinned LibreLane 3.0.10 backend path for an imported project.
+It checks the local ARM64 image, Python environment, sky130A PDK, and available
+resources before any EDA subprocess. When the gate is blocked, it records the first
+blocker and gives one next action. The current `/openroad` workbench still uses the
+existing ORFS comparison journey; the LibreLane API path is being wired into that
+same user journey and is not presented as a completed native run until its readback
+is available.
 
 The supported paths behind that journey are:
 
@@ -44,9 +45,10 @@ The supported paths behind that journey are:
   sentence. Deterministic tools validate RTL/SDC, run the built-in `sky130hd`
   recipe, read WNS, TNS, and the worst setup path, then prepare one bounded
   `PLACE_DENSITY 0.60 → 0.65` candidate when violations exist.
-- **Human-controlled improvement:** Xylon shows the exact expiring proposal. A
-  person must type its code in the local page, then explicitly request execution,
-  before Xylon can run the candidate and compare the same metrics before and after.
+- **Human-controlled improvement:** the LibreLane API can create one expiring,
+  hash-bound `PL_TARGET_DENSITY 0.60 → 0.65` proposal from a negative native WNS
+  baseline. The exact proposal ID and explicit approval are required before an
+  isolated candidate rerun; the response compares native metrics before and after.
 - **RTL verification:** pinned Verilator lint, optional independent C++
   self-check, measured coverage, optional Yosys structure, and a checksummed
   exact-rerun bundle.
@@ -135,7 +137,7 @@ scripts/xylon stop
 | --- | --- |
 | Bounded RTL/SDC setup timing on built-in `sky130hd` | Arbitrary PDK or library import |
 | WNS, TNS, worst max path, and cleanup readback | Hold, multi-corner, power, area, DRC/LVS, or signoff claims |
-| One evidence-bound placement-density candidate | General autonomous OpenROAD command execution |
+| One evidence-bound placement-density candidate API path | General autonomous OpenROAD command execution |
 | Loopback OpenAI-compatible intent model | Remote BYOK endpoints or stored API keys |
 | Local confirmation gesture bound to one proposal | Authenticated user identity or approval audit |
 
@@ -152,6 +154,8 @@ or inconclusive evidence never becomes a completed stage.
   orchestration; there is no confirmation tool.
 - `/api/timing/runs/*` — typed baseline, status, proposal, confirmation, and
   candidate endpoints.
+- `/api/openroad/librelane-project-runs/*` — pinned LibreLane preparation,
+  approved baseline execution, bounded repair proposal, and candidate comparison.
 - `POST /api/openroad/projects` and `POST /api/timing/project-runs` — bounded
   project import, revalidation, and timing start from a local project ID.
 - `GET /api/openroad/snapshot` — read-only MCP execution record.

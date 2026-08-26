@@ -214,12 +214,24 @@ The v0.6 LibreLane boundary is explicit and fail-closed:
 | `GET /api/openroad/librelane-readiness` | Measure the pinned LibreLane 3.0.10 image, Python, sky130A PDK, and local resource gate without starting a flow |
 | `POST /api/openroad/librelane-project-runs` | Copy one imported project into an owned run directory and persist the exact config/provenance |
 | `POST /api/openroad/librelane-project-runs/{run_id}/execute` | Start the prepared run only when the request contains `approved: true` and readiness is still `ready` |
+| `POST /api/openroad/librelane-project-runs/{run_id}/proposal` | Create one expiring, hash-bound repair proposal from a succeeded baseline with negative native setup WNS |
+| `POST /api/openroad/librelane-project-runs/{run_id}/repair` | After exact approval, rerun one isolated `PL_TARGET_DENSITY 0.60 -> 0.65` candidate and persist the native comparison |
 
 If readiness is blocked, preparation records the first blocker and starts no
 subprocess. Execution rechecks the same gate immediately before launch. A
 successful response contains the pinned runtime identity, plan hash, native
 LibreLane resolved configuration, and native metrics readback. No timing result
 is inferred from logs or mocked output.
+
+When the baseline native setup WNS is negative, the proposal endpoint persists a
+single 15-minute proposal bound to the run ID, source revision, baseline config
+hash, and staged input-tree hash. The repair endpoint requires the exact proposal
+ID and `approved: true`; it rechecks readiness and those bindings before copying
+the inputs into an owned candidate directory. Only the placement-density field is
+changed. A blocked readiness check leaves the proposal retryable and starts no
+subprocess. A successful candidate response includes baseline metrics, candidate
+metrics, and the measured setup-WNS delta. This is a bounded experiment, not timing
+closure or signoff.
 
 ## Setup-timing journey
 

@@ -110,6 +110,17 @@ class LibreLaneExecutionRequest(BaseModel):
     approved: bool = False
 
 
+class LibreLaneRepairApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    approved: bool = False
+    proposal_id: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+LIBRELANE_PROPOSAL_TTL_SECONDS = 15 * 60
+LIBRELANE_CANDIDATE_DENSITY = 0.65
+
+
 def _path_within_repo(candidate: Path) -> bool:
     try:
         candidate.resolve(strict=False).relative_to(REPO_ROOT.resolve())
@@ -406,7 +417,7 @@ def _stage_librelane_preparation(
         raise
 
 
-def _load_prepared_librelane_run(run_id: str) -> tuple[Path, dict[str, Any]]:
+def _load_librelane_run(run_id: str) -> tuple[Path, dict[str, Any]]:
     if not IDENTITY_RE.fullmatch(run_id):
         raise ProjectStoreError("invalid LibreLane run identity")
     run_root = REPO_ROOT / ".xylon" / "timing" / "runs" / run_id
@@ -419,6 +430,11 @@ def _load_prepared_librelane_run(run_id: str) -> tuple[Path, dict[str, Any]]:
         raise ProjectStoreError("prepared LibreLane run manifest is unreadable") from error
     if not isinstance(payload, dict) or payload.get("run_id") != run_id:
         raise ProjectStoreError("prepared LibreLane run manifest is invalid")
+    return run_root, payload
+
+
+def _load_prepared_librelane_run(run_id: str) -> tuple[Path, dict[str, Any]]:
+    run_root, payload = _load_librelane_run(run_id)
     state = payload.get("state")
     if state == "blocked":
         failure = payload.get("failure")
@@ -472,6 +488,216 @@ def _persist_librelane_run(run_root: Path, payload: dict[str, Any]) -> None:
     manifest_path = run_root / "manifest.json"
     manifest_path.write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     manifest_path.chmod(0o600)
+
+
+def _canonical_sha256(value: object) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _librelane_inputs_sha256(inputs_root: Path) -> str:
+    if inputs_root.is_symlink() or not inputs_root.is_dir():
+        raise ProjectStoreError("baseline LibreLane inputs are unavailable")
+    entries: list[dict[str, object]] = []
+    for candidate in sorted(inputs_root.rglob("*")):
+        if candidate.is_symlink():
+            raise ProjectStoreError("baseline LibreLane inputs contain an unsupported symbolic link")
+        if candidate.is_dir():
+            continue
+        if not candidate.is_file():
+            raise ProjectStoreError("baseline LibreLane inputs contain an unsupported file")
+        entries.append({
+            "path": candidate.relative_to(inputs_root).as_posix(),
+            "size": candidate.stat().st_size,
+            "sha256": hashlib.sha256(candidate.read_bytes()).hexdigest(),
+        })
+    if not entries:
+        raise ProjectStoreError("baseline LibreLane inputs are empty")
+    return _canonical_sha256(entries)
+
+
+def _librelane_setup_wns(payload: dict[str, Any]) -> float:
+    execution = payload.get("execution")
+    result = execution.get("result") if isinstance(execution, dict) else None
+    readback = result.get("readback") if isinstance(result, dict) else None
+    metrics = readback.get("metrics") if isinstance(readback, dict) else None
+    value = metrics.get("timing__setup__wns") if isinstance(metrics, dict) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ProjectStoreError("native LibreLane setup WNS is unavailable")
+    return float(value)
+
+
+def _create_librelane_proposal(run_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("state") != "succeeded":
+        raise ProjectStoreError("a succeeded LibreLane baseline is required before proposing a repair")
+    if payload.get("proposal") is not None:
+        raise ProjectStoreError("this LibreLane baseline already has a repair proposal")
+    baseline_wns = _librelane_setup_wns(payload)
+    if baseline_wns >= 0:
+        raise ProjectStoreError("a bounded repair requires a measured negative setup WNS")
+    preparation = payload.get("preparation")
+    if not isinstance(preparation, dict):
+        raise ProjectStoreError("LibreLane preparation provenance is missing")
+    config_path = str(preparation.get("config_path", ""))
+    declared_config = run_root / config_path
+    config_file = declared_config.resolve()
+    if declared_config.is_symlink() or not config_file.is_file() or not config_file.is_relative_to(run_root.resolve()):
+        raise ProjectStoreError("baseline LibreLane config is unavailable")
+    if hashlib.sha256(config_file.read_bytes()).hexdigest() != preparation.get("config_sha256"):
+        raise ProjectStoreError("baseline LibreLane config hash no longer matches")
+    try:
+        config = json.loads(config_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ProjectStoreError("baseline LibreLane config is unreadable") from error
+    if not isinstance(config, dict) or config.get("PL_TARGET_DENSITY") != 0.60:
+        raise ProjectStoreError("baseline LibreLane density is outside the supported repair boundary")
+    created_at = datetime.now(UTC)
+    expires_at = created_at.timestamp() + LIBRELANE_PROPOSAL_TTL_SECONDS
+    action = {
+        "type": "librelane_flow_parameter",
+        "parameter": "PL_TARGET_DENSITY",
+        "from": 0.60,
+        "to": LIBRELANE_CANDIDATE_DENSITY,
+        "scope": "one_candidate_librelane_rerun",
+        "functional_inputs_unchanged": True,
+    }
+    binding = {
+        "run_id": payload.get("run_id"),
+        "source_revision": payload.get("source_revision"),
+        "config_sha256": preparation.get("config_sha256"),
+        "inputs_sha256": _librelane_inputs_sha256(run_root / "inputs"),
+        "baseline_wns": baseline_wns,
+    }
+    proposal_id = _canonical_sha256({"binding": binding, "action": action})
+    proposal = {
+        "schema_version": "xylon-librelane-repair-proposal/v1",
+        "proposal_id": proposal_id,
+        "state": "awaiting_approval",
+        "created_at": created_at.isoformat(),
+        "expires_at": datetime.fromtimestamp(expires_at, UTC).isoformat(),
+        "binding": binding,
+        "action": action,
+        "rationale": {
+            "hypothesis": "降低 placement 壓力可能改善最差 setup path 的繞線與延遲。",
+            "expected_signal": "candidate 的 native setup WNS 或 TNS 改善。",
+            "confidence": "heuristic_requires_measurement",
+        },
+        "tradeoffs": [
+            "placement、routing 可能變慢。",
+            "密度改變可能造成 congestion 或面積代價。",
+            "candidate 必須重新讀回 native metrics 才能判定結果。",
+        ],
+    }
+    payload["proposal"] = proposal
+    payload["state"] = "proposal_ready"
+    payload["next_action"] = "Review the bounded placement-density proposal, then approve one candidate rerun."
+    _persist_librelane_run(run_root, payload)
+    return proposal
+
+
+def _stage_librelane_candidate(run_root: Path, payload: dict[str, Any], proposal: dict[str, Any]) -> tuple[Path, LibreLaneMaterializedProject]:
+    candidate_root = run_root / "candidate" / proposal["proposal_id"][:16]
+    if candidate_root.exists() or candidate_root.is_symlink():
+        raise ProjectStoreError("candidate run directory already exists")
+    source_inputs = run_root / "inputs"
+    if source_inputs.is_symlink() or not source_inputs.is_dir():
+        raise ProjectStoreError("baseline LibreLane inputs are unavailable")
+    if any(candidate.is_symlink() for candidate in source_inputs.rglob("*")):
+        raise ProjectStoreError("baseline LibreLane inputs contain an unsupported symbolic link")
+    try:
+        shutil.copytree(source_inputs, candidate_root / "inputs", symlinks=False)
+        preparation = payload.get("preparation")
+        if not isinstance(preparation, dict):
+            raise ProjectStoreError("LibreLane preparation provenance is missing")
+        config_path = str(preparation.get("config_path", ""))
+        baseline_config = (run_root / config_path).resolve()
+        config = json.loads(baseline_config.read_text(encoding="utf-8"))
+        if not isinstance(config, dict):
+            raise ProjectStoreError("baseline LibreLane config is invalid")
+        config["PL_TARGET_DENSITY"] = LIBRELANE_CANDIDATE_DENSITY
+        candidate_config = candidate_root / "config.json"
+        candidate_config.write_text(json.dumps(config, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        candidate_config.chmod(0o600)
+        manifest = payload.get("manifest")
+        if not isinstance(manifest, dict):
+            raise ProjectStoreError("LibreLane design manifest is missing")
+        rtl = manifest.get("rtl")
+        if not isinstance(rtl, list) or not rtl or not all(isinstance(path, str) for path in rtl):
+            raise ProjectStoreError("LibreLane RTL manifest is invalid")
+        sdc = manifest.get("sdc")
+        top = manifest.get("top")
+        source_revision = payload.get("source_revision")
+        if not isinstance(sdc, str) or not isinstance(top, str) or not isinstance(source_revision, str):
+            raise ProjectStoreError("LibreLane design identity is missing")
+        project = LibreLaneMaterializedProject(
+            request={"platform": "sky130hd", "run_id": payload["run_id"], "config_path": "config.json"},
+            top=top,
+            source_revision=source_revision,
+            design_path=f"inputs/project/{rtl[0]}",
+            sdc_path=f"inputs/project/{sdc}",
+            config_path="config.json",
+        )
+        return candidate_root, project
+    except Exception:
+        shutil.rmtree(candidate_root, ignore_errors=True)
+        raise
+
+
+def _validate_librelane_proposal(
+    run_root: Path,
+    payload: dict[str, Any],
+    proposal_id: str,
+) -> dict[str, Any]:
+    if payload.get("state") != "proposal_ready":
+        raise ProjectStoreError("LibreLane run has no repair proposal awaiting approval")
+    proposal = payload.get("proposal")
+    if not isinstance(proposal, dict) or proposal.get("state") != "awaiting_approval":
+        raise ProjectStoreError("LibreLane repair proposal is not awaiting approval")
+    if proposal.get("proposal_id") != proposal_id:
+        raise ProjectStoreError("LibreLane repair approval does not match the saved proposal")
+    try:
+        expires_at = datetime.fromisoformat(str(proposal.get("expires_at")))
+    except ValueError as error:
+        raise ProjectStoreError("LibreLane repair proposal expiry is invalid") from error
+    if expires_at.tzinfo is None or datetime.now(UTC) >= expires_at:
+        raise ProjectStoreError("LibreLane repair proposal has expired; create a new baseline run")
+    binding = proposal.get("binding")
+    action = proposal.get("action")
+    preparation = payload.get("preparation")
+    if not isinstance(binding, dict) or not isinstance(action, dict) or not isinstance(preparation, dict):
+        raise ProjectStoreError("LibreLane repair proposal provenance is invalid")
+    declared_config = run_root / str(preparation.get("config_path", ""))
+    config_path = declared_config.resolve()
+    if declared_config.is_symlink() or not config_path.is_file() or not config_path.is_relative_to(run_root.resolve()):
+        raise ProjectStoreError("baseline LibreLane config is unavailable")
+    current_config_sha256 = hashlib.sha256(config_path.read_bytes()).hexdigest()
+    if (
+        binding.get("run_id") != payload.get("run_id")
+        or binding.get("source_revision") != payload.get("source_revision")
+        or binding.get("config_sha256") != preparation.get("config_sha256")
+        or binding.get("config_sha256") != current_config_sha256
+        or binding.get("inputs_sha256") != _librelane_inputs_sha256(run_root / "inputs")
+        or proposal_id != _canonical_sha256({"binding": binding, "action": action})
+    ):
+        raise ProjectStoreError("LibreLane repair proposal no longer matches the baseline")
+    expected_action = {
+        "type": "librelane_flow_parameter",
+        "parameter": "PL_TARGET_DENSITY",
+        "from": 0.60,
+        "to": LIBRELANE_CANDIDATE_DENSITY,
+        "scope": "one_candidate_librelane_rerun",
+        "functional_inputs_unchanged": True,
+    }
+    if action != expected_action:
+        raise ProjectStoreError("LibreLane repair action is outside the supported boundary")
+    return proposal
+
+
+def _candidate_metrics(result: dict[str, Any]) -> dict[str, Any]:
+    readback = result.get("readback")
+    metrics = readback.get("metrics") if isinstance(readback, dict) else None
+    if not isinstance(metrics, dict):
+        raise ProjectStoreError("candidate LibreLane native metrics are unavailable")
+    return metrics
 
 
 @router.get("/openroad/snapshot")
@@ -584,6 +810,168 @@ async def post_librelane_project_execution(
             "error": "LibreLaneExecutionFailed",
             "message": str(error),
             "recovery": "Inspect the bounded execution evidence and correct the first reported failure before requesting another run.",
+            "run_id": run_id,
+        }) from error
+
+
+@router.post("/openroad/librelane-project-runs/{run_id}/proposal")
+async def post_librelane_repair_proposal(run_id: str) -> dict[str, Any]:
+    """Persist one bounded repair proposal from a measured negative-WNS baseline."""
+    try:
+        run_root, payload = _load_librelane_run(run_id)
+        proposal = _create_librelane_proposal(run_root, payload)
+        return {
+            "run_id": run_id,
+            "state": payload["state"],
+            "proposal": proposal,
+            "next_action": payload["next_action"],
+        }
+    except (OSError, json.JSONDecodeError, KeyError, ProjectStoreError) as error:
+        raise HTTPException(status_code=422, detail={
+            "error": "LibreLaneRepairProposalInvalid",
+            "message": str(error),
+            "recovery": "Use a succeeded baseline with measured negative setup WNS, or create a fresh baseline run.",
+            "run_id": run_id,
+        }) from error
+
+
+@router.post("/openroad/librelane-project-runs/{run_id}/repair")
+async def post_librelane_repair_execution(
+    run_id: str,
+    request: LibreLaneRepairApprovalRequest,
+) -> dict[str, Any]:
+    """Run the exact saved bounded repair once after approval and a fresh readiness check."""
+    if not request.approved:
+        raise HTTPException(status_code=403, detail={
+            "error": "LibreLaneRepairApprovalRequired",
+            "message": "Xylon will not run the repair candidate until the user explicitly approves the saved proposal.",
+            "recovery": "Review the proposal and call this endpoint again with approved=true and its exact proposal_id.",
+        })
+    try:
+        run_root, payload = _load_librelane_run(run_id)
+        proposal = _validate_librelane_proposal(run_root, payload, request.proposal_id)
+    except (OSError, json.JSONDecodeError, KeyError, ProjectStoreError) as error:
+        raise HTTPException(status_code=422, detail={
+            "error": "LibreLaneRepairApprovalInvalid",
+            "message": str(error),
+            "recovery": "Approve the exact unexpired saved proposal, or create a fresh baseline run and proposal.",
+            "run_id": run_id,
+        }) from error
+    candidate_staged = False
+    try:
+        probe = probe_librelane()
+        readiness = await asyncio.to_thread(collect_librelane_readiness, REPO_ROOT, probe=probe)
+        if readiness.get("state") != "ready":
+            proposal["last_attempt"] = {
+                "state": "blocked",
+                "checked_at": datetime.now(UTC).isoformat(),
+                "readiness": readiness,
+            }
+            payload["readiness"] = readiness
+            payload["failure"] = {
+                "code": "LibreLaneRepairReadinessBlocked",
+                "message": "Xylon did not stage or start the repair candidate because the readiness gate is blocked.",
+                "recovery": str(readiness.get("next_action", "Resolve the first readiness blocker, then retry.")),
+            }
+            payload["next_action"] = payload["failure"]["recovery"]
+            _persist_librelane_run(run_root, payload)
+            raise HTTPException(status_code=409, detail=payload["failure"])
+        proposal = _validate_librelane_proposal(run_root, payload, request.proposal_id)
+        candidate_root, project = _stage_librelane_candidate(run_root, payload, proposal)
+        candidate_staged = True
+        candidate_config = candidate_root / project.config_path
+        proposal["state"] = "approved"
+        proposal["approved_at"] = datetime.now(UTC).isoformat()
+        payload["state"] = "candidate_staged"
+        payload["candidate"] = {
+            "state": "staged",
+            "proposal_id": proposal["proposal_id"],
+            "source_revision": payload.get("source_revision"),
+            "baseline_config_sha256": proposal["binding"]["config_sha256"],
+            "baseline_inputs_sha256": proposal["binding"]["inputs_sha256"],
+            "root": candidate_root.relative_to(run_root).as_posix(),
+            "config_path": project.config_path,
+            "config_sha256": hashlib.sha256(candidate_config.read_bytes()).hexdigest(),
+            "staged_at": datetime.now(UTC).isoformat(),
+        }
+        _persist_librelane_run(run_root, payload)
+        plan = build_execution_plan(probe, run_dir=candidate_root, project=project)
+        payload["state"] = "candidate_running"
+        payload["readiness"] = readiness
+        payload["failure"] = None
+        payload["candidate"].update({
+            "state": "running",
+            "plan_identity_sha256": plan.plan_identity_sha256,
+            "runtime_identity": asdict(plan.identity),
+            "started_at": datetime.now(UTC).isoformat(),
+        })
+        _persist_librelane_run(run_root, payload)
+        result = await asyncio.to_thread(execute_plan, REPO_ROOT, run_dir=candidate_root, plan=plan)
+        baseline_wns = _librelane_setup_wns(payload)
+        candidate_metrics = _candidate_metrics(result)
+        candidate_wns_value = candidate_metrics.get("timing__setup__wns")
+        if isinstance(candidate_wns_value, bool) or not isinstance(candidate_wns_value, (int, float)):
+            raise ProjectStoreError("candidate LibreLane setup WNS is unavailable")
+        candidate_wns = float(candidate_wns_value)
+        baseline_execution = payload.get("execution")
+        baseline_result = baseline_execution.get("result") if isinstance(baseline_execution, dict) else None
+        baseline_readback = baseline_result.get("readback") if isinstance(baseline_result, dict) else None
+        baseline_metrics = baseline_readback.get("metrics") if isinstance(baseline_readback, dict) else None
+        if not isinstance(baseline_metrics, dict):
+            raise ProjectStoreError("baseline LibreLane native metrics are unavailable")
+        delta = candidate_wns - baseline_wns
+        payload["state"] = "comparison_ready"
+        proposal["state"] = "applied"
+        payload["candidate"].update({
+            "state": "succeeded",
+            "finished_at": datetime.now(UTC).isoformat(),
+            "result": result,
+        })
+        payload["comparison"] = {
+            "schema_version": "xylon-librelane-comparison/v1",
+            "baseline_metrics": baseline_metrics,
+            "candidate_metrics": candidate_metrics,
+            "setup_wns": {
+                "baseline": baseline_wns,
+                "candidate": candidate_wns,
+                "delta": delta,
+                "improved": delta > 0,
+                "timing_met": candidate_wns >= 0,
+            },
+        }
+        payload["failure"] = None
+        payload["next_action"] = (
+            "Review the measured comparison before choosing whether to keep the candidate settings."
+        )
+        _persist_librelane_run(run_root, payload)
+        return payload
+    except HTTPException:
+        raise
+    except (
+        OSError,
+        json.JSONDecodeError,
+        KeyError,
+        ProjectStoreError,
+        LibreLaneAdapterError,
+        LibreLaneExecutionError,
+    ) as error:
+        if candidate_staged and "run_root" in locals() and "payload" in locals():
+            payload["state"] = "candidate_failed"
+            candidate = payload.get("candidate")
+            if isinstance(candidate, dict):
+                candidate["state"] = "failed"
+                candidate["finished_at"] = datetime.now(UTC).isoformat()
+            payload["failure"] = {
+                "code": "LibreLaneRepairExecutionFailed",
+                "message": str(error),
+                "recovery": "Inspect the candidate evidence; keep the baseline unchanged and create a fresh baseline before another repair attempt.",
+            }
+            payload["next_action"] = payload["failure"]["recovery"]
+            _persist_librelane_run(run_root, payload)
+        raise HTTPException(status_code=422, detail={
+            "error": "LibreLaneRepairExecutionFailed",
+            "message": str(error),
+            "recovery": "Keep the baseline unchanged and correct the first candidate failure before creating a fresh repair proposal.",
             "run_id": run_id,
         }) from error
 

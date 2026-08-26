@@ -29,6 +29,7 @@ LIBRELANE_CONTAINER_PLATFORM = "linux/arm64"
 LIBRELANE_PDK = "sky130A"
 LIBRELANE_SCL = "sky130_fd_sc_hd"
 LIBRELANE_LAUNCHER = "scripts/xylon-librelane"
+LIBRELANE_BASELINE_DENSITY = 0.60
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_LIBRELANE_PYTHON = REPO_ROOT / ".xylon" / "librelane" / "venv" / "bin" / "python"
 MAX_EXECUTION_OUTPUT_BYTES = 64 * 1024
@@ -457,6 +458,7 @@ def build_config(
         "SIGNOFF_SDC_FILE": f"dir::{_relative_file(sdc_path, 'sdc_path')}",
         "PDK": LIBRELANE_PDK,
         "STD_CELL_LIBRARY": LIBRELANE_SCL,
+        "PL_TARGET_DENSITY": LIBRELANE_BASELINE_DENSITY,
     }
     if include_dirs:
         config["VERILOG_INCLUDE_DIRS"] = [
