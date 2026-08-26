@@ -201,7 +201,6 @@ export function LibreLaneProjectJourney() {
     setRtlPaths([])
     setIncludeDirs([])
     setSdcPath('')
-    setTopModule('')
     setClockName('core_clock')
     setClockPort('clk')
     setClockPeriod('10')

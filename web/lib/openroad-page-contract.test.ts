@@ -75,6 +75,21 @@ test('LibreLane journey exposes the bounded prepare execute proposal and repair 
   assert.match(librelaneJourneySource, /projectRunId=\{run\?\.runId \?\? null\}/)
 })
 
+test('LibreLane journey preserves manual project identity fields across file import', () => {
+  const clearSelectionSource = sourceSection(
+    librelaneJourneySource,
+    'const clearProjectSelection = () => {',
+    'const refreshRun = async () => {',
+  )
+
+  assert.doesNotMatch(clearSelectionSource, /setProjectId\(/)
+  assert.doesNotMatch(clearSelectionSource, /setTopModule\(/)
+  assert.match(clearSelectionSource, /setClockName\('core_clock'\)/)
+  assert.match(clearSelectionSource, /setClockPort\('clk'\)/)
+  assert.match(clearSelectionSource, /setClockPeriod\('10'\)/)
+  assert.match(librelaneJourneySource, /if \(detectedClock\) \{\s+setClockName\(detectedClock\[1\]\)/)
+})
+
 test('LibreLane journey keeps provenance and version evidence wired into visible technical details', () => {
   assert.match(librelaneJourneySource, /run\.sourceRevision\.slice\(0, 12\)/)
   assert.match(librelaneJourneySource, /librelane\.journey\.sourceRevision/)
