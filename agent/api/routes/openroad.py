@@ -10,7 +10,7 @@ import shutil
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -117,8 +117,15 @@ class LibreLaneRepairApprovalRequest(BaseModel):
     proposal_id: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
+class LibreLaneRepairProposalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    strategy: Literal["density", "cts"] = "density"
+
+
 LIBRELANE_PROPOSAL_TTL_SECONDS = 15 * 60
 LIBRELANE_CANDIDATE_DENSITY = 0.65
+LIBRELANE_CTS_REPAIR_PARAMETER = "RUN_POST_CTS_RESIZER_TIMING"
 
 
 def _path_within_repo(candidate: Path) -> bool:
@@ -526,7 +533,11 @@ def _librelane_setup_wns(payload: dict[str, Any]) -> float:
     return float(value)
 
 
-def _create_librelane_proposal(run_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
+def _create_librelane_proposal(
+    run_root: Path,
+    payload: dict[str, Any],
+    strategy: Literal["density", "cts"] = "density",
+) -> dict[str, Any]:
     if payload.get("state") != "succeeded":
         existing = payload.get("proposal")
         if payload.get("state") == "proposal_ready" and isinstance(existing, dict) and existing.get("state") == "awaiting_approval":
@@ -559,18 +570,52 @@ def _create_librelane_proposal(run_root: Path, payload: dict[str, Any]) -> dict[
         config = json.loads(config_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ProjectStoreError("baseline LibreLane config is unreadable") from error
-    if not isinstance(config, dict) or config.get("PL_TARGET_DENSITY") != 0.60:
+    if not isinstance(config, dict):
+        raise ProjectStoreError("baseline LibreLane config is invalid")
+    if strategy == "density" and config.get("PL_TARGET_DENSITY") != 0.60:
         raise ProjectStoreError("baseline LibreLane density is outside the supported repair boundary")
+    if strategy == "cts" and config.get(LIBRELANE_CTS_REPAIR_PARAMETER) is not False:
+        raise ProjectStoreError("baseline LibreLane CTS timing repair is outside the supported repair boundary")
     created_at = datetime.now(UTC)
     expires_at = created_at.timestamp() + LIBRELANE_PROPOSAL_TTL_SECONDS
-    action = {
-        "type": "librelane_flow_parameter",
-        "parameter": "PL_TARGET_DENSITY",
-        "from": 0.60,
-        "to": LIBRELANE_CANDIDATE_DENSITY,
-        "scope": "one_candidate_librelane_rerun",
-        "functional_inputs_unchanged": True,
-    }
+    if strategy == "cts":
+        action = {
+            "type": "librelane_flow_parameter",
+            "parameter": LIBRELANE_CTS_REPAIR_PARAMETER,
+            "from": 0,
+            "to": 1,
+            "scope": "one_candidate_librelane_rerun",
+            "functional_inputs_unchanged": True,
+        }
+        rationale = {
+            "hypothesis": "啟用 post-CTS timing repair 可能透過 buffer 與 cell sizing 改善最差 setup path。",
+            "expected_signal": "candidate 的 native setup WNS 或 TNS 改善。",
+            "confidence": "heuristic_requires_measurement",
+        }
+        tradeoffs = [
+            "候選流程可能需要更多執行時間。",
+            "buffer 與 cell sizing 可能增加面積或功耗。",
+            "candidate 必須重新讀回 native metrics 才能判定結果。",
+        ]
+    else:
+        action = {
+            "type": "librelane_flow_parameter",
+            "parameter": "PL_TARGET_DENSITY",
+            "from": 0.60,
+            "to": LIBRELANE_CANDIDATE_DENSITY,
+            "scope": "one_candidate_librelane_rerun",
+            "functional_inputs_unchanged": True,
+        }
+        rationale = {
+            "hypothesis": "提高 placement 利用率可能增加擁塞，但有機會改善最差 setup path 的繞線與延遲。",
+            "expected_signal": "candidate 的 native setup WNS 或 TNS 改善。",
+            "confidence": "heuristic_requires_measurement",
+        }
+        tradeoffs = [
+            "placement、routing 可能變慢。",
+            "密度改變可能造成 congestion 或面積代價。",
+            "candidate 必須重新讀回 native metrics 才能判定結果。",
+        ]
     binding = {
         "run_id": payload.get("run_id"),
         "source_revision": payload.get("source_revision"),
@@ -587,16 +632,8 @@ def _create_librelane_proposal(run_root: Path, payload: dict[str, Any]) -> dict[
         "expires_at": datetime.fromtimestamp(expires_at, UTC).isoformat(),
         "binding": binding,
         "action": action,
-        "rationale": {
-            "hypothesis": "提高 placement 利用率可能增加擁塞，但有機會改善最差 setup path 的繞線與延遲。",
-            "expected_signal": "candidate 的 native setup WNS 或 TNS 改善。",
-            "confidence": "heuristic_requires_measurement",
-        },
-        "tradeoffs": [
-            "placement、routing 可能變慢。",
-            "密度改變可能造成 congestion 或面積代價。",
-            "candidate 必須重新讀回 native metrics 才能判定結果。",
-        ],
+        "rationale": rationale,
+        "tradeoffs": tradeoffs,
     }
     payload["proposal"] = proposal
     payload["state"] = "proposal_ready"
@@ -624,7 +661,15 @@ def _stage_librelane_candidate(run_root: Path, payload: dict[str, Any], proposal
         config = json.loads(baseline_config.read_text(encoding="utf-8"))
         if not isinstance(config, dict):
             raise ProjectStoreError("baseline LibreLane config is invalid")
-        config["PL_TARGET_DENSITY"] = LIBRELANE_CANDIDATE_DENSITY
+        action = proposal.get("action")
+        if not isinstance(action, dict):
+            raise ProjectStoreError("LibreLane repair action is missing")
+        if action.get("parameter") == "PL_TARGET_DENSITY":
+            config["PL_TARGET_DENSITY"] = LIBRELANE_CANDIDATE_DENSITY
+        elif action.get("parameter") == LIBRELANE_CTS_REPAIR_PARAMETER:
+            config[LIBRELANE_CTS_REPAIR_PARAMETER] = True
+        else:
+            raise ProjectStoreError("LibreLane repair action is outside the supported boundary")
         candidate_config = candidate_root / "config.json"
         candidate_config.write_text(json.dumps(config, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         candidate_config.chmod(0o600)
@@ -690,15 +735,25 @@ def _validate_librelane_proposal(
         or proposal_id != _canonical_sha256({"binding": binding, "action": action})
     ):
         raise ProjectStoreError("LibreLane repair proposal no longer matches the baseline")
-    expected_action = {
-        "type": "librelane_flow_parameter",
-        "parameter": "PL_TARGET_DENSITY",
-        "from": 0.60,
-        "to": LIBRELANE_CANDIDATE_DENSITY,
-        "scope": "one_candidate_librelane_rerun",
-        "functional_inputs_unchanged": True,
-    }
-    if action != expected_action:
+    expected_actions = [
+        {
+            "type": "librelane_flow_parameter",
+            "parameter": "PL_TARGET_DENSITY",
+            "from": 0.60,
+            "to": LIBRELANE_CANDIDATE_DENSITY,
+            "scope": "one_candidate_librelane_rerun",
+            "functional_inputs_unchanged": True,
+        },
+        {
+            "type": "librelane_flow_parameter",
+            "parameter": LIBRELANE_CTS_REPAIR_PARAMETER,
+            "from": 0,
+            "to": 1,
+            "scope": "one_candidate_librelane_rerun",
+            "functional_inputs_unchanged": True,
+        },
+    ]
+    if action not in expected_actions:
         raise ProjectStoreError("LibreLane repair action is outside the supported boundary")
     return proposal
 
@@ -826,11 +881,14 @@ async def post_librelane_project_execution(
 
 
 @router.post("/openroad/librelane-project-runs/{run_id}/proposal")
-async def post_librelane_repair_proposal(run_id: str) -> dict[str, Any]:
+async def post_librelane_repair_proposal(
+    run_id: str,
+    request: LibreLaneRepairProposalRequest | None = None,
+) -> dict[str, Any]:
     """Persist one bounded repair proposal from a measured negative-WNS baseline."""
     try:
         run_root, payload = _load_librelane_run(run_id)
-        proposal = _create_librelane_proposal(run_root, payload)
+        proposal = _create_librelane_proposal(run_root, payload, (request or LibreLaneRepairProposalRequest()).strategy)
         return {
             "run_id": run_id,
             "state": payload["state"],

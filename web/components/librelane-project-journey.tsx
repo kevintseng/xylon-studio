@@ -10,6 +10,7 @@ import {
   executeLibreLaneRepair,
   LibreLaneApiError,
   type LibreLaneMetricMap,
+  type LibreLaneRepairStrategy,
   type LibreLaneRun,
   prepareLibreLaneProjectRun,
   resolveLibreLaneProjectApiUrl,
@@ -52,6 +53,13 @@ function displayError(error: unknown): VisibleError {
     message: 'The local LibreLane request did not return a readable result.',
     recovery: 'Check the local Xylon API and retry.',
   }
+}
+
+function formatProposalChange(parameter: string, from: number, to: number, locale: string): string {
+  if (parameter === 'RUN_POST_CTS_RESIZER_TIMING') {
+    return locale === 'zh-TW' ? 'CTS timing repair 關閉 → 開啟' : 'CTS timing repair off → on'
+  }
+  return `${parameter} ${from.toFixed(2)} → ${to.toFixed(2)}`
 }
 
 function localizeError(error: VisibleError, locale: string, translate: (key: string) => string): VisibleError {
@@ -257,12 +265,12 @@ export function LibreLaneProjectJourney() {
     }
   }
 
-  const requestProposal = async () => {
+  const requestProposal = async (strategy: LibreLaneRepairStrategy = 'density') => {
     if (!run || busy || run.state !== 'succeeded' || baselineWns === null || baselineWns >= 0) return
     setBusy('proposal')
     setError(null)
     try {
-      const next = await createLibreLaneRepairProposal(LIBRELANE_API_URL, run.runId)
+      const next = await createLibreLaneRepairProposal(LIBRELANE_API_URL, run.runId, strategy)
       setRun((current) => current ? {
         ...current,
         state: next.state,
@@ -370,6 +378,9 @@ export function LibreLaneProjectJourney() {
               <button type="button" onClick={() => void requestProposal()} disabled={!run || busy !== null || run.state !== 'succeeded' || baselineWns === null || baselineWns >= 0} className="rounded-2xl border border-amber-400/40 px-4 py-3 text-sm font-semibold text-amber-100 transition hover:bg-amber-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-500">
                 {busy === 'proposal' ? t('librelane.journey.action.proposing') : t('librelane.journey.action.propose')}
               </button>
+              <button type="button" onClick={() => void requestProposal('cts')} disabled={!run || busy !== null || run.state !== 'succeeded' || baselineWns === null || baselineWns >= 0} className="rounded-2xl border border-violet-400/40 px-4 py-3 text-sm font-semibold text-violet-100 transition hover:bg-violet-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-500">
+                {t('librelane.journey.action.proposeCts')}
+              </button>
               <button type="button" onClick={() => void executeRepair()} disabled={!proposalReady || busy !== null} className="rounded-2xl border border-emerald-400/40 px-4 py-3 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-500">
                 {busy === 'repair' ? t('librelane.journey.action.runningCandidate') : t('librelane.journey.action.runCandidate')}
               </button>
@@ -400,7 +411,7 @@ export function LibreLaneProjectJourney() {
               {run?.state === 'succeeded' && baselineWns !== null && baselineWns >= 0 ? <p className="mt-4 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm leading-6 text-emerald-100">{t('librelane.journey.cleanBoundary')}</p> : null}
               {run?.proposal ? (
                 <div className="mt-4 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4">
-                  <p className="font-mono text-sm text-amber-100">PL_TARGET_DENSITY {run.proposal.action.from.toFixed(2)} → {run.proposal.action.to.toFixed(2)}</p>
+                  <p className="font-mono text-sm text-amber-100">{formatProposalChange(run.proposal.action.parameter, run.proposal.action.from, run.proposal.action.to, locale)}</p>
                   <p className="mt-2 text-sm leading-6 text-slate-300">{run.proposal.rationale.hypothesis}</p>
                   <ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-5 text-slate-400">
                     {run.proposal.tradeoffs.map((tradeoff) => <li key={tradeoff}>{tradeoff}</li>)}

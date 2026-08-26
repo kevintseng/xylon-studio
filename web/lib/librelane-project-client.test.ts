@@ -84,6 +84,20 @@ test('LibreLane run normalization rejects an invented terminal state', () => {
   assert.throws(() => normalizeLibreLaneRun({ state: 'complete', run_id: 'run_12345678', next_action: 'x' }), /state is invalid/)
 })
 
+test('LibreLane run normalization accepts the bounded CTS timing proposal', () => {
+  const run = normalizeLibreLaneRun({
+    run_id: 'run_cts1234', state: 'proposal_ready', next_action: 'Review CTS proposal.', failure: null,
+    manifest: null, preparation: null, runtime_identity: null, execution: null, comparison: null, candidate: null,
+    proposal: {
+      proposal_id: 'e'.repeat(64), state: 'awaiting_approval', created_at: '2026-08-26T09:00:00Z', expires_at: '2026-08-26T09:15:00Z',
+      binding: { baseline_wns: -0.2 }, action: { parameter: 'RUN_POST_CTS_RESIZER_TIMING', from: 0, to: 1, scope: 'one_candidate_librelane_rerun' },
+      rationale: { hypothesis: 'Enable post-CTS repair.', expected_signal: 'Setup WNS improves.' }, tradeoffs: ['Runtime may increase.'],
+    },
+  })
+  assert.equal(run.proposal?.action.parameter, 'RUN_POST_CTS_RESIZER_TIMING')
+  assert.equal(run.proposal?.action.to, 1)
+})
+
 test('LibreLane normalization rejects malformed bounded repair and comparison payloads', () => {
   const base = {
     run_id: 'run_12345678',
@@ -202,6 +216,6 @@ test('LibreLane project client calls the exact bounded endpoints', async (contex
   ])
   assert.deepEqual(calls[0]?.body, { run_id: 'run_12345678', project_id: 'counter-demo' })
   assert.deepEqual(calls[1]?.body, { approved: true })
-  assert.equal(calls[2]?.body, null)
+  assert.deepEqual(calls[2]?.body, { strategy: 'density' })
   assert.deepEqual(calls[3]?.body, { approved: true, proposal_id: 'd'.repeat(64) })
 })

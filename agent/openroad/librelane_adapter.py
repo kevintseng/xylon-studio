@@ -468,6 +468,7 @@ def build_config(
         "PDK": LIBRELANE_PDK,
         "STD_CELL_LIBRARY": LIBRELANE_SCL,
         "PL_TARGET_DENSITY": LIBRELANE_BASELINE_DENSITY,
+        "RUN_POST_CTS_RESIZER_TIMING": False,
     }
     if include_dirs:
         config["VERILOG_INCLUDE_DIRS"] = [

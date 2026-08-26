@@ -145,6 +145,7 @@ def test_build_config_is_deterministic_and_command_free() -> None:
         "PDK": "sky130A",
         "STD_CELL_LIBRARY": "sky130_fd_sc_hd",
         "PL_TARGET_DENSITY": 0.60,
+        "RUN_POST_CTS_RESIZER_TIMING": False,
         "VERILOG_INCLUDE_DIRS": ["dir::include"],
     }
     assert not any(key.lower() in {"command", "shell", "tcl"} for key in config)

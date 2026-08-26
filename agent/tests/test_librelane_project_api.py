@@ -449,6 +449,28 @@ def test_negative_wns_baseline_creates_bound_placement_density_proposal(tmp_path
     assert persisted["proposal"]["proposal_id"] == proposal["proposal_id"]
 
 
+def test_negative_wns_baseline_creates_bound_cts_timing_proposal(tmp_path: Path, monkeypatch) -> None:
+    _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id="run_cts_proposal", wns=-0.24)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/openroad/librelane-project-runs/run_cts_proposal/proposal",
+            json={"strategy": "cts"},
+        )
+
+    assert response.status_code == 200
+    proposal = response.json()["proposal"]
+    assert proposal["action"] == {
+        "type": "librelane_flow_parameter",
+        "parameter": "RUN_POST_CTS_RESIZER_TIMING",
+        "from": 0,
+        "to": 1,
+        "scope": "one_candidate_librelane_rerun",
+        "functional_inputs_unchanged": True,
+    }
+    assert proposal["rationale"]["hypothesis"] == "啟用 post-CTS timing repair 可能透過 buffer 與 cell sizing 改善最差 setup path。"
+
+
 def test_repair_proposal_rejects_timing_clean_baseline(tmp_path: Path, monkeypatch) -> None:
     _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id="run_clean_timing", wns=0.02)
 

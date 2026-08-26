@@ -35,6 +35,8 @@ export interface LibreLaneBoundedProposal {
   tradeoffs: string[]
 }
 
+export type LibreLaneRepairStrategy = 'density' | 'cts'
+
 export interface LibreLaneComparison {
   baselineMetrics: LibreLaneMetricMap
   candidateMetrics: LibreLaneMetricMap
@@ -166,7 +168,9 @@ function proposal(value: unknown): LibreLaneBoundedProposal {
   const scope = string(action.scope, 'proposal.action.scope')
   const from = number(action.from, 'proposal.action.from')
   const to = number(action.to, 'proposal.action.to')
-  if (parameter !== 'PL_TARGET_DENSITY' || scope !== 'one_candidate_librelane_rerun' || from !== 0.6 || to !== 0.65) {
+  const supportedDensity = parameter === 'PL_TARGET_DENSITY' && scope === 'one_candidate_librelane_rerun' && from === 0.6 && to === 0.65
+  const supportedCts = parameter === 'RUN_POST_CTS_RESIZER_TIMING' && scope === 'one_candidate_librelane_rerun' && from === 0 && to === 1
+  if (!supportedDensity && !supportedCts) {
     throw new Error('proposal.action is outside the supported boundary')
   }
   return {
@@ -361,9 +365,14 @@ export async function executeLibreLaneProjectRun(apiUrl: string, runId: string):
   }))
 }
 
-export async function createLibreLaneRepairProposal(apiUrl: string, runId: string): Promise<LibreLaneProposalEnvelope> {
+export async function createLibreLaneRepairProposal(
+  apiUrl: string,
+  runId: string,
+  strategy: LibreLaneRepairStrategy = 'density',
+): Promise<LibreLaneProposalEnvelope> {
   return normalizeLibreLaneProposalEnvelope(await librelaneJsonRequest(`${apiUrl}/librelane-project-runs/${runId}/proposal`, {
     method: 'POST',
+    body: JSON.stringify({ strategy }),
   }))
 }
 
