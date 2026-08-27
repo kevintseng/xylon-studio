@@ -193,6 +193,11 @@ test('LibreLane folder import exposes one visible chooser', () => {
   assert.doesNotMatch(librelaneJourneySource, /type="file"[^>]+className="sr-only"/)
 })
 
+test('LibreLane refresh keeps a saved readiness blocker actionable', () => {
+  assert.match(librelaneJourneySource, /setError\(localizeLibreLaneError\(refreshed\.failure, locale, t\)\)/)
+  assert.doesNotMatch(librelaneJourneySource, /visibleError\(refreshed\.failure\)/)
+})
+
 test('LibreLane journey keeps provenance and version evidence wired into visible technical details', () => {
   assert.match(librelaneJourneySource, /run\.sourceRevision\.slice\(0, 12\)/)
   assert.match(librelaneJourneySource, /librelane\.journey\.sourceRevision/)

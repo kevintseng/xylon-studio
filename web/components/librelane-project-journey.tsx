@@ -288,7 +288,7 @@ export function LibreLaneProjectJourney() {
     try {
       const refreshed = await getLibreLaneProjectRun(LIBRELANE_API_URL, savedRunId)
       persistRun(refreshed)
-      if (refreshed.failure) setError(visibleError(refreshed.failure))
+      if (refreshed.failure) setError(localizeLibreLaneError(refreshed.failure, locale, t))
       else setError(null)
     } catch (caught) {
       setError(visibleError(caught))
