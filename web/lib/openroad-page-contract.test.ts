@@ -135,6 +135,8 @@ test('LibreLane comparison adds an at-a-glance visual summary without hiding exa
   assert.match(librelaneJourneySource, /proposalAcknowledged/)
   assert.match(librelaneJourneySource, /librelane\.journey\.proposalAcknowledgement/)
   assert.match(librelaneJourneySource, /disabled=\{!proposalReady \|\| !proposalAcknowledged \|\| busy !== null\}/)
+  assert.match(librelaneJourneySource, /runChanged = run\?\.runId !== nextRun\.runId/)
+  assert.match(librelaneJourneySource, /proposalChanged = run\?\.proposal\?\.proposalId !== nextRun\.proposal\?\.proposalId/)
   assert.match(librelaneJourneySource, /<MetricDeltaChart\s+label="WNS"/)
   assert.match(librelaneJourneySource, /<MetricDeltaChart\s+label="TNS"/)
 })

@@ -224,8 +224,10 @@ export function LibreLaneProjectJourney() {
   }, [t, visibleError])
 
   const persistRun = (nextRun: LibreLaneRun) => {
+    const runChanged = run?.runId !== nextRun.runId
+    const proposalChanged = run?.proposal?.proposalId !== nextRun.proposal?.proposalId
     setRun(nextRun)
-    if (nextRun.state !== 'proposal_ready') setProposalAcknowledged(false)
+    if (nextRun.state !== 'proposal_ready' || runChanged || proposalChanged) setProposalAcknowledged(false)
     window.localStorage.setItem(LIBRELANE_RUN_STORAGE_KEY, nextRun.runId)
   }
 
