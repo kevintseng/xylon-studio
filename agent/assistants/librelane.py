@@ -35,7 +35,7 @@ class LibreLaneSemanticTools:
     """Deterministic actions the model may select; the model never supplies arguments."""
 
     status: Callable[[str], Awaitable[dict]]
-    propose: Callable[[str], Awaitable[dict]]
+    repair: Callable[[str, bool], Awaitable[dict]]
     comparison: Callable[[str], Awaitable[dict]]
     selected_execute: Callable[[str, bool], Awaitable[dict]]
 
@@ -90,6 +90,8 @@ def _assistant_state(intent: LibreLaneIntent, *, run: dict | None, approved: boo
     if intent.intent == "inspect_project":
         return "project_status_ready", {"required": False, "action": "review_the_current_librelane_evidence"}
     if intent.intent == "propose_repair":
+        if approved:
+            return "comparison_ready", {"required": False, "action": "review_native_before_after_evidence"}
         return "repair_proposal_ready", {"required": False, "action": "review_one_bounded_repair_before_approval"}
     if intent.intent == "review_comparison":
         return "comparison_ready", {"required": False, "action": "review_native_before_after_evidence"}
@@ -132,7 +134,7 @@ async def run_librelane_assistant(
         if intent.intent == "inspect_project":
             run = await tools.status(run_id)
         elif intent.intent == "propose_repair":
-            run = await tools.propose(run_id)
+            run = await tools.repair(run_id, approved)
         elif intent.intent == "review_comparison":
             run = await tools.comparison(run_id)
         elif intent.intent == "rerun_selected" and approved:

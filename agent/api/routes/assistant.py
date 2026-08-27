@@ -181,10 +181,23 @@ async def _librelane_status(run_id: str) -> dict:
     return _public_librelane_run(payload)
 
 
-async def _librelane_propose(run_id: str) -> dict:
-    run_root, payload = openroad_routes._load_librelane_run(run_id)
-    proposal = openroad_routes._create_librelane_proposal(run_root, payload)
-    return _public_librelane_run(payload) | {"proposal": proposal}
+async def _librelane_repair(run_id: str, approved: bool) -> dict:
+    if not approved:
+        run_root, payload = openroad_routes._load_librelane_run(run_id)
+        proposal = openroad_routes._create_librelane_proposal(run_root, payload)
+        return _public_librelane_run(payload) | {"proposal": proposal}
+
+    _, payload = openroad_routes._load_librelane_run(run_id)
+    proposal = payload.get("proposal")
+    proposal_id = proposal.get("proposal_id") if isinstance(proposal, dict) else None
+    if not isinstance(proposal_id, str):
+        raise ValueError("the saved LibreLane repair proposal is unavailable")
+    return _public_librelane_run(
+        await openroad_routes.post_librelane_repair_execution(
+            run_id,
+            openroad_routes.LibreLaneRepairApprovalRequest(approved=True, proposal_id=proposal_id),
+        )
+    )
 
 
 async def _librelane_comparison(run_id: str) -> dict:
@@ -203,7 +216,7 @@ async def _librelane_selected_execute(run_id: str, approved: bool) -> dict:
 
 LIBRELANE_TOOLS = LibreLaneSemanticTools(
     status=_librelane_status,
-    propose=_librelane_propose,
+    repair=_librelane_repair,
     comparison=_librelane_comparison,
     selected_execute=_librelane_selected_execute,
 )

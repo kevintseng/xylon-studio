@@ -59,6 +59,47 @@ test('LibreLane assistant client uses the dedicated assistant endpoint and prese
   }
 })
 
+test('LibreLane assistant client sends explicit approval for the current bounded candidate execution request', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input, init) => {
+    assert.equal(String(input), 'http://127.0.0.1:5001/api/assistant/librelane')
+    assert.equal(init?.method, 'POST')
+    assert.deepEqual(JSON.parse(String(init?.body)), {
+      schema_version: 'xylon-librelane-assistant-request/v1',
+      message: 'Approve and run the current bounded candidate.',
+      locale: 'en',
+      provider: { protocol: 'openai-compatible', base_url: 'http://127.0.0.1:11434/v1', model: 'local-model' },
+      project_run_id: 'run_approved_candidate',
+      approved: true,
+    })
+    return new Response(JSON.stringify({
+      schema_version: 'xylon-librelane-assistant/v1', state: 'comparison_ready',
+      intent: { supported: true, intent: 'propose_repair', normalized_goal: 'run the approved bounded candidate', needs: ['project_run'] },
+      skill: { id: 'openroad-setup-timing', version: '2', sha256: 'a'.repeat(64) },
+      egress: { sent: ['user_message'], excluded: ['rtl', 'sdc', 'credentials', 'raw_logs', 'timing_metrics', 'tool_arguments'] },
+      observed: { run_id: 'run_approved_candidate', state: 'comparison_ready', next_action: 'Review measured comparison evidence.' },
+      human_handoff: { required: false, action: 'review_candidate_comparison' },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
+  try {
+    const result = await runLibreLaneAssistant('http://127.0.0.1:5001/api/assistant', {
+      message: 'Approve and run the current bounded candidate.',
+      locale: 'en',
+      provider: { protocol: 'openai-compatible', baseUrl: 'http://127.0.0.1:11434/v1', model: 'local-model' },
+      projectRunId: 'run_approved_candidate',
+      approved: true,
+    })
+    assert.equal(result.state, 'comparison_ready')
+    assert.deepEqual(result.observed, {
+      run_id: 'run_approved_candidate',
+      state: 'comparison_ready',
+      next_action: 'Review measured comparison evidence.',
+    })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('LibreLane run normalization keeps bounded preparation and comparison evidence', () => {
   const run = normalizeLibreLaneRun({
     schema_version: 'xylon-librelane-project-preparation/v1',
