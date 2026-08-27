@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 
 import { useI18n } from '@/lib/i18n'
 import {
@@ -118,15 +118,6 @@ export function LibreLaneAgentPanel({ projectRunId, disabled, onResult }: LibreL
   const activeApprovalRequest = currentMessage === lastSubmittedMessage ? approvalRequest : null
   const ready = configured && currentMessage.length >= 3 && (!activeApprovalRequest || approved)
 
-  useEffect(() => {
-    setApproved(false)
-  }, [
-    activeApprovalRequest?.kind,
-    activeApprovalRequest?.proposalId,
-    result?.state,
-    result?.humanHandoff.action,
-  ])
-
   const captureError = (caught: unknown) => {
     if (caught instanceof LibreLaneApiError) {
       setError(localizedAgentError(caught, locale, t))
@@ -154,6 +145,7 @@ export function LibreLaneAgentPanel({ projectRunId, disabled, onResult }: LibreL
         ...(executeApproved && activeApprovalRequest?.proposalId ? { proposalId: activeApprovalRequest.proposalId } : {}),
       })
       setLastSubmittedMessage(currentMessage)
+      setApproved(false)
       setResult(next)
       onResult(next)
     } catch (caught) {
@@ -182,7 +174,7 @@ export function LibreLaneAgentPanel({ projectRunId, disabled, onResult }: LibreL
           <h3 id="librelane-agent-title" className="mt-2 text-xl font-semibold text-slate-50">{t('librelane.agent.title')}</h3>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">{t('librelane.agent.subtitle')}</p>
           <label className="mt-5 block text-sm text-slate-200" htmlFor="librelane-agent-message">{t('librelane.agent.request')}</label>
-          <textarea id="librelane-agent-message" value={message} onChange={(event) => setMessage(event.target.value)} disabled={disabled || running} rows={2} placeholder={t('librelane.agent.requestPlaceholder')} className="mt-2 w-full resize-y rounded-2xl border border-violet-500/30 bg-slate-950 p-4 text-sm leading-6 text-slate-100 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-500/20 disabled:opacity-60" />
+          <textarea id="librelane-agent-message" value={message} onChange={(event) => { setMessage(event.target.value); setApproved(false) }} disabled={disabled || running} rows={2} placeholder={t('librelane.agent.requestPlaceholder')} className="mt-2 w-full resize-y rounded-2xl border border-violet-500/30 bg-slate-950 p-4 text-sm leading-6 text-slate-100 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-500/20 disabled:opacity-60" />
           {activeApprovalRequest ? (
             <label className="mt-3 flex items-start gap-2 text-xs leading-5 text-slate-300">
               <input type="checkbox" checked={approved} onChange={(event) => setApproved(event.target.checked)} disabled={disabled || running} className="mt-1 accent-violet-400" />
