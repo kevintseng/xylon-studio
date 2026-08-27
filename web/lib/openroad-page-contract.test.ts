@@ -115,6 +115,10 @@ test('restored LibreLane run shows results before a collapsed setup disclosure',
   assert.doesNotMatch(i18nSource, /請查看下方匯入的設計資訊/)
 })
 
+test('LibreLane journey only shows bounded repair advice while it can create a proposal', () => {
+  assert.match(librelaneJourneySource, /diagnosis\.nextAction && run\.state === 'succeeded'/)
+})
+
 test('LibreLane readiness does not repeat the ready-state next action', () => {
   assert.match(librelaneReadinessSource, /const primaryMessage = /)
   assert.match(librelaneReadinessSource, /localizedNextAction !== primaryMessage/)

@@ -644,7 +644,7 @@ export function LibreLaneProjectJourney() {
                         <div><dt className="text-slate-500">{t('librelane.journey.corner')}</dt><dd className="mt-1 truncate font-mono text-slate-200">{diagnosis.corner ?? '—'}</dd></div>
                         <div><dt className="text-slate-500">{t('librelane.journey.stage')}</dt><dd className="mt-1 truncate font-mono text-slate-200">{diagnosis.stage}</dd></div>
                       </dl>
-                      {diagnosis.nextAction ? (
+                      {diagnosis.nextAction && run.state === 'succeeded' ? (
                         <div className="mt-4 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-3">
                           <p className="text-xs font-semibold text-amber-100">{t('librelane.journey.boundedNextAction')}</p>
                           <p className="mt-1 font-mono text-sm text-slate-100">{formatProposalChange(diagnosis.nextAction.parameter, diagnosis.nextAction.from, diagnosis.nextAction.to, locale)}</p>
