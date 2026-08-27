@@ -80,7 +80,7 @@ test('i18n: en and zh-TW keys are 100% aligned', () => {
   const zh = getLocaleMap('zh-TW')
 
   assert.equal(en.size, zh.size)
-  assert.equal(en.size, 710, 'Review inventory changed; re-audit every added or removed key')
+  assert.equal(en.size, 718, 'Review inventory changed; re-audit every added or removed key')
   assert.deepEqual(
     [...en.keys()].sort(),
     [...zh.keys()].sort(),

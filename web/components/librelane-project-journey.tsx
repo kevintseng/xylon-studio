@@ -168,6 +168,7 @@ export function LibreLaneProjectJourney() {
   const [refreshing, setRefreshing] = useState(false)
   const [importing, setImporting] = useState(false)
   const [proposalAcknowledged, setProposalAcknowledged] = useState(false)
+  const [savedRunRestored, setSavedRunRestored] = useState(false)
   const [error, setError] = useState<VisibleError | null>(null)
   const importGeneration = useRef(0)
 
@@ -201,6 +202,7 @@ export function LibreLaneProjectJourney() {
       .then((savedRun) => {
         if (!cancelled) {
           setRun(savedRun)
+          setSavedRunRestored(true)
           window.localStorage.setItem(LIBRELANE_RUN_STORAGE_KEY, savedRun.runId)
           if (savedRun.projectId) setProjectId(savedRun.projectId)
           if (savedRun.manifest) {
@@ -220,6 +222,7 @@ export function LibreLaneProjectJourney() {
       })
       .catch((caught) => {
         if (cancelled) return
+        setSavedRunRestored(false)
         window.localStorage.removeItem(LIBRELANE_RUN_STORAGE_KEY)
         const parsed = displayError(caught)
         setError({
@@ -254,6 +257,7 @@ export function LibreLaneProjectJourney() {
   const resetJourney = () => {
     if (busy) return
     setRun(null)
+    setSavedRunRestored(false)
     setError(null)
     window.localStorage.removeItem(LIBRELANE_RUN_STORAGE_KEY)
   }
@@ -491,10 +495,19 @@ export function LibreLaneProjectJourney() {
     <section className="border-b border-slate-800 py-10 sm:py-14">
       <div className="container mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_360px]">
-          <div className="rounded-3xl border border-slate-800 bg-slate-950/70 p-5 sm:p-6">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">{t('librelane.journey.eyebrow')}</p>
-            <h2 className="mt-3 text-3xl font-semibold text-slate-50">{t('librelane.journey.title')}</h2>
-            <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">{t('librelane.journey.subtitle')}</p>
+          <details open={!savedRunRestored} className={`group rounded-3xl border border-slate-800 bg-slate-950/70 p-5 sm:p-6 ${savedRunRestored ? 'order-2 xl:col-span-2' : 'order-1'}`}>
+            <summary className="cursor-pointer list-none rounded-xl text-sm font-semibold text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 [&::-webkit-details-marker]:hidden">
+              <span className="flex items-center justify-between gap-3">
+                <span>{t('librelane.journey.setupSummary')}</span>
+                <span aria-hidden="true" className="text-cyan-300 transition group-open:rotate-180">⌄</span>
+              </span>
+              {savedRunRestored ? <span className="mt-1 block text-xs font-normal leading-5 text-slate-400">{t('librelane.journey.restored')}</span> : null}
+            </summary>
+
+            <div className="mt-5 border-t border-slate-800 pt-5">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">{t('librelane.journey.eyebrow')}</p>
+              <h2 className="mt-3 text-3xl font-semibold text-slate-50">{t('librelane.journey.title')}</h2>
+              <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">{t('librelane.journey.subtitle')}</p>
 
             <ol className="mt-6 grid gap-3 sm:grid-cols-5">
               {['design', 'prepare', 'baseline', 'proposal', 'compare'].map((key, index) => (
@@ -578,10 +591,11 @@ export function LibreLaneProjectJourney() {
                 if (result.observed && typeof result.observed.run_id === 'string') void refreshRun()
               }}
             />
-          </div>
+            </div>
+          </details>
 
-          <div className="space-y-6">
-            <section className="rounded-3xl border border-slate-800 bg-slate-950/70 p-5">
+          <div className={`flex flex-col gap-6 ${savedRunRestored ? 'order-1 xl:col-span-2' : 'order-2'}`}>
+            <section className={`rounded-3xl border border-slate-800 bg-slate-950/70 p-5 ${savedRunRestored ? 'order-2' : 'order-1'}`}>
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{t('librelane.journey.nextEyebrow')}</p>
               <h3 className="mt-2 text-xl font-semibold text-slate-50">{t('librelane.journey.nextTitle')}</h3>
               <p className="mt-3 text-sm leading-6 text-slate-300">{nextAction}</p>
@@ -594,7 +608,7 @@ export function LibreLaneProjectJourney() {
               {run?.sourceRevision ? <p className="mt-2 break-all font-mono text-xs text-slate-500">{t('librelane.journey.sourceRevision')}: {run.sourceRevision.slice(0, 12)}</p> : null}
             </section>
 
-            <section className="rounded-3xl border border-slate-800 bg-slate-950/70 p-5">
+            <section className={`rounded-3xl border border-slate-800 bg-slate-950/70 p-5 ${savedRunRestored ? 'order-1' : 'order-2'}`}>
               <h3 className="text-xl font-semibold text-slate-50">{t('librelane.journey.metricsTitle')}</h3>
               <div className="mt-4 grid grid-cols-2 gap-3">
                 <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
@@ -747,7 +761,7 @@ export function LibreLaneProjectJourney() {
             </section>
 
             {error ? (
-              <section role="alert" className="rounded-3xl border border-red-500/40 bg-red-500/10 p-5 text-red-100">
+              <section role="alert" className="order-0 rounded-3xl border border-red-500/40 bg-red-500/10 p-5 text-red-100">
                 <h3 className="text-lg font-semibold">{t('timing.failure.title')}</h3>
                 <p className="mt-3 text-sm leading-6">{error.message}</p>
                 <p className="mt-4 text-sm font-semibold">{t('timing.failure.next')}</p>
@@ -765,7 +779,7 @@ export function LibreLaneProjectJourney() {
             ) : null}
 
             {run ? (
-              <details className="rounded-3xl border border-slate-800 bg-slate-950/70 p-5">
+              <details className="order-3 rounded-3xl border border-slate-800 bg-slate-950/70 p-5">
                 <summary className="cursor-pointer text-sm font-semibold text-slate-100">{t('librelane.journey.technicalDetails')}</summary>
                 <dl className="mt-4 space-y-3 text-xs text-slate-400">
                   <div>

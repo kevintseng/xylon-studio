@@ -11,6 +11,7 @@ const timingSource = readFileSync(new URL('../components/timing-workbench.tsx', 
 const resourceDashboardSource = readFileSync(new URL('../components/resource-status-dashboard.tsx', import.meta.url), 'utf8')
 const agentSource = readFileSync(new URL('../components/timing-agent-panel.tsx', import.meta.url), 'utf8')
 const activitySource = readFileSync(new URL('../components/openroad-activity-log.tsx', import.meta.url), 'utf8')
+const i18nSource = readFileSync(new URL('./i18n.tsx', import.meta.url), 'utf8')
 
 function sourceSection(source: string, start: string, end: string): string {
   const startIndex = source.indexOf(start)
@@ -85,6 +86,33 @@ test('LibreLane journey localizes stage status chips instead of rendering raw st
   assert.match(librelaneJourneySource, /function StateChip\(\{ state \}: \{ state: StageState \}\)/)
   assert.match(librelaneJourneySource, /t\(`timing\.stage\.status\.\$\{state\}`\)/)
   assert.match(librelaneJourneySource, /const \{ t \} = useI18n\(\)/)
+})
+
+test('restored LibreLane run shows results before a collapsed setup disclosure', () => {
+  const restoreSource = sourceSection(
+    librelaneJourneySource,
+    'void getLibreLaneProjectRun(LIBRELANE_API_URL, savedRunId)',
+    'const persistRun = (nextRun: LibreLaneRun) => {',
+  )
+  const resetSource = sourceSection(
+    librelaneJourneySource,
+    'const resetJourney = () => {',
+    'const clearProjectSelection = () => {',
+  )
+
+  assert.match(librelaneJourneySource, /const \[savedRunRestored, setSavedRunRestored\] = useState\(false\)/)
+  assert.match(restoreSource, /setSavedRunRestored\(true\)/)
+  assert.match(restoreSource, /\.catch\(\(caught\) => \{[\s\S]*setSavedRunRestored\(false\)/)
+  assert.match(resetSource, /setSavedRunRestored\(false\)/)
+  assert.match(librelaneJourneySource, /<details\s+open=\{!savedRunRestored\}/)
+  assert.match(librelaneJourneySource, /librelane\.journey\.setupSummary/)
+  assert.match(librelaneJourneySource, /savedRunRestored \? 'order-2 xl:col-span-2' : 'order-1'/)
+  assert.match(librelaneJourneySource, /savedRunRestored \? 'order-1 xl:col-span-2' : 'order-2'/)
+  assert.match(librelaneJourneySource, /savedRunRestored \? 'order-2' : 'order-1'/)
+  assert.match(librelaneJourneySource, /savedRunRestored \? 'order-1' : 'order-2'/)
+  assert.match(i18nSource, /'librelane\.journey\.setupSummary': 'Design input and run settings'/)
+  assert.match(i18nSource, /'librelane\.journey\.setupSummary': '設計輸入與執行設定'/)
+  assert.doesNotMatch(i18nSource, /請查看下方匯入的設計資訊/)
 })
 
 test('LibreLane readiness does not repeat the ready-state next action', () => {
