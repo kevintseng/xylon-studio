@@ -567,9 +567,6 @@ export function LibreLaneProjectJourney() {
               <button type="button" onClick={() => void executeBaseline()} disabled={!run || busy !== null || (run.state !== 'prepared' && run.state !== 'blocked')} className="rounded-2xl border border-slate-700 px-4 py-3 text-sm font-semibold text-slate-100 transition hover:border-cyan-400/40 hover:bg-cyan-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-500">
                 {busy === 'baseline' ? t('librelane.journey.action.runningBaseline') : t('librelane.journey.action.runBaseline')}
               </button>
-              <button type="button" onClick={() => void requestProposal()} disabled={!run || busy !== null || run.state !== 'succeeded' || baselineWns === null || baselineWns >= 0} className="rounded-2xl border border-amber-400/40 px-4 py-3 text-sm font-semibold text-amber-100 transition hover:bg-amber-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-500">
-                {busy === 'proposal' ? t('librelane.journey.action.proposing') : t('librelane.journey.action.propose')}
-              </button>
               {run?.decision && (run.state === 'candidate_accepted' || run.state === 'baseline_kept') && run.selectedExecution?.state !== 'succeeded' ? (
                 <button type="button" onClick={() => void executeSelected()} disabled={busy !== null || run.selectedExecution?.state === 'running'} className="rounded-2xl border border-cyan-400/40 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 disabled:cursor-wait disabled:border-slate-800 disabled:text-slate-500">
                   {busy === 'selected' || run.selectedExecution?.state === 'running' ? t('librelane.journey.action.runningSelected') : t('librelane.journey.action.runSelected')}
@@ -642,6 +639,9 @@ export function LibreLaneProjectJourney() {
                           <p className="text-xs font-semibold text-amber-100">{t('librelane.journey.boundedNextAction')}</p>
                           <p className="mt-1 font-mono text-sm text-slate-100">{formatProposalChange(diagnosis.nextAction.parameter, diagnosis.nextAction.from, diagnosis.nextAction.to, locale)}</p>
                           <p className="mt-1 text-xs leading-5 text-slate-300">{diagnosis.nextAction.parameter === 'RUN_POST_CTS_RESIZER_TIMING' ? t('librelane.journey.ctsPathRationale') : diagnosis.nextAction.rationale}</p>
+                          <button type="button" onClick={() => void requestProposal()} disabled={busy !== null || baselineWns === null || baselineWns >= 0} className="mt-3 w-full rounded-xl border border-amber-400/40 px-3 py-2 text-sm font-semibold text-amber-100 transition hover:bg-amber-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-500">
+                            {busy === 'proposal' ? t('librelane.journey.action.proposing') : t('librelane.journey.action.propose')}
+                          </button>
                         </div>
                       ) : null}
                       <p className="mt-3 break-all font-mono text-[10px] leading-4 text-slate-500">{diagnosis.report?.path} · sha256:{diagnosis.report?.sha256.slice(0, 12)}</p>

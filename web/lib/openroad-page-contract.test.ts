@@ -83,6 +83,10 @@ test('LibreLane journey exposes the bounded prepare execute proposal and repair 
 
 test('LibreLane proposal selection is one diagnosis-driven action, not a user strategy choice', () => {
   assert.equal(librelaneJourneySource.match(/void requestProposal\(\)/g)?.length, 1)
+  const diagnosisStart = librelaneJourneySource.indexOf("diagnosis.nextAction && run.state === 'succeeded'")
+  const proposalAction = librelaneJourneySource.indexOf('void requestProposal()')
+  const diagnosisReport = librelaneJourneySource.indexOf('diagnosis.report?.path')
+  assert.ok(diagnosisStart < proposalAction && proposalAction < diagnosisReport)
   assert.doesNotMatch(librelaneJourneySource, /requestProposal\('cts'\)/)
   assert.doesNotMatch(librelaneJourneySource, /LibreLaneRepairStrategy/)
   assert.doesNotMatch(i18nSource, /librelane\.journey\.action\.proposeCts/)
