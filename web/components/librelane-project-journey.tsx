@@ -549,7 +549,7 @@ export function LibreLaneProjectJourney() {
                   <p className="mt-1 text-xs leading-5 text-slate-500">{t('librelane.journey.filesHelp')}</p>
                 </div>
                 <div className="flex items-center gap-3">
-                  <input ref={projectDirectoryInputRef} type="file" multiple accept=".v,.sv,.vh,.svh,.sdc,text/plain" disabled={busy !== null || importing} aria-busy={importing} onChange={(event) => void importProjectFiles(event)} className="sr-only" />
+                  <input ref={projectDirectoryInputRef} type="file" multiple accept=".v,.sv,.vh,.svh,.sdc,text/plain" disabled={busy !== null || importing} aria-busy={importing} onChange={(event) => void importProjectFiles(event)} hidden />
                   <button type="button" onClick={() => projectDirectoryInputRef.current?.click()} disabled={busy !== null || importing} className="rounded-xl border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-100 transition hover:border-cyan-400/40 hover:bg-cyan-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-500">
                     {t('librelane.journey.filesButton')}
                   </button>

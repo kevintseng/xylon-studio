@@ -187,6 +187,12 @@ test('LibreLane journey preserves manual project identity fields across file imp
   assert.match(librelaneJourneySource, /if \(detectedClock\) \{\s+setClockName\(detectedClock\[1\]\)/)
 })
 
+test('LibreLane folder import exposes one visible chooser', () => {
+  assert.match(librelaneJourneySource, /type="file".* hidden \/>/)
+  assert.match(librelaneJourneySource, /librelane\.journey\.filesButton/)
+  assert.doesNotMatch(librelaneJourneySource, /type="file"[^>]+className="sr-only"/)
+})
+
 test('LibreLane journey keeps provenance and version evidence wired into visible technical details', () => {
   assert.match(librelaneJourneySource, /run\.sourceRevision\.slice\(0, 12\)/)
   assert.match(librelaneJourneySource, /librelane\.journey\.sourceRevision/)
