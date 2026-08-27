@@ -36,6 +36,7 @@ const LIBRELANE_RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/
 
 type BusyAction = 'prepare' | 'baseline' | 'proposal' | 'repair' | 'decision' | 'selected' | null
 type StageState = 'pending' | 'active' | 'complete' | 'blocked'
+const PROJECT_FILE_PATTERN = /\.(v|sv|vh|svh|sdc)$/i
 
 type VisibleError = LibreLaneVisibleError
 
@@ -170,6 +171,7 @@ export function LibreLaneProjectJourney() {
   const [savedRunRestored, setSavedRunRestored] = useState(false)
   const [error, setError] = useState<VisibleError | null>(null)
   const importGeneration = useRef(0)
+  const projectDirectoryInputRef = useRef<HTMLInputElement | null>(null)
 
   const inputReady = files.length > 0
     && rtlPaths.length > 0
@@ -234,6 +236,12 @@ export function LibreLaneProjectJourney() {
     return () => { cancelled = true }
   }, [t, visibleError])
 
+  useEffect(() => {
+    const input = projectDirectoryInputRef.current
+    if (!input) return
+    input.webkitdirectory = true
+  }, [])
+
   const persistRun = (nextRun: LibreLaneRun) => {
     const runChanged = run?.runId !== nextRun.runId
     const proposalChanged = run?.proposal?.proposalId !== nextRun.proposal?.proposalId
@@ -291,7 +299,9 @@ export function LibreLaneProjectJourney() {
 
   const importProjectFiles = async (event: ChangeEvent<HTMLInputElement>) => {
     const generation = ++importGeneration.current
-    const selected = Array.from(event.target.files ?? [])
+    const selected = Array.from(event.target.files ?? []).filter((file) => (
+      PROJECT_FILE_PATTERN.test(file.webkitRelativePath || file.name)
+    ))
     event.target.value = ''
     clearProjectSelection()
     if (selected.length < 1 || selected.length > MAX_PROJECT_FILES) {
@@ -538,7 +548,12 @@ export function LibreLaneProjectJourney() {
                   <p className="text-sm font-semibold text-slate-100">{t('timing.project.files')}</p>
                   <p className="mt-1 text-xs leading-5 text-slate-500">{t('librelane.journey.filesHelp')}</p>
                 </div>
-                <input type="file" multiple accept=".v,.sv,.vh,.svh,.sdc,text/plain" disabled={busy !== null || importing} aria-busy={importing} onChange={(event) => void importProjectFiles(event)} className="block max-w-full text-xs text-slate-400 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-xs file:text-slate-100" />
+                <div className="flex items-center gap-3">
+                  <input ref={projectDirectoryInputRef} type="file" multiple accept=".v,.sv,.vh,.svh,.sdc,text/plain" disabled={busy !== null || importing} aria-busy={importing} onChange={(event) => void importProjectFiles(event)} className="sr-only" />
+                  <button type="button" onClick={() => projectDirectoryInputRef.current?.click()} disabled={busy !== null || importing} className="rounded-xl border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-100 transition hover:border-cyan-400/40 hover:bg-cyan-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-500">
+                    {t('librelane.journey.filesButton')}
+                  </button>
+                </div>
               </div>
               {fileState ? <p role="status" className="mt-3 text-xs text-cyan-100">{fileState}</p> : null}
               <div className="mt-4 grid gap-3 sm:grid-cols-3">

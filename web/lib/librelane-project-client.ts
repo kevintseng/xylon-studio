@@ -198,6 +198,7 @@ export interface LibreLaneAssistantResult {
   skill: { id: string; version: string; sha256: string }
   egress: { sent: string[]; excluded: string[] }
   observed: Record<string, unknown> | null
+  proposal: LibreLaneBoundedProposal | null
   humanHandoff: { required: boolean; action: string }
 }
 
@@ -612,15 +613,17 @@ function normalizeLibreLaneAssistant(input: unknown): LibreLaneAssistantResult {
   if (typeof intent.supported !== 'boolean' || typeof intent.intent !== 'string' || typeof intent.normalized_goal !== 'string') throw new Error('librelane assistant intent is invalid')
   if (typeof skill.id !== 'string' || typeof skill.version !== 'string' || typeof skill.sha256 !== 'string') throw new Error('librelane assistant skill is invalid')
   if (typeof handoff.required !== 'boolean' || typeof handoff.action !== 'string') throw new Error('librelane assistant handoff is invalid')
+  const observed = value.observed && typeof value.observed === 'object' && !Array.isArray(value.observed)
+    ? value.observed as Record<string, unknown>
+    : null
   return {
     schemaVersion: 'xylon-librelane-assistant/v1',
     state: string(value.state, 'state'),
     intent: { supported: intent.supported, intent: intent.intent, normalizedGoal: intent.normalized_goal, needs },
     skill: { id: skill.id, version: skill.version, sha256: skill.sha256 },
     egress: { sent, excluded },
-    observed: value.observed && typeof value.observed === 'object' && !Array.isArray(value.observed)
-      ? value.observed as Record<string, unknown>
-      : null,
+    observed,
+    proposal: value.proposal ? proposal(value.proposal) : observed?.proposal ? proposal(observed.proposal) : null,
     humanHandoff: { required: handoff.required, action: handoff.action },
   }
 }
@@ -788,6 +791,7 @@ export async function runLibreLaneAssistant(
     provider: { protocol: 'openai-compatible'; baseUrl: string; model: string }
     projectRunId?: string | null
     approved?: boolean
+    proposalId?: string | null
   },
 ): Promise<LibreLaneAssistantResult> {
   return normalizeLibreLaneAssistant(await librelaneJsonRequest(`${apiUrl}/librelane`, {
@@ -803,6 +807,7 @@ export async function runLibreLaneAssistant(
       },
       ...(input.projectRunId ? { project_run_id: input.projectRunId } : {}),
       ...(input.approved ? { approved: true } : {}),
+      ...(input.proposalId ? { proposal_id: input.proposalId } : {}),
     }),
   }))
 }

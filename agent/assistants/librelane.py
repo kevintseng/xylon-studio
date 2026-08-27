@@ -21,6 +21,7 @@ class LibreLaneIntent(BaseModel):
     supported: bool
     intent: Literal[
         "inspect_project",
+        "run_baseline",
         "propose_repair",
         "review_comparison",
         "rerun_selected",
@@ -35,7 +36,8 @@ class LibreLaneSemanticTools:
     """Deterministic actions the model may select; the model never supplies arguments."""
 
     status: Callable[[str], Awaitable[dict]]
-    repair: Callable[[str, bool], Awaitable[dict]]
+    baseline: Callable[[str, bool], Awaitable[dict]]
+    repair: Callable[[str, bool, str | None], Awaitable[dict]]
     comparison: Callable[[str], Awaitable[dict]]
     selected_execute: Callable[[str, bool], Awaitable[dict]]
 
@@ -50,9 +52,10 @@ def _system_prompt(locale: str) -> tuple[TimingSkillPack, str]:
         "The object MUST contain exactly these keys: schema_version, supported, intent, "
         "normalized_goal, needs. "
         "schema_version MUST be xylon-librelane-intent/v1. "
-        "intent MUST be one of inspect_project, propose_repair, review_comparison, "
+        "intent MUST be one of inspect_project, run_baseline, propose_repair, review_comparison, "
         "rerun_selected, unsupported. "
         "Use inspect_project for reading the current canonical LibreLane project state or metrics; "
+        "use run_baseline when the user asks to check or analyze setup timing for a prepared project that has not produced baseline timing evidence yet; "
         "propose_repair for requesting one bounded repair proposal from a measured negative-WNS baseline; "
         "review_comparison for reviewing an existing native baseline/candidate comparison; "
         "rerun_selected only when the user explicitly asks to execute an already selected configuration again; "
@@ -82,6 +85,22 @@ def _assistant_state(intent: LibreLaneIntent, *, run: dict | None, approved: boo
             "required": True,
             "action": "import_and_prepare_a_librelane_project_first",
         }
+    if intent.intent == "run_baseline":
+        run_state = run.get("state")
+        if run_state in {"prepared", "blocked"} and not approved:
+            return "awaiting_human_approval", {
+                "required": True,
+                "action": "explicitly_approve_the_prepared_librelane_baseline_in_the_workbench",
+            }
+        if isinstance(run.get("proposal"), dict):
+            return "repair_proposal_ready", {
+                "required": True,
+                "action": "review_one_bounded_repair_before_approval",
+            }
+        return "project_status_ready", {
+            "required": False,
+            "action": "review_the_current_librelane_evidence",
+        }
     if intent.intent == "rerun_selected" and not approved:
         return "awaiting_human_approval", {
             "required": True,
@@ -92,7 +111,7 @@ def _assistant_state(intent: LibreLaneIntent, *, run: dict | None, approved: boo
     if intent.intent == "propose_repair":
         if approved:
             return "comparison_ready", {"required": False, "action": "review_native_before_after_evidence"}
-        return "repair_proposal_ready", {"required": False, "action": "review_one_bounded_repair_before_approval"}
+        return "repair_proposal_ready", {"required": True, "action": "review_one_bounded_repair_before_approval"}
     if intent.intent == "review_comparison":
         return "comparison_ready", {"required": False, "action": "review_native_before_after_evidence"}
     return "selected_rerun_requested", {
@@ -108,6 +127,7 @@ async def run_librelane_assistant(
     locale: str,
     run_id: str | None,
     approved: bool,
+    proposal_id: str | None,
     tools: LibreLaneSemanticTools,
 ) -> dict:
     """Classify one request, then advance only the canonical LibreLane state machine."""
@@ -133,8 +153,10 @@ async def run_librelane_assistant(
     if intent.supported and run_id is not None:
         if intent.intent == "inspect_project":
             run = await tools.status(run_id)
+        elif intent.intent == "run_baseline":
+            run = await tools.baseline(run_id, approved)
         elif intent.intent == "propose_repair":
-            run = await tools.repair(run_id, approved)
+            run = await tools.repair(run_id, approved, proposal_id)
         elif intent.intent == "review_comparison":
             run = await tools.comparison(run_id)
         elif intent.intent == "rerun_selected" and approved:

@@ -39,8 +39,14 @@ def _tools(calls: list[str]) -> LibreLaneSemanticTools:
         calls.append(f"status:{run_id}")
         return {"run_id": run_id, "state": "succeeded", "next_action": "Review native metrics."}
 
-    async def repair(run_id: str, approved: bool) -> dict:
-        calls.append(f"repair:{run_id}:{approved}")
+    async def baseline(run_id: str, approved: bool) -> dict:
+        calls.append(f"baseline:{run_id}:{approved}")
+        if approved:
+            return {"run_id": run_id, "state": "proposal_ready", "proposal": {"proposal_id": "b" * 64}}
+        return {"run_id": run_id, "state": "prepared", "next_action": "Approve the prepared baseline."}
+
+    async def repair(run_id: str, approved: bool, proposal_id: str | None) -> dict:
+        calls.append(f"repair:{run_id}:{approved}:{proposal_id}")
         if approved:
             return {"run_id": run_id, "state": "comparison_ready", "next_action": "Review comparison."}
         return {"run_id": run_id, "state": "proposal_ready", "next_action": "Review proposal."}
@@ -53,7 +59,13 @@ def _tools(calls: list[str]) -> LibreLaneSemanticTools:
         calls.append(f"selected:{run_id}:{approved}")
         return {"run_id": run_id, "state": "baseline_kept", "next_action": "Review selected rerun."}
 
-    return LibreLaneSemanticTools(status=status, repair=repair, comparison=comparison, selected_execute=selected_execute)
+    return LibreLaneSemanticTools(
+        status=status,
+        baseline=baseline,
+        repair=repair,
+        comparison=comparison,
+        selected_execute=selected_execute,
+    )
 
 
 def test_librelane_prompt_keeps_contract_ahead_of_reference_skill():
@@ -77,6 +89,7 @@ def test_librelane_assistant_inspection_uses_canonical_run_and_safe_egress():
             locale="zh-TW",
             run_id="run_12345678",
             approved=False,
+            proposal_id=None,
             tools=_tools(calls),
         )
     )
@@ -97,6 +110,7 @@ def test_librelane_assistant_requires_approval_before_selected_execution():
             locale="zh-TW",
             run_id="run_12345678",
             approved=False,
+            proposal_id=None,
             tools=_tools(calls),
         )
     )
@@ -110,11 +124,51 @@ def test_librelane_assistant_requires_approval_before_selected_execution():
             locale="zh-TW",
             run_id="run_12345678",
             approved=True,
+            proposal_id=None,
             tools=_tools(calls),
         )
     )
     assert calls[-1] == "selected:run_12345678:True"
     assert with_approval["observed"]["state"] == "baseline_kept"
+
+
+def test_librelane_assistant_baseline_requires_approval_before_execute():
+    calls: list[str] = []
+    waiting = asyncio.run(
+        run_librelane_assistant(
+            provider=FakeProvider(_intent("run_baseline")),
+            message="開始跑 baseline",
+            locale="zh-TW",
+            run_id="run_12345678",
+            approved=False,
+            proposal_id=None,
+            tools=_tools(calls),
+        )
+    )
+
+    assert calls == ["baseline:run_12345678:False"]
+    assert waiting["state"] == "awaiting_human_approval"
+    assert waiting["observed"]["state"] == "prepared"
+
+
+def test_librelane_assistant_baseline_with_approval_returns_bounded_proposal():
+    calls: list[str] = []
+    result = asyncio.run(
+        run_librelane_assistant(
+            provider=FakeProvider(_intent("run_baseline")),
+            message="批准並執行 baseline",
+            locale="zh-TW",
+            run_id="run_12345678",
+            approved=True,
+            proposal_id=None,
+            tools=_tools(calls),
+        )
+    )
+
+    assert calls == ["baseline:run_12345678:True"]
+    assert result["state"] == "repair_proposal_ready"
+    assert result["observed"]["proposal"]["proposal_id"] == "b" * 64
+    assert result["human_handoff"]["required"] is True
 
 
 def test_librelane_assistant_leaves_repair_selection_to_deterministic_runtime():
@@ -126,10 +180,11 @@ def test_librelane_assistant_leaves_repair_selection_to_deterministic_runtime():
             locale="zh-TW",
             run_id="run_12345678",
             approved=False,
+            proposal_id=None,
             tools=_tools(calls),
         )
     )
-    assert calls == ["repair:run_12345678:False"]
+    assert calls == ["repair:run_12345678:False:None"]
     assert proposal["state"] == "repair_proposal_ready"
 
     comparison = asyncio.run(
@@ -139,10 +194,11 @@ def test_librelane_assistant_leaves_repair_selection_to_deterministic_runtime():
             locale="zh-TW",
             run_id="run_12345678",
             approved=True,
+            proposal_id="b" * 64,
             tools=_tools(calls),
         )
     )
-    assert calls[-1] == "repair:run_12345678:True"
+    assert calls[-1] == f"repair:run_12345678:True:{'b' * 64}"
     assert comparison["state"] == "comparison_ready"
     assert comparison["observed"]["state"] == "comparison_ready"
 
@@ -201,7 +257,7 @@ def test_librelane_assistant_route_executes_saved_repair_proposal_when_approved(
         fake_repair_execution,
     )
 
-    result = asyncio.run(assistant_routes._librelane_repair("run_12345678", True))
+    result = asyncio.run(assistant_routes._librelane_repair("run_12345678", True, proposal_id))
 
     assert captured == {
         "run_id": "run_12345678",
@@ -215,6 +271,106 @@ def test_librelane_assistant_route_executes_saved_repair_proposal_when_approved(
     }
 
 
+def test_librelane_assistant_route_baseline_without_approval_only_reads_saved_run(monkeypatch):
+    payload = {"run_id": "run_12345678", "state": "prepared", "next_action": "Approve the prepared baseline."}
+
+    monkeypatch.setattr(
+        assistant_routes.openroad_routes,
+        "_load_librelane_run",
+        lambda run_id: (None, payload | {"run_id": run_id}),
+    )
+
+    result = asyncio.run(assistant_routes._librelane_baseline("run_12345678", False))
+
+    assert result["state"] == "prepared"
+    assert result["next_action"] == "Approve the prepared baseline."
+
+
+def test_librelane_assistant_route_baseline_with_negative_wns_creates_one_saved_proposal(monkeypatch):
+    run_root = object()
+    payload = {"run_id": "run_12345678", "state": "prepared"}
+    captured: list[str] = []
+
+    async def fake_execute(run_id: str, request) -> dict:
+        captured.append(f"execute:{run_id}:{request.approved}")
+        payload["state"] = "succeeded"
+        return {"run_id": run_id}
+
+    monkeypatch.setattr(
+        assistant_routes.openroad_routes,
+        "post_librelane_project_execution",
+        fake_execute,
+    )
+    monkeypatch.setattr(
+        assistant_routes.openroad_routes,
+        "_load_librelane_run",
+        lambda run_id: (run_root, payload | {"run_id": run_id}),
+    )
+    monkeypatch.setattr(assistant_routes.openroad_routes, "_librelane_setup_wns", lambda current: -0.2)
+    monkeypatch.setattr(
+        assistant_routes.openroad_routes,
+        "_create_librelane_proposal",
+        lambda current_root, current_payload: captured.append("proposal") or {"proposal_id": "c" * 64},
+    )
+
+    result = asyncio.run(assistant_routes._librelane_baseline("run_12345678", True))
+
+    assert captured == ["execute:run_12345678:True", "proposal"]
+    assert result["proposal"]["proposal_id"] == "c" * 64
+
+
+def test_librelane_assistant_route_baseline_with_clean_timing_returns_measured_result(monkeypatch):
+    payload = {"run_id": "run_12345678", "state": "prepared", "next_action": "Review native metrics."}
+    captured: list[str] = []
+
+    async def fake_execute(run_id: str, request) -> dict:
+        captured.append(f"execute:{run_id}:{request.approved}")
+        payload["state"] = "succeeded"
+        return {"run_id": run_id}
+
+    monkeypatch.setattr(
+        assistant_routes.openroad_routes,
+        "post_librelane_project_execution",
+        fake_execute,
+    )
+    monkeypatch.setattr(
+        assistant_routes.openroad_routes,
+        "_load_librelane_run",
+        lambda run_id: (None, payload | {"run_id": run_id}),
+    )
+    monkeypatch.setattr(assistant_routes.openroad_routes, "_librelane_setup_wns", lambda current: 0.0)
+    monkeypatch.setattr(
+        assistant_routes.openroad_routes,
+        "_create_librelane_proposal",
+        lambda *_args, **_kwargs: pytest.fail("clean timing must not create a proposal"),
+    )
+
+    result = asyncio.run(assistant_routes._librelane_baseline("run_12345678", True))
+
+    assert captured == ["execute:run_12345678:True"]
+    assert "proposal" not in result
+    assert result["state"] == "succeeded"
+
+
+def test_librelane_assistant_route_does_not_repeat_completed_baseline(monkeypatch):
+    payload = {"run_id": "run_12345678", "state": "succeeded"}
+
+    monkeypatch.setattr(
+        assistant_routes.openroad_routes,
+        "_load_librelane_run",
+        lambda run_id: (None, payload | {"run_id": run_id}),
+    )
+    monkeypatch.setattr(
+        assistant_routes.openroad_routes,
+        "post_librelane_project_execution",
+        lambda *_args, **_kwargs: pytest.fail("completed baseline must not run again"),
+    )
+
+    result = asyncio.run(assistant_routes._librelane_baseline("run_12345678", True))
+
+    assert result["state"] == "succeeded"
+
+
 def test_librelane_assistant_unsupported_request_does_not_call_tools():
     calls: list[str] = []
     result = asyncio.run(
@@ -224,6 +380,7 @@ def test_librelane_assistant_unsupported_request_does_not_call_tools():
             locale="zh-TW",
             run_id="run_12345678",
             approved=True,
+            proposal_id=None,
             tools=_tools(calls),
         )
     )
@@ -240,6 +397,7 @@ def test_librelane_assistant_rejects_contradictory_model_intent():
                 locale="en",
                 run_id=None,
                 approved=False,
+                proposal_id=None,
                 tools=_tools([]),
             )
         )
@@ -279,20 +437,56 @@ def test_librelane_assistant_route_returns_422_when_saved_repair_proposal_is_mis
         def __init__(self, _config: ProviderConfig):
             super().__init__(_intent("propose_repair"))
 
-    async def failing_repair(_run_id: str, approved: bool) -> dict:
+    async def failing_repair(_run_id: str, approved: bool, proposal_id: str | None) -> dict:
         assert approved is True
+        assert proposal_id == "b" * 64
         raise ValueError("the saved LibreLane repair proposal is unavailable")
 
+    baseline_tools = _tools([])
     monkeypatch.setattr(assistant_routes, "OpenAICompatibleProvider", RouteProvider)
     monkeypatch.setattr(
         assistant_routes,
         "LIBRELANE_TOOLS",
         LibreLaneSemanticTools(
-            status=_tools([]).status,
+            status=baseline_tools.status,
+            baseline=baseline_tools.baseline,
             repair=failing_repair,
-            comparison=_tools([]).comparison,
-            selected_execute=_tools([]).selected_execute,
+            comparison=baseline_tools.comparison,
+            selected_execute=baseline_tools.selected_execute,
         ),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/assistant/librelane",
+            json={
+                "schema_version": "xylon-librelane-assistant-request/v1",
+                "message": "批准這個改善並執行",
+                "locale": "zh-TW",
+                "provider": {
+                    "protocol": "openai-compatible",
+                    "base_url": "http://127.0.0.1:11434/v1",
+                    "model": "local-model",
+                },
+                "project_run_id": "run_12345678",
+                "approved": True,
+                "proposal_id": "b" * 64,
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["error"] == "LibreLaneAgentStateInvalid"
+
+
+def test_librelane_assistant_route_rejects_missing_proposal_id_before_repair(monkeypatch):
+    class RouteProvider(FakeProvider):
+        def __init__(self, _config: ProviderConfig):
+            super().__init__(_intent("propose_repair"))
+
+    monkeypatch.setattr(assistant_routes, "OpenAICompatibleProvider", RouteProvider)
+    monkeypatch.setattr(
+        assistant_routes.openroad_routes,
+        "_load_librelane_run",
+        lambda run_id: (None, {"run_id": run_id, "proposal": {"proposal_id": "a" * 64}}),
     )
     with TestClient(app) as client:
         response = client.post(
@@ -313,3 +507,14 @@ def test_librelane_assistant_route_returns_422_when_saved_repair_proposal_is_mis
 
     assert response.status_code == 422
     assert response.json()["detail"]["error"] == "LibreLaneAgentStateInvalid"
+
+
+def test_librelane_assistant_route_rejects_mismatched_proposal_id_before_repair(monkeypatch):
+    monkeypatch.setattr(
+        assistant_routes.openroad_routes,
+        "_load_librelane_run",
+        lambda run_id: (None, {"run_id": run_id, "proposal": {"proposal_id": "a" * 64}}),
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        asyncio.run(assistant_routes._librelane_repair("run_12345678", True, "b" * 64))

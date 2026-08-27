@@ -53,6 +53,8 @@ test('LibreLane journey exposes the bounded prepare execute proposal and repair 
     'librelane\\.journey\\.keepCandidate',
     'librelane\\.journey\\.keepBaseline',
     'librelane\\.journey\\.refresh',
+    'projectDirectoryInputRef',
+    'librelane\\.journey\\.filesButton',
   ]) {
     assert.match(librelaneJourneySource, new RegExp(required))
   }
@@ -75,6 +77,9 @@ test('LibreLane journey exposes the bounded prepare execute proposal and repair 
   assert.match(librelaneJourneySource, /LIBRELANE_RUN_ID_PATTERN\.test\(queryRunId\)/)
   assert.match(librelaneJourneySource, /window\.localStorage\.setItem\(LIBRELANE_RUN_STORAGE_KEY, savedRun\.runId\)/)
   assert.match(librelaneJourneySource, /run\.state === 'comparison_ready' && run\.proposal && !run\.decision/)
+  assert.match(librelaneJourneySource, /file\.webkitRelativePath \|\| file\.name/)
+  assert.match(librelaneJourneySource, /input\.webkitdirectory = true/)
+  assert.match(librelaneJourneySource, /PROJECT_FILE_PATTERN\.test\(file\.webkitRelativePath \|\| file\.name\)/)
   assert.match(librelaneJourneySource, /<LibreLaneAgentPanel/)
   assert.match(librelaneAgentSource, /runLibreLaneAssistant/)
   assert.match(librelaneAgentSource, /librelane\.agent\.privacy/)
@@ -96,6 +101,19 @@ test('LibreLane journey localizes stage status chips instead of rendering raw st
   assert.match(librelaneJourneySource, /function StateChip\(\{ state \}: \{ state: StageState \}\)/)
   assert.match(librelaneJourneySource, /t\(`timing\.stage\.status\.\$\{state\}`\)/)
   assert.match(librelaneJourneySource, /const \{ t \} = useI18n\(\)/)
+})
+
+test('LibreLane assistant panel localizes its stage copy and binds approval to the exact saved proposal', () => {
+  assert.match(librelaneAgentSource, /assistantStageKey/)
+  assert.match(librelaneAgentSource, /assistantStepKey/)
+  assert.match(librelaneAgentSource, /t\(`librelane\.agent\.stage\.\$\{stageKey\}`\)/)
+  assert.match(librelaneAgentSource, /t\(`librelane\.agent\.step\.\$\{stepKey\}`\)/)
+  assert.match(librelaneAgentSource, /activeApprovalRequest \? \(/)
+  assert.match(librelaneAgentSource, /result\.state === 'repair_proposal_ready' && result\.proposal/)
+  assert.match(librelaneAgentSource, /result\.intent\.intent === 'run_baseline'/)
+  assert.match(librelaneAgentSource, /result\.intent\.intent === 'rerun_selected'/)
+  assert.match(librelaneAgentSource, /activeApprovalRequest\?\.proposalId/)
+  assert.doesNotMatch(librelaneAgentSource, /observedState \?\? result\.humanHandoff\.action/)
 })
 
 test('restored LibreLane run shows results before a collapsed setup disclosure', () => {

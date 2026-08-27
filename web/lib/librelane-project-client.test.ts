@@ -52,6 +52,7 @@ test('LibreLane assistant client uses the dedicated assistant endpoint and prese
     })
     assert.equal(result.state, 'project_status_ready')
     assert.deepEqual(result.observed, { run_id: 'run_12345678', state: 'succeeded', next_action: 'Review native metrics.' })
+    assert.equal(result.proposal, null)
     assert.ok(result.egress.excluded.includes('rtl'))
     assert.ok(result.egress.excluded.includes('tool_arguments'))
   } finally {
@@ -59,7 +60,7 @@ test('LibreLane assistant client uses the dedicated assistant endpoint and prese
   }
 })
 
-test('LibreLane assistant client sends explicit approval for the current bounded candidate execution request', async () => {
+test('LibreLane assistant client keeps the saved repair proposal and binds its exact proposal ID on approval follow-up', async () => {
   const originalFetch = globalThis.fetch
   globalThis.fetch = (async (input, init) => {
     assert.equal(String(input), 'http://127.0.0.1:5001/api/assistant/librelane')
@@ -71,14 +72,29 @@ test('LibreLane assistant client sends explicit approval for the current bounded
       provider: { protocol: 'openai-compatible', base_url: 'http://127.0.0.1:11434/v1', model: 'local-model' },
       project_run_id: 'run_approved_candidate',
       approved: true,
+      proposal_id: 'd'.repeat(64),
     })
     return new Response(JSON.stringify({
-      schema_version: 'xylon-librelane-assistant/v1', state: 'comparison_ready',
+      schema_version: 'xylon-librelane-assistant/v1', state: 'repair_proposal_ready',
       intent: { supported: true, intent: 'propose_repair', normalized_goal: 'run the approved bounded candidate', needs: ['project_run'] },
       skill: { id: 'openroad-setup-timing', version: '2', sha256: 'a'.repeat(64) },
       egress: { sent: ['user_message'], excluded: ['rtl', 'sdc', 'credentials', 'raw_logs', 'timing_metrics', 'tool_arguments'] },
-      observed: { run_id: 'run_approved_candidate', state: 'comparison_ready', next_action: 'Review measured comparison evidence.' },
-      human_handoff: { required: false, action: 'review_candidate_comparison' },
+      observed: {
+        run_id: 'run_approved_candidate',
+        state: 'proposal_ready',
+        next_action: 'Review the exact saved proposal.',
+        proposal: {
+          proposal_id: 'd'.repeat(64),
+          state: 'awaiting_approval',
+          created_at: '2026-08-28T09:00:00Z',
+          expires_at: '2026-08-28T09:15:00Z',
+          binding: { baseline_wns: -0.2 },
+          action: { parameter: 'RUN_POST_CTS_RESIZER_TIMING', from: 0, to: 1, scope: 'one_candidate_librelane_rerun' },
+          rationale: { hypothesis: 'Enable post-CTS repair.', expected_signal: 'Setup WNS improves.' },
+          tradeoffs: ['Runtime may increase.'],
+        },
+      },
+      human_handoff: { required: false, action: 'review_one_bounded_repair_before_approval' },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })
   }) as typeof fetch
   try {
@@ -88,13 +104,11 @@ test('LibreLane assistant client sends explicit approval for the current bounded
       provider: { protocol: 'openai-compatible', baseUrl: 'http://127.0.0.1:11434/v1', model: 'local-model' },
       projectRunId: 'run_approved_candidate',
       approved: true,
+      proposalId: 'd'.repeat(64),
     })
-    assert.equal(result.state, 'comparison_ready')
-    assert.deepEqual(result.observed, {
-      run_id: 'run_approved_candidate',
-      state: 'comparison_ready',
-      next_action: 'Review measured comparison evidence.',
-    })
+    assert.equal(result.state, 'repair_proposal_ready')
+    assert.equal(result.proposal?.proposalId, 'd'.repeat(64))
+    assert.equal(result.proposal?.action.parameter, 'RUN_POST_CTS_RESIZER_TIMING')
   } finally {
     globalThis.fetch = originalFetch
   }

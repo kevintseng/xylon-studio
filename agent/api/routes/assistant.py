@@ -52,6 +52,7 @@ class LibreLaneAssistantRequest(BaseModel):
     provider: ProviderConfig
     project_run_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$")
     approved: bool = False
+    proposal_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 async def _analyze_design(design: dict) -> dict:
@@ -181,17 +182,37 @@ async def _librelane_status(run_id: str) -> dict:
     return _public_librelane_run(payload)
 
 
-async def _librelane_repair(run_id: str, approved: bool) -> dict:
+async def _librelane_baseline(run_id: str, approved: bool) -> dict:
+    _, current = openroad_routes._load_librelane_run(run_id)
+    if current.get("state") not in {"prepared", "blocked"}:
+        return _public_librelane_run(current)
+    if not approved:
+        return _public_librelane_run(current)
+
+    await openroad_routes.post_librelane_project_execution(
+        run_id,
+        openroad_routes.LibreLaneExecutionRequest(approved=True),
+    )
+    run_root, payload = openroad_routes._load_librelane_run(run_id)
+    if openroad_routes._librelane_setup_wns(payload) < 0:
+        proposal = openroad_routes._create_librelane_proposal(run_root, payload)
+        return _public_librelane_run(payload) | {"proposal": proposal}
+    return _public_librelane_run(payload)
+
+
+async def _librelane_repair(run_id: str, approved: bool, proposal_id: str | None) -> dict:
     if not approved:
         run_root, payload = openroad_routes._load_librelane_run(run_id)
         proposal = openroad_routes._create_librelane_proposal(run_root, payload)
         return _public_librelane_run(payload) | {"proposal": proposal}
 
     _, payload = openroad_routes._load_librelane_run(run_id)
-    proposal = payload.get("proposal")
-    proposal_id = proposal.get("proposal_id") if isinstance(proposal, dict) else None
+    current = payload.get("proposal")
+    current_proposal_id = current.get("proposal_id") if isinstance(current, dict) else None
     if not isinstance(proposal_id, str):
-        raise ValueError("the saved LibreLane repair proposal is unavailable")
+        raise ValueError("the exact saved LibreLane proposal_id is required before repair approval")
+    if proposal_id != current_proposal_id:
+        raise ValueError("the approved LibreLane proposal_id does not match the current saved proposal")
     return _public_librelane_run(
         await openroad_routes.post_librelane_repair_execution(
             run_id,
@@ -216,6 +237,7 @@ async def _librelane_selected_execute(run_id: str, approved: bool) -> dict:
 
 LIBRELANE_TOOLS = LibreLaneSemanticTools(
     status=_librelane_status,
+    baseline=_librelane_baseline,
     repair=_librelane_repair,
     comparison=_librelane_comparison,
     selected_execute=_librelane_selected_execute,
@@ -274,6 +296,7 @@ async def librelane_assistant(request: LibreLaneAssistantRequest) -> dict:
             locale=request.locale,
             run_id=request.project_run_id,
             approved=request.approved,
+            proposal_id=request.proposal_id,
             tools=LIBRELANE_TOOLS,
         )
     except ProviderError as exc:
