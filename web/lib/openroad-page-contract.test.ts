@@ -124,6 +124,18 @@ test('LibreLane comparison visibly includes measured setup TNS before and after'
   assert.match(librelaneJourneySource, /comparison\.setupTns\.delta/)
 })
 
+test('LibreLane comparison adds an at-a-glance visual summary without hiding exact values', () => {
+  assert.match(librelaneJourneySource, /function MetricDeltaChart\(/)
+  assert.match(librelaneJourneySource, /aria-label=\{`\$\{label\}: \$\{t\('timing\.comparison\.baseline'\)\}/)
+  assert.match(librelaneJourneySource, /style=\{\{ width: `\$\{baselineWidth\}%` \}\}/)
+  assert.match(librelaneJourneySource, /style=\{\{ width: `\$\{candidateWidth\}%` \}\}/)
+  assert.match(librelaneJourneySource, /timing\.comparison\.visualSummary/)
+  assert.match(librelaneJourneySource, /timing\.comparison\.deltaImproved/)
+  assert.match(librelaneJourneySource, /timing\.comparison\.deltaNeedsReview/)
+  assert.match(librelaneJourneySource, /<MetricDeltaChart\s+label="WNS"/)
+  assert.match(librelaneJourneySource, /<MetricDeltaChart\s+label="TNS"/)
+})
+
 test('advanced MCP records keep cleanup evidence and an actionable visible alert', () => {
   for (const required of [
     'session.interruptionReason',

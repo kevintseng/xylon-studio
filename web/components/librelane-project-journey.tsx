@@ -79,6 +79,47 @@ function metricValue(metrics: LibreLaneMetricMap | null, key: string): number | 
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+function MetricDeltaChart({
+  label,
+  baseline,
+  candidate,
+  improved,
+}: {
+  label: string
+  baseline: number
+  candidate: number
+  improved: boolean
+}) {
+  const scale = Math.max(Math.abs(baseline), Math.abs(candidate), 0.001)
+  const baselineWidth = Math.max(4, Math.min(100, Math.abs(baseline) / scale * 100))
+  const candidateWidth = Math.max(4, Math.min(100, Math.abs(candidate) / scale * 100))
+  const { t } = useI18n()
+
+  return (
+    <figure className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4" aria-label={`${label}: ${t('timing.comparison.baseline')} ${formatNs(baseline)}, ${t('timing.comparison.candidate')} ${formatNs(candidate)}`}>
+      <figcaption className="flex items-center justify-between gap-3 text-xs font-semibold text-slate-200">
+        <span>{label}</span>
+        <span className={improved ? 'text-emerald-200' : 'text-amber-100'}>
+          <span className="sr-only">{improved ? t('timing.comparison.deltaImproved') : t('timing.comparison.deltaNeedsReview')}</span>
+          <span aria-hidden="true">{improved ? '↑' : '→'}</span>
+        </span>
+      </figcaption>
+      <div className="mt-3 space-y-2">
+        <div className="grid grid-cols-[4.5rem_minmax(0,1fr)_5.5rem] items-center gap-2 text-[11px]">
+          <span className="text-slate-500">{t('timing.comparison.baseline')}</span>
+          <span className="h-2 overflow-hidden rounded-full bg-slate-800" aria-hidden="true"><span className="block h-full rounded-full bg-slate-500" style={{ width: `${baselineWidth}%` }} /></span>
+          <span className="text-right font-mono text-slate-300">{formatNs(baseline)}</span>
+        </div>
+        <div className="grid grid-cols-[4.5rem_minmax(0,1fr)_5.5rem] items-center gap-2 text-[11px]">
+          <span className="text-slate-500">{t('timing.comparison.candidate')}</span>
+          <span className="h-2 overflow-hidden rounded-full bg-slate-800" aria-hidden="true"><span className={`block h-full rounded-full ${improved ? 'bg-emerald-400' : 'bg-amber-400'}`} style={{ width: `${candidateWidth}%` }} /></span>
+          <span className="text-right font-mono text-slate-300">{formatNs(candidate)}</span>
+        </div>
+      </div>
+    </figure>
+  )
+}
+
 function summarizeState(run: LibreLaneRun | null): StageState[] {
   if (!run) return ['active', 'pending', 'pending', 'pending', 'pending']
   const readyForProposal = run.state === 'succeeded' || run.state === 'proposal_ready' || run.state === 'comparison_ready' || run.state === 'candidate_accepted' || run.state === 'baseline_kept' || run.state === 'candidate_failed'
@@ -588,6 +629,20 @@ export function LibreLaneProjectJourney() {
                         </tr>
                       </tbody>
                     </table>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2" aria-label={t('timing.comparison.visualSummary')}>
+                    <MetricDeltaChart
+                      label="WNS"
+                      baseline={comparison.setupWns.baseline}
+                      candidate={comparison.setupWns.candidate}
+                      improved={comparison.setupWns.improved}
+                    />
+                    <MetricDeltaChart
+                      label="TNS"
+                      baseline={comparison.setupTns.baseline}
+                      candidate={comparison.setupTns.candidate}
+                      improved={comparison.setupTns.improved}
+                    />
                   </div>
                   <p className={`mt-4 rounded-2xl px-4 py-3 text-sm leading-6 ${comparison.setupWns.timingMet ? 'bg-emerald-500/10 text-emerald-100' : 'bg-amber-500/10 text-amber-100'}`}>
                     {comparisonMessage}
