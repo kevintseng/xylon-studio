@@ -166,6 +166,7 @@ export function LibreLaneProjectJourney() {
   const [busy, setBusy] = useState<BusyAction>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [proposalAcknowledged, setProposalAcknowledged] = useState(false)
   const [error, setError] = useState<VisibleError | null>(null)
   const importGeneration = useRef(0)
 
@@ -224,6 +225,7 @@ export function LibreLaneProjectJourney() {
 
   const persistRun = (nextRun: LibreLaneRun) => {
     setRun(nextRun)
+    if (nextRun.state !== 'proposal_ready') setProposalAcknowledged(false)
     window.localStorage.setItem(LIBRELANE_RUN_STORAGE_KEY, nextRun.runId)
   }
 
@@ -386,6 +388,7 @@ export function LibreLaneProjectJourney() {
         nextAction: next.nextAction,
         failure: null,
       } : current)
+      setProposalAcknowledged(false)
       window.localStorage.setItem(LIBRELANE_RUN_STORAGE_KEY, next.runId)
     } catch (caught) {
       setError(visibleError(caught))
@@ -546,7 +549,7 @@ export function LibreLaneProjectJourney() {
               <button type="button" onClick={() => void requestProposal('cts')} disabled={!run || busy !== null || run.state !== 'succeeded' || baselineWns === null || baselineWns >= 0} className="rounded-2xl border border-violet-400/40 px-4 py-3 text-sm font-semibold text-violet-100 transition hover:bg-violet-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-500">
                 {t('librelane.journey.action.proposeCts')}
               </button>
-              <button type="button" onClick={() => void executeRepair()} disabled={!proposalReady || busy !== null} className="rounded-2xl border border-emerald-400/40 px-4 py-3 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-500">
+              <button type="button" onClick={() => void executeRepair()} disabled={!proposalReady || !proposalAcknowledged || busy !== null} className="rounded-2xl border border-emerald-400/40 px-4 py-3 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-500">
                 {busy === 'repair' ? t('librelane.journey.action.runningCandidate') : t('librelane.journey.action.runCandidate')}
               </button>
               {run?.decision && (run.state === 'candidate_accepted' || run.state === 'baseline_kept') && run.selectedExecution?.state !== 'succeeded' ? (
@@ -600,6 +603,12 @@ export function LibreLaneProjectJourney() {
                     {run.proposal.tradeoffs.map((tradeoff) => <li key={tradeoff}>{tradeoff}</li>)}
                   </ul>
                   <p className="mt-2 text-xs text-slate-500">{t('timing.proposal.expires')}: {new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(run.proposal.expiresAt))}</p>
+                  {proposalReady ? (
+                    <label className="mt-4 flex items-start gap-3 rounded-xl border border-amber-400/20 bg-amber-500/5 p-3 text-xs leading-5 text-amber-50">
+                      <input type="checkbox" checked={proposalAcknowledged} onChange={(event) => setProposalAcknowledged(event.target.checked)} disabled={busy !== null} className="mt-1 size-4 shrink-0 accent-amber-400" />
+                      <span>{t('librelane.journey.proposalAcknowledgement')}</span>
+                    </label>
+                  ) : null}
                 </div>
               ) : null}
               {comparison ? (
