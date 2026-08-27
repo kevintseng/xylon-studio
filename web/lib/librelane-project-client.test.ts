@@ -139,9 +139,9 @@ test('LibreLane run normalization keeps bounded preparation and comparison evide
   assert.equal(run.candidateArtifacts?.resolved.sha256, 'f'.repeat(64))
   assert.equal(run.proposal?.action.parameter, 'PL_TARGET_DENSITY')
   assert.equal(run.comparison?.setupWns.delta, 0.25)
-  assert.equal(run.comparison?.setupTns.baseline, -1.4)
-  assert.equal(run.comparison?.setupTns.candidate, 0)
-  assert.equal(run.comparison?.setupTns.delta, 1.4)
+  assert.equal(run.comparison?.setupTns?.baseline, -1.4)
+  assert.equal(run.comparison?.setupTns?.candidate, 0)
+  assert.equal(run.comparison?.setupTns?.delta, 1.4)
 })
 
 test('LibreLane run normalization rejects an invented terminal state', () => {
@@ -214,8 +214,38 @@ test('LibreLane normalization rejects malformed bounded repair and comparison pa
     comparison: {
       baseline_metrics: { wns: -0.2, tns: -1 }, candidate_metrics: { wns: 0.1, tns: 0 },
       setup_wns: { baseline: -0.2, candidate: 0.1, delta: 0.3, improved: true, timing_met: true },
+      setup_tns: { baseline: -1, candidate: 0, delta: 1, improved: true, timing_met: 'true' },
     },
-  }), /comparison\.setup_tns must be an object/)
+  }), /comparison\.setup_tns\.timing_met must be a boolean/)
+})
+
+test('LibreLane normalization derives legacy setup TNS from native metrics without inventing values', () => {
+  const run = normalizeLibreLaneRun({
+    run_id: 'run_legacy1', state: 'baseline_kept', next_action: 'Baseline remains selected.', failure: null,
+    manifest: null, preparation: null, runtime_identity: null, execution: null, candidate: null,
+    comparison: {
+      baseline_metrics: { timing__setup__wns: -0.2, timing__setup__tns: -1.2 },
+      candidate_metrics: { timing__setup__wns: -0.1, timing__setup__tns: -0.5 },
+      setup_wns: { baseline: -0.2, candidate: -0.1, delta: 0.1, improved: true, timing_met: false },
+    },
+  })
+  assert.equal(run.comparison?.setupTns?.baseline, -1.2)
+  assert.equal(run.comparison?.setupTns?.candidate, -0.5)
+  assert.equal(run.comparison?.setupTns?.delta, 0.7)
+  assert.equal(run.comparison?.setupTns?.improved, true)
+})
+
+test('LibreLane normalization keeps legacy comparison TNS unavailable when metrics do not contain it', () => {
+  const run = normalizeLibreLaneRun({
+    run_id: 'run_legacy2', state: 'baseline_kept', next_action: 'Baseline remains selected.', failure: null,
+    manifest: null, preparation: null, runtime_identity: null, execution: null, candidate: null,
+    comparison: {
+      baseline_metrics: { timing__setup__wns: -0.2 },
+      candidate_metrics: { timing__setup__wns: -0.1 },
+      setup_wns: { baseline: -0.2, candidate: -0.1, delta: 0.1, improved: true, timing_met: false },
+    },
+  })
+  assert.equal(run.comparison?.setupTns, null)
 })
 
 test('LibreLane normalization rejects an invalid proposal timestamp', () => {

@@ -4,6 +4,7 @@ import test from 'node:test'
 
 const pageSource = readFileSync(new URL('../app/openroad/page.tsx', import.meta.url), 'utf8')
 const librelaneJourneySource = readFileSync(new URL('../components/librelane-project-journey.tsx', import.meta.url), 'utf8')
+const librelaneReadinessSource = readFileSync(new URL('../components/librelane-readiness-card.tsx', import.meta.url), 'utf8')
 const librelaneAgentSource = readFileSync(new URL('../components/librelane-agent-panel.tsx', import.meta.url), 'utf8')
 const librelaneErrorSource = readFileSync(new URL('./librelane-project-error.ts', import.meta.url), 'utf8')
 const timingSource = readFileSync(new URL('../components/timing-workbench.tsx', import.meta.url), 'utf8')
@@ -70,6 +71,9 @@ test('LibreLane journey exposes the bounded prepare execute proposal and repair 
   assert.match(librelaneJourneySource, /savedRun\.manifest\.top/)
   assert.match(librelaneJourneySource, /LibreLaneSavedRunStale/)
   assert.match(librelaneJourneySource, /librelane\.journey\.error\.savedRunStaleRecovery/)
+  assert.match(librelaneJourneySource, /new URLSearchParams\(window\.location\.search\)/)
+  assert.match(librelaneJourneySource, /LIBRELANE_RUN_ID_PATTERN\.test\(queryRunId\)/)
+  assert.match(librelaneJourneySource, /window\.localStorage\.setItem\(LIBRELANE_RUN_STORAGE_KEY, savedRun\.runId\)/)
   assert.match(librelaneJourneySource, /run\.state === 'comparison_ready' && run\.proposal && !run\.decision/)
   assert.match(librelaneJourneySource, /<LibreLaneAgentPanel/)
   assert.match(librelaneAgentSource, /runLibreLaneAssistant/)
@@ -81,6 +85,11 @@ test('LibreLane journey localizes stage status chips instead of rendering raw st
   assert.match(librelaneJourneySource, /function StateChip\(\{ state \}: \{ state: StageState \}\)/)
   assert.match(librelaneJourneySource, /t\(`timing\.stage\.status\.\$\{state\}`\)/)
   assert.match(librelaneJourneySource, /const \{ t \} = useI18n\(\)/)
+})
+
+test('LibreLane readiness does not repeat the ready-state next action', () => {
+  assert.match(librelaneReadinessSource, /const primaryMessage = /)
+  assert.match(librelaneReadinessSource, /localizedNextAction !== primaryMessage/)
 })
 
 test('LibreLane journey preserves manual project identity fields across file import', () => {

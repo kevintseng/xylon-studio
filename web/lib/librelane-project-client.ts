@@ -55,7 +55,7 @@ export interface LibreLaneComparison {
     delta: number
     improved: boolean
     timingMet: boolean
-  }
+  } | null
 }
 
 export interface LibreLaneDecision {
@@ -256,6 +256,11 @@ function metrics(value: unknown, label: string): LibreLaneMetricMap {
   return next
 }
 
+function numericMetric(value: LibreLaneMetricMap, key: string): number | null {
+  const observed = value[key]
+  return typeof observed === 'number' && Number.isFinite(observed) ? observed : null
+}
+
 function proposal(value: unknown): LibreLaneBoundedProposal {
   const input = record(value, 'proposal')
   const action = record(input.action, 'proposal.action')
@@ -296,11 +301,22 @@ function proposal(value: unknown): LibreLaneBoundedProposal {
 
 function comparison(value: unknown): LibreLaneComparison {
   const input = record(value, 'comparison')
+  const baselineMetrics = metrics(input.baseline_metrics, 'comparison.baseline_metrics')
+  const candidateMetrics = metrics(input.candidate_metrics, 'comparison.candidate_metrics')
   const setupWns = record(input.setup_wns, 'comparison.setup_wns')
-  const setupTns = record(input.setup_tns, 'comparison.setup_tns')
+  const setupTnsValue = input.setup_tns
+  const setupTns = setupTnsValue === undefined || setupTnsValue === null
+    ? (() => {
+      const baseline = numericMetric(baselineMetrics, 'timing__setup__tns')
+      const candidate = numericMetric(candidateMetrics, 'timing__setup__tns')
+      if (baseline === null || candidate === null) return null
+      const delta = candidate - baseline
+      return { baseline, candidate, delta, improved: delta > 0, timing_met: candidate >= 0 }
+    })()
+    : record(setupTnsValue, 'comparison.setup_tns')
   return {
-    baselineMetrics: metrics(input.baseline_metrics, 'comparison.baseline_metrics'),
-    candidateMetrics: metrics(input.candidate_metrics, 'comparison.candidate_metrics'),
+    baselineMetrics,
+    candidateMetrics,
     setupWns: {
       baseline: number(setupWns.baseline, 'comparison.setup_wns.baseline'),
       candidate: number(setupWns.candidate, 'comparison.setup_wns.candidate'),
@@ -308,13 +324,13 @@ function comparison(value: unknown): LibreLaneComparison {
       improved: boolean(setupWns.improved, 'comparison.setup_wns.improved'),
       timingMet: boolean(setupWns.timing_met, 'comparison.setup_wns.timing_met'),
     },
-    setupTns: {
+    setupTns: setupTns ? {
       baseline: number(setupTns.baseline, 'comparison.setup_tns.baseline'),
       candidate: number(setupTns.candidate, 'comparison.setup_tns.candidate'),
       delta: number(setupTns.delta, 'comparison.setup_tns.delta'),
       improved: boolean(setupTns.improved, 'comparison.setup_tns.improved'),
       timingMet: boolean(setupTns.timing_met, 'comparison.setup_tns.timing_met'),
-    },
+    } : null,
   }
 }
 

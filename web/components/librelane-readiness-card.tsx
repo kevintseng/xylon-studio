@@ -80,7 +80,12 @@ export function LibreLaneReadinessCard() {
       ? t('librelane.blocked')
       : viewState === 'unavailable'
         ? t('librelane.unavailable')
-        : t('librelane.checking')
+      : t('librelane.checking')
+  const primaryMessage = viewState === 'unavailable'
+    ? t('librelane.error')
+    : viewState === 'blocked'
+      ? localizedBlocker
+      : localizedNextAction
 
   return (
     <section className="container mx-auto px-4 py-5 sm:px-6 lg:px-8" aria-labelledby="librelane-readiness-title" aria-live="polite" aria-busy={!readiness && !error}>
@@ -116,9 +121,9 @@ export function LibreLaneReadinessCard() {
           })}
         </div>
         <p className="mt-3 text-sm text-slate-300">
-          {viewState === 'unavailable' ? t('librelane.error') : viewState === 'blocked' ? localizedBlocker : localizedNextAction}
+          {primaryMessage}
         </p>
-        {readiness ? <p className="mt-1 text-xs text-slate-500">{localizedNextAction}</p> : null}
+        {readiness && localizedNextAction !== primaryMessage ? <p className="mt-1 text-xs text-slate-500">{localizedNextAction}</p> : null}
       </div>
     </section>
   )

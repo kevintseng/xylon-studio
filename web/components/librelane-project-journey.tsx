@@ -33,6 +33,7 @@ import {
 const OPENROAD_API_URL = resolveOpenroadApiUrl(process.env.NEXT_PUBLIC_API_URL)
 const LIBRELANE_API_URL = resolveLibreLaneProjectApiUrl(process.env.NEXT_PUBLIC_API_URL)
 const LIBRELANE_RUN_STORAGE_KEY = 'xylon.librelane.active-run'
+const LIBRELANE_RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/
 
 type BusyAction = 'prepare' | 'baseline' | 'proposal' | 'repair' | 'decision' | 'selected' | null
 type StageState = 'pending' | 'active' | 'complete' | 'blocked'
@@ -186,13 +187,21 @@ export function LibreLaneProjectJourney() {
   const baselineTns = metricValue(run?.baselineMetrics ?? null, 'timing__setup__tns')
 
   useEffect(() => {
-    const savedRunId = window.localStorage.getItem(LIBRELANE_RUN_STORAGE_KEY)
+    const queryRunId = new URLSearchParams(window.location.search).get('run_id')
+    const savedRunId = queryRunId && LIBRELANE_RUN_ID_PATTERN.test(queryRunId)
+      ? queryRunId
+      : window.localStorage.getItem(LIBRELANE_RUN_STORAGE_KEY)
+    if (savedRunId && !LIBRELANE_RUN_ID_PATTERN.test(savedRunId)) {
+      window.localStorage.removeItem(LIBRELANE_RUN_STORAGE_KEY)
+      return
+    }
     if (!savedRunId) return
     let cancelled = false
     void getLibreLaneProjectRun(LIBRELANE_API_URL, savedRunId)
       .then((savedRun) => {
         if (!cancelled) {
           setRun(savedRun)
+          window.localStorage.setItem(LIBRELANE_RUN_STORAGE_KEY, savedRun.runId)
           if (savedRun.projectId) setProjectId(savedRun.projectId)
           if (savedRun.manifest) {
             setTopModule(savedRun.manifest.top)
@@ -632,12 +641,14 @@ export function LibreLaneProjectJourney() {
                           <td>{formatNs(comparison.setupWns.candidate)}</td>
                           <td className={comparison.setupWns.improved ? 'text-emerald-200' : 'text-amber-100'}>{formatNs(comparison.setupWns.delta)}</td>
                         </tr>
-                        <tr>
-                          <th className="py-2">TNS</th>
-                          <td>{formatNs(comparison.setupTns.baseline)}</td>
-                          <td>{formatNs(comparison.setupTns.candidate)}</td>
-                          <td className={comparison.setupTns.improved ? 'text-emerald-200' : 'text-amber-100'}>{formatNs(comparison.setupTns.delta)}</td>
-                        </tr>
+                        {comparison.setupTns ? (
+                          <tr>
+                            <th className="py-2">TNS</th>
+                            <td>{formatNs(comparison.setupTns.baseline)}</td>
+                            <td>{formatNs(comparison.setupTns.candidate)}</td>
+                            <td className={comparison.setupTns.improved ? 'text-emerald-200' : 'text-amber-100'}>{formatNs(comparison.setupTns.delta)}</td>
+                          </tr>
+                        ) : null}
                       </tbody>
                     </table>
                   </div>
@@ -648,12 +659,14 @@ export function LibreLaneProjectJourney() {
                       candidate={comparison.setupWns.candidate}
                       improved={comparison.setupWns.improved}
                     />
-                    <MetricDeltaChart
-                      label="TNS"
-                      baseline={comparison.setupTns.baseline}
-                      candidate={comparison.setupTns.candidate}
-                      improved={comparison.setupTns.improved}
-                    />
+                    {comparison.setupTns ? (
+                      <MetricDeltaChart
+                        label="TNS"
+                        baseline={comparison.setupTns.baseline}
+                        candidate={comparison.setupTns.candidate}
+                        improved={comparison.setupTns.improved}
+                      />
+                    ) : null}
                   </div>
                   <p className={`mt-4 rounded-2xl px-4 py-3 text-sm leading-6 ${comparison.setupWns.timingMet ? 'bg-emerald-500/10 text-emerald-100' : 'bg-amber-500/10 text-amber-100'}`}>
                     {comparisonMessage}

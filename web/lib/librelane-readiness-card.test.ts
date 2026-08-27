@@ -28,7 +28,8 @@ test('LibreLane readiness card keeps the backend next action visible and allows 
     'setRefreshToken',
     "t('timing.resource.refresh')",
     "disabled={viewState === 'checking'}",
-    "viewState === 'blocked' ? localizedBlocker : localizedNextAction",
+    'const primaryMessage = viewState ===',
+    'localizedNextAction !== primaryMessage',
   ]) {
     assert.match(cardSource, new RegExp(required.replaceAll('(', '\\(').replaceAll(')', '\\)').replaceAll('.', '\\.').replaceAll('?', '\\?').replaceAll('{', '\\{').replaceAll('}', '\\}')))
   }
