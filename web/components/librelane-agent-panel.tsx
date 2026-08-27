@@ -61,11 +61,11 @@ function formatNs(value: number): string {
 function assistantStageKey(state: string): string {
   switch (state) {
     case 'unsupported':
-    case 'waiting_for_project_run'
-    case 'awaiting_human_approval'
-    case 'project_status_ready'
-    case 'repair_proposal_ready'
-    case 'comparison_ready'
+    case 'waiting_for_project_run':
+    case 'awaiting_human_approval':
+    case 'project_status_ready':
+    case 'repair_proposal_ready':
+    case 'comparison_ready':
     case 'selected_rerun_requested':
       return state
     default:
