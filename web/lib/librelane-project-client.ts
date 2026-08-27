@@ -102,6 +102,28 @@ export interface LibreLaneArtifacts {
   metrics: LibreLaneArtifactRef
 }
 
+export interface LibreLaneWorstPathDiagnosis {
+  status: 'available' | 'unavailable'
+  stage: string | null
+  report: LibreLaneArtifactRef | null
+  corner: string | null
+  startpoint: string | null
+  endpoint: string | null
+  pathGroup: string | null
+  pathType: string | null
+  arrivalNs: number | null
+  requiredNs: number | null
+  slackNs: number | null
+  nextAction: {
+    strategy: string
+    parameter: string
+    from: number
+    to: number
+    rationale: string
+  } | null
+  unavailableReason: string | null
+}
+
 export interface LibreLaneBlockingEvidence {
   stage?: string
   firstError?: string | null
@@ -140,6 +162,7 @@ export interface LibreLaneRun {
   runtimeIdentity: Record<string, string> | null
   baselineMetrics: LibreLaneMetricMap | null
   baselineArtifacts: LibreLaneArtifacts | null
+  baselineDiagnosis: LibreLaneWorstPathDiagnosis | null
   proposal: LibreLaneBoundedProposal | null
   comparison: LibreLaneComparison | null
   decision: LibreLaneDecision | null
@@ -509,6 +532,73 @@ function normalizeReadbackArtifacts(value: unknown, label: string): LibreLaneArt
   return normalizeArtifacts((readback as Record<string, unknown>).artifacts, label)
 }
 
+function normalizeReadbackDiagnosis(value: unknown): LibreLaneWorstPathDiagnosis | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const result = (value as Record<string, unknown>).result
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return null
+  const readback = (result as Record<string, unknown>).readback
+  if (!readback || typeof readback !== 'object' || Array.isArray(readback)) return null
+  const diagnosisValue = (readback as Record<string, unknown>).diagnosis
+  if (!diagnosisValue) return null
+
+  const input = record(diagnosisValue, 'execution.result.readback.diagnosis')
+  const status = string(input.status, 'diagnosis.status')
+  if (status !== 'available' && status !== 'unavailable') throw new Error('diagnosis.status is invalid')
+  const optionalString = (key: string): string | null => input[key] === null || input[key] === undefined
+    ? null
+    : string(input[key], `diagnosis.${key}`)
+  const optionalNumber = (key: string): number | null => input[key] === null || input[key] === undefined
+    ? null
+    : number(input[key], `diagnosis.${key}`)
+
+  const report = input.report === null || input.report === undefined
+    ? null
+    : (() => {
+      const item = record(input.report, 'diagnosis.report')
+      return {
+        path: string(item.path, 'diagnosis.report.path'),
+        sha256: sha256(item.sha256, 'diagnosis.report.sha256'),
+        bytes: number(item.bytes, 'diagnosis.report.bytes'),
+      }
+    })()
+  const nextAction = input.next_action === null || input.next_action === undefined
+    ? null
+    : (() => {
+      const item = record(input.next_action, 'diagnosis.next_action')
+      return {
+        strategy: string(item.strategy, 'diagnosis.next_action.strategy'),
+        parameter: string(item.parameter, 'diagnosis.next_action.parameter'),
+        from: number(item.from, 'diagnosis.next_action.from'),
+        to: number(item.to, 'diagnosis.next_action.to'),
+        rationale: string(item.rationale, 'diagnosis.next_action.rationale'),
+      }
+    })()
+
+  const diagnosis: LibreLaneWorstPathDiagnosis = {
+    status,
+    stage: optionalString('stage'),
+    report,
+    corner: optionalString('corner'),
+    startpoint: optionalString('startpoint'),
+    endpoint: optionalString('endpoint'),
+    pathGroup: optionalString('path_group'),
+    pathType: optionalString('path_type'),
+    arrivalNs: optionalNumber('arrival_ns'),
+    requiredNs: optionalNumber('required_ns'),
+    slackNs: optionalNumber('slack_ns'),
+    nextAction,
+    unavailableReason: optionalString('unavailable_reason'),
+  }
+  if (status === 'available' && (
+    !diagnosis.stage || !diagnosis.report || !diagnosis.startpoint || !diagnosis.endpoint
+    || !diagnosis.pathGroup || !diagnosis.pathType || diagnosis.slackNs === null
+    || diagnosis.arrivalNs === null || diagnosis.requiredNs === null
+  )) {
+    throw new Error('available diagnosis is missing native path evidence')
+  }
+  return diagnosis
+}
+
 function normalizeLibreLaneAssistant(input: unknown): LibreLaneAssistantResult {
   const value = record(input, 'librelane assistant response')
   if (value.schema_version !== 'xylon-librelane-assistant/v1') throw new Error('librelane assistant schema is invalid')
@@ -554,6 +644,7 @@ export function normalizeLibreLaneRun(input: unknown): LibreLaneRun {
     runtimeIdentity: normalizeRuntimeIdentity(value.runtime_identity),
     baselineMetrics: normalizeBaselineMetrics(value.execution),
     baselineArtifacts: normalizeReadbackArtifacts(value.execution, 'execution.result.readback.artifacts'),
+    baselineDiagnosis: normalizeReadbackDiagnosis(value.execution),
     proposal: value.proposal ? proposal(value.proposal) : null,
     comparison: value.comparison ? comparison(value.comparison) : null,
     decision: normalizeDecision(value.decision),

@@ -35,6 +35,11 @@ from agent.openroad.librelane_adapter import (
 from agent.openroad.librelane_adapter import (
     parse_request as parse_librelane_request,
 )
+from agent.openroad.librelane_diagnosis import (
+    build_librelane_diagnosis,
+    diagnosis_binding,
+    load_json_config,
+)
 from agent.openroad.librelane_readiness import collect_librelane_readiness
 from agent.openroad.project_manifest import preflight_project_manifest
 from agent.openroad.project_store import (
@@ -450,6 +455,7 @@ def _load_librelane_run(run_id: str) -> tuple[Path, dict[str, Any]]:
         raise ProjectStoreError("prepared LibreLane run manifest is unreadable") from error
     if not isinstance(payload, dict) or payload.get("run_id") != run_id:
         raise ProjectStoreError("prepared LibreLane run manifest is invalid")
+    _hydrate_librelane_run_diagnosis(run_root, payload)
     return run_root, payload
 
 
@@ -510,6 +516,69 @@ def _persist_librelane_run(run_root: Path, payload: dict[str, Any]) -> None:
     manifest_path.chmod(0o600)
 
 
+def _load_scoped_run_dir(run_root: Path, root_path: str | None) -> Path | None:
+    if not isinstance(root_path, str):
+        return None
+    declared = run_root / root_path
+    resolved = declared.resolve()
+    if declared.is_symlink() or not resolved.is_dir() or not resolved.is_relative_to(run_root.resolve()):
+        return None
+    return resolved
+
+
+def _load_scoped_config(scope_root: Path, config_path: str | None) -> dict[str, Any] | None:
+    if not isinstance(config_path, str):
+        return None
+    declared = scope_root / config_path
+    resolved = declared.resolve()
+    if declared.is_symlink() or not resolved.is_file() or not resolved.is_relative_to(scope_root.resolve()):
+        return None
+    return load_json_config(resolved)
+
+
+def _hydrate_section_result_diagnosis(
+    run_root: Path,
+    payload: dict[str, Any],
+    section_name: Literal["execution", "candidate", "selected_execution"],
+) -> None:
+    section = payload.get(section_name)
+    if not isinstance(section, dict):
+        return
+    result = section.get("result")
+    if not isinstance(result, dict):
+        return
+    readback = result.get("readback")
+    if not isinstance(readback, dict):
+        return
+    if section_name == "execution":
+        scope_root = run_root.resolve()
+        config = _load_scoped_config(scope_root, payload.get("preparation", {}).get("config_path") if isinstance(payload.get("preparation"), dict) else None)
+    else:
+        scope_root = _load_scoped_run_dir(run_root, section.get("root"))
+        if scope_root is None:
+            readback["diagnosis"] = build_librelane_diagnosis(run_root.resolve(), readback)
+            return
+        config = _load_scoped_config(scope_root, section.get("config_path"))
+    readback["diagnosis"] = build_librelane_diagnosis(
+        scope_root,
+        readback,
+        config=config,
+    )
+
+
+def _hydrate_librelane_run_diagnosis(run_root: Path, payload: dict[str, Any]) -> None:
+    for section_name in ("execution", "candidate", "selected_execution"):
+        _hydrate_section_result_diagnosis(run_root, payload, section_name)
+
+
+def _baseline_diagnosis(payload: dict[str, Any]) -> dict[str, Any] | None:
+    execution = payload.get("execution")
+    result = execution.get("result") if isinstance(execution, dict) else None
+    readback = result.get("readback") if isinstance(result, dict) else None
+    diagnosis = readback.get("diagnosis") if isinstance(readback, dict) else None
+    return diagnosis if isinstance(diagnosis, dict) else None
+
+
 def _canonical_sha256(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
@@ -559,6 +628,7 @@ def _create_librelane_proposal(
     payload: dict[str, Any],
     strategy: Literal["density", "cts"] = "density",
 ) -> dict[str, Any]:
+    _hydrate_librelane_run_diagnosis(run_root, payload)
     if payload.get("state") != "succeeded":
         existing = payload.get("proposal")
         if payload.get("state") == "proposal_ready" and isinstance(existing, dict) and existing.get("state") == "awaiting_approval":
@@ -600,6 +670,16 @@ def _create_librelane_proposal(
     # candidate staging still writes True only after the user approves the proposal.
     if strategy == "cts" and config.get(LIBRELANE_CTS_REPAIR_PARAMETER, False) is not False:
         raise ProjectStoreError("baseline LibreLane CTS timing repair is outside the supported repair boundary")
+    baseline_diagnosis = _baseline_diagnosis(payload)
+    if strategy == "cts":
+        next_action = baseline_diagnosis.get("next_action") if isinstance(baseline_diagnosis, dict) else None
+        if (
+            not isinstance(baseline_diagnosis, dict)
+            or baseline_diagnosis.get("status") != "available"
+            or not isinstance(next_action, dict)
+            or next_action.get("strategy") != "cts"
+        ):
+            raise ProjectStoreError("CTS timing repair requires a measured native max-path diagnosis on a supported setup stage")
     created_at = datetime.now(UTC)
     expires_at = created_at.timestamp() + LIBRELANE_PROPOSAL_TTL_SECONDS
     if strategy == "cts":
@@ -631,7 +711,7 @@ def _create_librelane_proposal(
             "functional_inputs_unchanged": True,
         }
         rationale = {
-            "hypothesis": "提高 placement 利用率可能增加擁塞，但有機會改善最差 setup path 的繞線與延遲。",
+            "hypothesis": "提高 placement density 是整體 placement/routing 的粗略重跑策略，不是 worst-path 專屬診斷。",
             "expected_signal": "candidate 的 native setup WNS 或 TNS 改善。",
             "confidence": "heuristic_requires_measurement",
         }
@@ -647,6 +727,7 @@ def _create_librelane_proposal(
         "inputs_sha256": _librelane_inputs_sha256(run_root / "inputs"),
         "baseline_wns": baseline_wns,
     }
+    binding.update(diagnosis_binding(baseline_diagnosis))
     proposal_id = _canonical_sha256({"binding": binding, "action": action})
     proposal = {
         "schema_version": "xylon-librelane-repair-proposal/v1",
@@ -1026,6 +1107,7 @@ async def post_librelane_project_execution(
             payload["execution"]["result"] = result
             payload["failure"] = None
             payload["next_action"] = "Review the native timing metrics and request one bounded repair if needed."
+            _hydrate_librelane_run_diagnosis(run_root, payload)
             _persist_librelane_run(run_root, payload)
             return payload
         except HTTPException:
@@ -1198,6 +1280,7 @@ async def post_librelane_repair_execution(
             "finished_at": datetime.now(UTC).isoformat(),
             "result": result,
         })
+        _hydrate_librelane_run_diagnosis(run_root, payload)
         payload["comparison"] = {
             "schema_version": "xylon-librelane-comparison/v1",
             "baseline_metrics": baseline_metrics,
@@ -1405,6 +1488,7 @@ async def post_librelane_selected_execution(
             payload["selected_execution"]["result"] = result
             payload["failure"] = None
             payload["next_action"] = "Review the selected LibreLane rerun evidence and compare it with the saved baseline/candidate history."
+            _hydrate_librelane_run_diagnosis(run_root, payload)
             _persist_librelane_run(run_root, payload)
             return payload
         except HTTPException:

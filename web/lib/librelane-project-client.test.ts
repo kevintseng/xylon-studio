@@ -88,6 +88,14 @@ test('LibreLane run normalization keeps bounded preparation and comparison evide
       result: {
         readback: {
           metrics: { timing__setup__wns: -0.2, timing__setup__tns: -1.4 },
+          diagnosis: {
+            status: 'available', stage: '31-openroad-stamidpnr',
+            report: { path: 'runs/RUN_BASE/31-openroad-stamidpnr/max.rpt', sha256: '9'.repeat(64), bytes: 4096 },
+            corner: 'nom_tt_025C_1v80', startpoint: '_1066_', endpoint: '_1059_', path_group: 'core_clock', path_type: 'max',
+            arrival_ns: 5.869236, required_ns: 1.086048, slack_ns: -4.783188,
+            next_action: { strategy: 'cts', parameter: 'RUN_POST_CTS_RESIZER_TIMING', from: 0, to: 1, rationale: 'Repair after CTS.' },
+            unavailable_reason: null,
+          },
           artifacts: {
             resolved: { path: 'runs/RUN_BASE/resolved.json', sha256: 'd'.repeat(64), bytes: 128 },
             metrics: { path: 'runs/RUN_BASE/metrics.csv', sha256: 'e'.repeat(64), bytes: 256 },
@@ -136,6 +144,11 @@ test('LibreLane run normalization keeps bounded preparation and comparison evide
   assert.equal(run.manifest?.top, 'counter')
   assert.equal(run.baselineMetrics?.timing__setup__wns, -0.2)
   assert.equal(run.baselineArtifacts?.metrics.sha256, 'e'.repeat(64))
+  assert.equal(run.baselineDiagnosis?.startpoint, '_1066_')
+  assert.equal(run.baselineDiagnosis?.endpoint, '_1059_')
+  assert.equal(run.baselineDiagnosis?.slackNs, -4.783188)
+  assert.equal(run.baselineDiagnosis?.report?.sha256, '9'.repeat(64))
+  assert.equal(run.baselineDiagnosis?.nextAction?.parameter, 'RUN_POST_CTS_RESIZER_TIMING')
   assert.equal(run.candidateArtifacts?.resolved.sha256, 'f'.repeat(64))
   assert.equal(run.proposal?.action.parameter, 'PL_TARGET_DENSITY')
   assert.equal(run.comparison?.setupWns.delta, 0.25)
@@ -165,6 +178,20 @@ test('LibreLane run normalization rejects malformed artifact digests', () => {
       },
     },
   }), /sha256 must be a 64-character hexadecimal digest/)
+})
+
+test('LibreLane run normalization fails closed on incomplete native path evidence', () => {
+  assert.throws(() => normalizeLibreLaneRun({
+    run_id: 'run_12345678', state: 'succeeded', next_action: 'Review evidence.', failure: null,
+    execution: { result: { readback: {
+      metrics: { timing__setup__wns: -0.2 },
+      diagnosis: {
+        status: 'available', stage: '31-openroad-stamidpnr', report: null,
+        corner: 'nom_tt', startpoint: '_1_', endpoint: '_2_', path_group: 'clock', path_type: 'max',
+        arrival_ns: 2, required_ns: 1, slack_ns: -1, next_action: null, unavailable_reason: null,
+      },
+    } } },
+  }), /missing native path evidence/)
 })
 
 test('LibreLane run normalization accepts the bounded CTS timing proposal', () => {

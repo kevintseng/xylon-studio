@@ -133,6 +133,27 @@ test('LibreLane comparison visibly includes measured setup TNS before and after'
   assert.match(librelaneJourneySource, /comparison\.setupTns\.delta/)
 })
 
+test('LibreLane journey shows native worst-path evidence and only one bounded next action', () => {
+  for (const required of [
+    'baselineDiagnosis',
+    'librelane.journey.worstPathTitle',
+    'diagnosis.startpoint',
+    'diagnosis.endpoint',
+    'diagnosis.pathGroup',
+    'diagnosis.corner',
+    'diagnosis.stage',
+    'diagnosis.slackNs',
+    'librelane.journey.boundedNextAction',
+    'RUN_POST_CTS_RESIZER_TIMING',
+  ]) {
+    assert.match(librelaneJourneySource, new RegExp(required.replaceAll('.', '\\.')))
+  }
+  assert.match(librelaneJourneySource, /diagnosis\?\.status === 'available'/)
+  assert.match(librelaneJourneySource, /diagnosis\.report\?\.path/)
+  assert.match(librelaneJourneySource, /diagnosis\.report\?\.sha256/)
+  assert.match(librelaneJourneySource, /librelane\.journey\.worstPathUnavailable/)
+})
+
 test('LibreLane comparison adds an at-a-glance visual summary without hiding exact values', () => {
   assert.match(librelaneJourneySource, /function MetricDeltaChart\(/)
   assert.match(librelaneJourneySource, /aria-label=\{`\$\{label\}: \$\{t\('timing\.comparison\.baseline'\)\}/)

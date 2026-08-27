@@ -478,6 +478,7 @@ export function LibreLaneProjectJourney() {
 
   const nextAction = localizeLibreLaneNextAction(run?.failure?.recovery ?? run?.nextAction ?? t('librelane.journey.idle'), locale, t)
   const comparison = run?.comparison
+  const diagnosis = run?.baselineDiagnosis
   const comparisonMessage = comparison?.setupWns.timingMet
     ? t('librelane.journey.timingMet')
     : comparison && comparison.setupWns.delta > 0.001
@@ -605,6 +606,46 @@ export function LibreLaneProjectJourney() {
                   <p className={`mt-2 text-2xl font-semibold ${baselineTns !== null && baselineTns < 0 ? 'text-red-200' : 'text-emerald-200'}`}>{formatNs(baselineTns)}</p>
                 </div>
               </div>
+              {run?.baselineMetrics ? (
+                diagnosis?.status === 'available' ? (
+                  <div className="mt-4 overflow-hidden rounded-2xl border border-red-400/30 bg-slate-900/70">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-200">{t('librelane.journey.worstPathTitle')}</p>
+                      <span className="rounded-full border border-red-400/30 bg-red-500/10 px-2.5 py-1 font-mono text-xs font-semibold text-red-100">{formatNs(diagnosis.slackNs)}</span>
+                    </div>
+                    <div className="p-4">
+                      <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3" aria-label={`${t('timing.path.startpoint')} ${diagnosis.startpoint}, ${t('timing.path.endpoint')} ${diagnosis.endpoint}`}>
+                        <div className="min-w-0 rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2">
+                          <p className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{t('timing.path.startpoint')}</p>
+                          <p className="mt-1 truncate font-mono text-xs text-slate-100" title={diagnosis.startpoint ?? undefined}>{diagnosis.startpoint}</p>
+                        </div>
+                        <span aria-hidden="true" className="text-lg text-red-300">→</span>
+                        <div className="min-w-0 rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2">
+                          <p className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{t('timing.path.endpoint')}</p>
+                          <p className="mt-1 truncate font-mono text-xs text-slate-100" title={diagnosis.endpoint ?? undefined}>{diagnosis.endpoint}</p>
+                        </div>
+                      </div>
+                      <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                        <div><dt className="text-slate-500">{t('timing.path.group')}</dt><dd className="mt-1 truncate font-mono text-slate-200">{diagnosis.pathGroup}</dd></div>
+                        <div><dt className="text-slate-500">{t('librelane.journey.corner')}</dt><dd className="mt-1 truncate font-mono text-slate-200">{diagnosis.corner ?? '—'}</dd></div>
+                        <div><dt className="text-slate-500">{t('librelane.journey.stage')}</dt><dd className="mt-1 truncate font-mono text-slate-200">{diagnosis.stage}</dd></div>
+                      </dl>
+                      {diagnosis.nextAction ? (
+                        <div className="mt-4 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-3">
+                          <p className="text-xs font-semibold text-amber-100">{t('librelane.journey.boundedNextAction')}</p>
+                          <p className="mt-1 font-mono text-sm text-slate-100">{formatProposalChange(diagnosis.nextAction.parameter, diagnosis.nextAction.from, diagnosis.nextAction.to, locale)}</p>
+                          <p className="mt-1 text-xs leading-5 text-slate-300">{diagnosis.nextAction.parameter === 'RUN_POST_CTS_RESIZER_TIMING' ? t('librelane.journey.ctsPathRationale') : diagnosis.nextAction.rationale}</p>
+                        </div>
+                      ) : null}
+                      <p className="mt-3 break-all font-mono text-[10px] leading-4 text-slate-500">{diagnosis.report?.path} · sha256:{diagnosis.report?.sha256.slice(0, 12)}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-4 rounded-2xl border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm leading-6 text-slate-300">
+                    {t('librelane.journey.worstPathUnavailable')}
+                  </p>
+                )
+              ) : null}
               {run?.state === 'succeeded' && baselineWns !== null && baselineWns >= 0 ? <p className="mt-4 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm leading-6 text-emerald-100">{t('librelane.journey.cleanBoundary')}</p> : null}
               {run?.proposal ? (
                 <div className="mt-4 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4">
@@ -746,6 +787,12 @@ export function LibreLaneProjectJourney() {
                         <div>{run.baselineArtifacts.resolved.path} · sha256:{run.baselineArtifacts.resolved.sha256.slice(0, 12)} · {run.baselineArtifacts.resolved.bytes} B</div>
                         <div>{run.baselineArtifacts.metrics.path} · sha256:{run.baselineArtifacts.metrics.sha256.slice(0, 12)} · {run.baselineArtifacts.metrics.bytes} B</div>
                       </dd>
+                    </div>
+                  ) : null}
+                  {run.baselineDiagnosis?.report ? (
+                    <div>
+                      <dt className="font-semibold text-slate-200">{t('librelane.journey.worstPathReport')}</dt>
+                      <dd className="mt-1 break-all font-mono">{run.baselineDiagnosis.report.path} · sha256:{run.baselineDiagnosis.report.sha256} · {run.baselineDiagnosis.report.bytes} B</dd>
                     </div>
                   ) : null}
                   {run.candidateArtifacts ? (

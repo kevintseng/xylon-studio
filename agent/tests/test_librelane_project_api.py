@@ -61,6 +61,44 @@ def _ready_payload() -> dict:
     }
 
 
+def _write_native_setup_report(
+    run_root: Path,
+    *,
+    slack: float,
+    relative_path: str = "runs/RUN_2026-08-26_05-36-27/55-openroad-stapostpnr/max_tt_025C_1v80/max.rpt",
+) -> None:
+    report_path = run_root / relative_path
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    required = 1.47
+    arrival = required - slack
+    report_path.write_text(
+        "\n".join([
+            "============================================================================",
+            "report_checks -path_delay max (Setup)",
+            "============================================================================",
+            "======================= max_tt_025C_1v80 Corner ===================================",
+            "",
+            "Startpoint: launch_reg/Q",
+            "Endpoint: capture_reg/D",
+            "Path Group: core_clock",
+            "Path Type: max",
+            "",
+            "Fanout         Cap        Slew       Delay        Time   Description",
+            "---------------------------------------------------------------------------------------------",
+            f"                                              {arrival:.6f}   data arrival time",
+            "",
+            f"                                              {required:.6f}   data required time",
+            "---------------------------------------------------------------------------------------------",
+            f"                                             {required:.6f}   data required time",
+            f"                                             -{arrival:.6f}   data arrival time",
+            "---------------------------------------------------------------------------------------------",
+            f"                                             {slack:.6f}   slack (VIOLATED)" if slack < 0 else f"                                             {slack:.6f}   slack (MET)",
+            "",
+        ]) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _prepare_succeeded_baseline(tmp_path: Path, monkeypatch, *, run_id: str, wns: float) -> None:
     _import_project(tmp_path, monkeypatch)
     monkeypatch.setattr(
@@ -72,6 +110,8 @@ def _prepare_succeeded_baseline(tmp_path: Path, monkeypatch, *, run_id: str, wns
     monkeypatch.setattr(routes.openroad, "collect_librelane_readiness", lambda _repo_root, probe=None: ready)
 
     def fake_baseline_execute(_repo_root, *, run_dir, plan):
+        if wns < 0:
+            _write_native_setup_report(run_dir, slack=wns)
         return {
             "state": "succeeded",
             "run_id": run_id,
@@ -263,6 +303,44 @@ def test_saved_librelane_run_can_be_reloaded_after_refresh(tmp_path: Path, monke
     assert reloaded.status_code == 200
     assert reloaded.json()["run_id"] == "run_reload"
     assert reloaded.json()["state"] in {"prepared", "blocked"}
+
+
+def test_saved_run_reload_exposes_native_worst_path_diagnosis(tmp_path: Path, monkeypatch) -> None:
+    run_id = "run_reload_diagnosis"
+    _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id=run_id, wns=-0.24)
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/openroad/librelane-project-runs/{run_id}")
+
+    assert response.status_code == 200
+    diagnosis = response.json()["execution"]["result"]["readback"]["diagnosis"]
+    assert diagnosis == {
+        "status": "available",
+        "unavailable_reason": None,
+        "stage": "openroad_stapostpnr",
+        "corner": "max_tt_025C_1v80",
+        "report": {
+            "path": "runs/RUN_2026-08-26_05-36-27/55-openroad-stapostpnr/max_tt_025C_1v80/max.rpt",
+            "sha256": diagnosis["report"]["sha256"],
+            "bytes": diagnosis["report"]["bytes"],
+        },
+        "startpoint": "launch_reg/Q",
+        "endpoint": "capture_reg/D",
+        "path_group": "core_clock",
+        "path_type": "max",
+        "arrival_ns": pytest.approx(1.71),
+        "required_ns": pytest.approx(1.47),
+        "slack_ns": pytest.approx(-0.24),
+        "next_action": {
+            "strategy": "cts",
+            "parameter": "RUN_POST_CTS_RESIZER_TIMING",
+            "from": 0,
+            "to": 1,
+            "rationale": "Measured negative setup slack on a native max-path report; request one bounded CTS timing-repair rerun.",
+        },
+    }
+    assert len(diagnosis["report"]["sha256"]) == 64
+    assert diagnosis["report"]["bytes"] > 0
 
 
 
@@ -542,7 +620,9 @@ def test_negative_wns_baseline_creates_bound_placement_density_proposal(tmp_path
         "scope": "one_candidate_librelane_rerun",
         "functional_inputs_unchanged": True,
     }
-    assert proposal["rationale"]["hypothesis"] == "提高 placement 利用率可能增加擁塞，但有機會改善最差 setup path 的繞線與延遲。"
+    assert proposal["rationale"]["hypothesis"] == (
+        "提高 placement density 是整體 placement/routing 的粗略重跑策略，不是 worst-path 專屬診斷。"
+    )
     persisted = json.loads(
         (tmp_path / ".xylon" / "timing" / "runs" / "run_proposal" / "manifest.json").read_text()
     )
@@ -570,6 +650,12 @@ def test_negative_wns_baseline_creates_bound_cts_timing_proposal(tmp_path: Path,
         "functional_inputs_unchanged": True,
     }
     assert proposal["rationale"]["hypothesis"] == "啟用 post-CTS timing repair 可能透過 buffer 與 cell sizing 改善最差 setup path。"
+    assert proposal["binding"]["diagnosis_stage"] == "openroad_stapostpnr"
+    assert proposal["binding"]["diagnosis_report_path"] == (
+        "runs/RUN_2026-08-26_05-36-27/55-openroad-stapostpnr/max_tt_025C_1v80/max.rpt"
+    )
+    assert len(proposal["binding"]["diagnosis_report_sha256"]) == 64
+    assert proposal["binding"]["diagnosis_slack_ns"] == pytest.approx(-0.24)
 
 
 def test_cts_proposal_accepts_legacy_baseline_without_repair_flag(tmp_path: Path, monkeypatch) -> None:
@@ -591,6 +677,23 @@ def test_cts_proposal_accepts_legacy_baseline_without_repair_flag(tmp_path: Path
 
     assert response.status_code == 200
     assert response.json()["proposal"]["action"]["parameter"] == "RUN_POST_CTS_RESIZER_TIMING"
+
+
+def test_cts_proposal_requires_supported_native_diagnosis(tmp_path: Path, monkeypatch) -> None:
+    _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id="run_cts_no_diag", wns=-0.24)
+    report_path = tmp_path / ".xylon" / "timing" / "runs" / "run_cts_no_diag" / "runs" / "RUN_2026-08-26_05-36-27" / "55-openroad-stapostpnr" / "max_tt_025C_1v80" / "max.rpt"
+    report_path.unlink()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/openroad/librelane-project-runs/run_cts_no_diag/proposal",
+            json={"strategy": "cts"},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["message"] == (
+        "CTS timing repair requires a measured native max-path diagnosis on a supported setup stage"
+    )
 
 
 def test_repair_proposal_rejects_timing_clean_baseline(tmp_path: Path, monkeypatch) -> None:
