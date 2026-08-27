@@ -574,9 +574,6 @@ export function LibreLaneProjectJourney() {
               <button type="button" onClick={() => void requestProposal('cts')} disabled={!run || busy !== null || run.state !== 'succeeded' || baselineWns === null || baselineWns >= 0} className="rounded-2xl border border-violet-400/40 px-4 py-3 text-sm font-semibold text-violet-100 transition hover:bg-violet-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-500">
                 {t('librelane.journey.action.proposeCts')}
               </button>
-              <button type="button" onClick={() => void executeRepair()} disabled={!proposalReady || !proposalAcknowledged || busy !== null} className="rounded-2xl border border-emerald-400/40 px-4 py-3 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-500">
-                {busy === 'repair' ? t('librelane.journey.action.runningCandidate') : t('librelane.journey.action.runCandidate')}
-              </button>
               {run?.decision && (run.state === 'candidate_accepted' || run.state === 'baseline_kept') && run.selectedExecution?.state !== 'succeeded' ? (
                 <button type="button" onClick={() => void executeSelected()} disabled={busy !== null || run.selectedExecution?.state === 'running'} className="rounded-2xl border border-cyan-400/40 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 disabled:cursor-wait disabled:border-slate-800 disabled:text-slate-500">
                   {busy === 'selected' || run.selectedExecution?.state === 'running' ? t('librelane.journey.action.runningSelected') : t('librelane.journey.action.runSelected')}
@@ -670,10 +667,16 @@ export function LibreLaneProjectJourney() {
                   </ul>
                   <p className="mt-2 text-xs text-slate-500">{t('timing.proposal.expires')}: {new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(run.proposal.expiresAt))}</p>
                   {proposalReady ? (
-                    <label className="mt-4 flex items-start gap-3 rounded-xl border border-amber-400/20 bg-amber-500/5 p-3 text-xs leading-5 text-amber-50">
-                      <input type="checkbox" checked={proposalAcknowledged} onChange={(event) => setProposalAcknowledged(event.target.checked)} disabled={busy !== null} className="mt-1 size-4 shrink-0 accent-amber-400" />
-                      <span>{t('librelane.journey.proposalAcknowledgement')}</span>
-                    </label>
+                    <div className="mt-4">
+                      <p id="librelane-proposal-action-help" className="text-xs leading-5 text-slate-300">{t('librelane.journey.proposalActionHelp')}</p>
+                      <label className="mt-3 flex items-start gap-3 rounded-xl border border-amber-400/20 bg-amber-500/5 p-3 text-xs leading-5 text-amber-50">
+                        <input type="checkbox" checked={proposalAcknowledged} onChange={(event) => setProposalAcknowledged(event.target.checked)} disabled={busy !== null} aria-describedby="librelane-proposal-action-help" className="mt-1 size-4 shrink-0 accent-amber-400" />
+                        <span>{t('librelane.journey.proposalAcknowledgement')}</span>
+                      </label>
+                      <button type="button" onClick={() => void executeRepair()} disabled={!proposalAcknowledged || busy !== null} aria-describedby="librelane-proposal-action-help" className="mt-3 w-full rounded-2xl border border-emerald-400/40 px-4 py-3 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-500">
+                        {busy === 'repair' ? t('librelane.journey.action.runningCandidate') : t('librelane.journey.action.runCandidate')}
+                      </button>
+                    </div>
                   ) : null}
                 </div>
               ) : null}

@@ -119,6 +119,26 @@ test('LibreLane journey only shows bounded repair advice while it can create a p
   assert.match(librelaneJourneySource, /diagnosis\.nextAction && run\.state === 'succeeded'/)
 })
 
+test('LibreLane proposal keeps acknowledgement and its only candidate action together', () => {
+  const setupActions = sourceSection(
+    librelaneJourneySource,
+    '<div className="mt-6 flex flex-wrap gap-3">',
+    '<LibreLaneAgentPanel',
+  )
+  const proposalCard = sourceSection(
+    librelaneJourneySource,
+    '{run?.proposal ? (',
+    '{comparison ? (',
+  )
+
+  assert.doesNotMatch(setupActions, /executeRepair/)
+  assert.match(proposalCard, /id="librelane-proposal-action-help"/)
+  assert.match(proposalCard, /aria-describedby="librelane-proposal-action-help"/)
+  assert.match(proposalCard, /disabled=\{!proposalAcknowledged \|\| busy !== null\}/)
+  assert.ok(proposalCard.indexOf('proposalAcknowledgement') < proposalCard.indexOf('executeRepair'))
+  assert.equal(librelaneJourneySource.match(/void executeRepair\(\)/g)?.length, 1)
+})
+
 test('LibreLane readiness does not repeat the ready-state next action', () => {
   assert.match(librelaneReadinessSource, /const primaryMessage = /)
   assert.match(librelaneReadinessSource, /localizedNextAction !== primaryMessage/)
@@ -196,7 +216,6 @@ test('LibreLane comparison adds an at-a-glance visual summary without hiding exa
   assert.match(librelaneJourneySource, /timing\.comparison\.deltaNeedsReview/)
   assert.match(librelaneJourneySource, /proposalAcknowledged/)
   assert.match(librelaneJourneySource, /librelane\.journey\.proposalAcknowledgement/)
-  assert.match(librelaneJourneySource, /disabled=\{!proposalReady \|\| !proposalAcknowledged \|\| busy !== null\}/)
   assert.match(librelaneJourneySource, /runChanged = run\?\.runId !== nextRun\.runId/)
   assert.match(librelaneJourneySource, /proposalChanged = run\?\.proposal\?\.proposalId !== nextRun\.proposal\?\.proposalId/)
   assert.match(librelaneJourneySource, /<MetricDeltaChart\s+label="WNS"/)
