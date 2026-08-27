@@ -438,7 +438,7 @@ test('LibreLane project client calls the exact bounded endpoints', async (contex
   ])
   assert.deepEqual(calls[0]?.body, { run_id: 'run_12345678', project_id: 'counter-demo' })
   assert.deepEqual(calls[1]?.body, { approved: true })
-  assert.deepEqual(calls[2]?.body, { strategy: 'density' })
+  assert.equal(calls[2]?.body, null)
   assert.deepEqual(calls[3]?.body, { approved: true, proposal_id: 'd'.repeat(64) })
 })
 

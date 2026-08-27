@@ -42,7 +42,6 @@ test('LibreLane journey exposes the bounded prepare execute proposal and repair 
     'createLibreLaneRepairProposal\\(LIBRELANE_API_URL',
     'executeLibreLaneRepair\\(LIBRELANE_API_URL',
     'formatProposalChange',
-    'proposeCts',
     'librelane\\.journey\\.stage\\.\\$\\{key\\}\\.label',
     'librelane\\.journey\\.action\\.runCandidate',
     'timing\\.project\\.detected',
@@ -80,6 +79,13 @@ test('LibreLane journey exposes the bounded prepare execute proposal and repair 
   assert.match(librelaneAgentSource, /runLibreLaneAssistant/)
   assert.match(librelaneAgentSource, /librelane\.agent\.privacy/)
   assert.match(librelaneJourneySource, /projectRunId=\{run\?\.runId \?\? null\}/)
+})
+
+test('LibreLane proposal selection is one diagnosis-driven action, not a user strategy choice', () => {
+  assert.equal(librelaneJourneySource.match(/void requestProposal\(\)/g)?.length, 1)
+  assert.doesNotMatch(librelaneJourneySource, /requestProposal\('cts'\)/)
+  assert.doesNotMatch(librelaneJourneySource, /LibreLaneRepairStrategy/)
+  assert.doesNotMatch(i18nSource, /librelane\.journey\.action\.proposeCts/)
 })
 
 test('LibreLane journey localizes stage status chips instead of rendering raw state tokens', () => {

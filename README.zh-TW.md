@@ -21,7 +21,8 @@ Xylon 是在本機執行的 OpenROAD 時序助理。提供真實 RTL、SDC、頂
 2. 輸入：「檢查 setup 時序、找出最差路徑，並告訴我怎麼改善。」
 3. Xylon 會先驗證輸入與本機資源，通過後才啟動 OpenROAD。
 4. 查看實測 WNS、TNS 與最差 setup 路徑。
-5. 若有違規，審閱一個確切的 `PL_TARGET_DENSITY 0.60 → 0.65` 提案。
+5. 若有違規，Xylon 會依實測診斷準備一個受限提案：最差路徑證據適用時採用 CTS timing
+   repair，否則使用既有的 placement density 改善。
 6. 只有確定要跑 candidate 才確認；完成後比較相同指標的前後差異。
 7. 選擇「保留 candidate」或「保留 baseline」。系統會記錄選擇與實際採用的設定，
    不會默默覆蓋原本的 baseline；要再次量測時，再明確執行「重跑選定設定」。
@@ -39,8 +40,8 @@ Xylon v0.6 已建立固定版本的 LibreLane 3.0.10 後端介面。`/openroad` 
 
 - **Setup 時序助理：**支援 OpenAI API 格式的本機模型只負責理解一句需求。受限工具會
   驗證 RTL／SDC，執行內建 `sky130hd` 流程，讀回 WNS、TNS 與最差 setup 路徑；
-  量到負的 native setup WNS 時，LibreLane API 會準備一個有期限、綁定雜湊的
-  `PL_TARGET_DENSITY 0.60 → 0.65` candidate 提案。
+  量到負的 native setup WNS 時，系統會依診斷選擇 CTS timing repair，或在不適用時
+  使用 `PL_TARGET_DENSITY 0.60 → 0.65`，並準備一個有期限、綁定雜湊的 candidate 提案。
 - **由使用者決定是否改善：**API 要求使用者提交完全相同的提案 ID 並明確批准；
   系統會再次檢查資源與輸入是否被改動，才建立隔離的 candidate，最後用 native
   指標比較前後結果。比較後，使用者還要明確選擇保留 candidate 或 baseline；系統會

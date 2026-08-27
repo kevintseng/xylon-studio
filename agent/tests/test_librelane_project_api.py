@@ -99,7 +99,14 @@ def _write_native_setup_report(
     )
 
 
-def _prepare_succeeded_baseline(tmp_path: Path, monkeypatch, *, run_id: str, wns: float) -> None:
+def _prepare_succeeded_baseline(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    run_id: str,
+    wns: float,
+    with_native_diagnosis: bool = False,
+) -> None:
     _import_project(tmp_path, monkeypatch)
     monkeypatch.setattr(
         routes.openroad,
@@ -110,7 +117,7 @@ def _prepare_succeeded_baseline(tmp_path: Path, monkeypatch, *, run_id: str, wns
     monkeypatch.setattr(routes.openroad, "collect_librelane_readiness", lambda _repo_root, probe=None: ready)
 
     def fake_baseline_execute(_repo_root, *, run_dir, plan):
-        if wns < 0:
+        if wns < 0 and with_native_diagnosis:
             _write_native_setup_report(run_dir, slack=wns)
         return {
             "state": "succeeded",
@@ -307,7 +314,13 @@ def test_saved_librelane_run_can_be_reloaded_after_refresh(tmp_path: Path, monke
 
 def test_saved_run_reload_exposes_native_worst_path_diagnosis(tmp_path: Path, monkeypatch) -> None:
     run_id = "run_reload_diagnosis"
-    _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id=run_id, wns=-0.24)
+    _prepare_succeeded_baseline(
+        tmp_path,
+        monkeypatch,
+        run_id=run_id,
+        wns=-0.24,
+        with_native_diagnosis=True,
+    )
 
     with TestClient(app) as client:
         response = client.get(f"/api/openroad/librelane-project-runs/{run_id}")
@@ -630,14 +643,17 @@ def test_negative_wns_baseline_creates_bound_placement_density_proposal(tmp_path
     assert persisted["proposal"]["proposal_id"] == proposal["proposal_id"]
 
 
-def test_negative_wns_baseline_creates_bound_cts_timing_proposal(tmp_path: Path, monkeypatch) -> None:
-    _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id="run_cts_proposal", wns=-0.24)
+def test_native_diagnosis_selects_bound_cts_timing_proposal(tmp_path: Path, monkeypatch) -> None:
+    _prepare_succeeded_baseline(
+        tmp_path,
+        monkeypatch,
+        run_id="run_cts_proposal",
+        wns=-0.24,
+        with_native_diagnosis=True,
+    )
 
     with TestClient(app) as client:
-        response = client.post(
-            "/api/openroad/librelane-project-runs/run_cts_proposal/proposal",
-            json={"strategy": "cts"},
-        )
+        response = client.post("/api/openroad/librelane-project-runs/run_cts_proposal/proposal")
 
     assert response.status_code == 200
     proposal = response.json()["proposal"]
@@ -659,7 +675,13 @@ def test_negative_wns_baseline_creates_bound_cts_timing_proposal(tmp_path: Path,
 
 
 def test_cts_proposal_accepts_legacy_baseline_without_repair_flag(tmp_path: Path, monkeypatch) -> None:
-    _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id="run_cts_legacy", wns=-0.24)
+    _prepare_succeeded_baseline(
+        tmp_path,
+        monkeypatch,
+        run_id="run_cts_legacy",
+        wns=-0.24,
+        with_native_diagnosis=True,
+    )
     config_path = tmp_path / ".xylon" / "timing" / "runs" / "run_cts_legacy" / "config.json"
     config = json.loads(config_path.read_text(encoding="utf-8"))
     config.pop("RUN_POST_CTS_RESIZER_TIMING")
@@ -670,19 +692,14 @@ def test_cts_proposal_accepts_legacy_baseline_without_repair_flag(tmp_path: Path
     manifest_path.write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
     with TestClient(app) as client:
-        response = client.post(
-            "/api/openroad/librelane-project-runs/run_cts_legacy/proposal",
-            json={"strategy": "cts"},
-        )
+        response = client.post("/api/openroad/librelane-project-runs/run_cts_legacy/proposal")
 
     assert response.status_code == 200
     assert response.json()["proposal"]["action"]["parameter"] == "RUN_POST_CTS_RESIZER_TIMING"
 
 
-def test_cts_proposal_requires_supported_native_diagnosis(tmp_path: Path, monkeypatch) -> None:
+def test_client_cannot_force_cts_without_supported_native_diagnosis(tmp_path: Path, monkeypatch) -> None:
     _prepare_succeeded_baseline(tmp_path, monkeypatch, run_id="run_cts_no_diag", wns=-0.24)
-    report_path = tmp_path / ".xylon" / "timing" / "runs" / "run_cts_no_diag" / "runs" / "RUN_2026-08-26_05-36-27" / "55-openroad-stapostpnr" / "max_tt_025C_1v80" / "max.rpt"
-    report_path.unlink()
 
     with TestClient(app) as client:
         response = client.post(
@@ -690,10 +707,8 @@ def test_cts_proposal_requires_supported_native_diagnosis(tmp_path: Path, monkey
             json={"strategy": "cts"},
         )
 
-    assert response.status_code == 422
-    assert response.json()["detail"]["message"] == (
-        "CTS timing repair requires a measured native max-path diagnosis on a supported setup stage"
-    )
+    assert response.status_code == 200
+    assert response.json()["proposal"]["action"]["parameter"] == "PL_TARGET_DENSITY"
 
 
 def test_repair_proposal_rejects_timing_clean_baseline(tmp_path: Path, monkeypatch) -> None:

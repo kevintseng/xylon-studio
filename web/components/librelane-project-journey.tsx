@@ -15,7 +15,6 @@ import {
   LibreLaneApiError,
   recordLibreLaneDecision,
   type LibreLaneMetricMap,
-  type LibreLaneRepairStrategy,
   type LibreLaneRun,
   prepareLibreLaneProjectRun,
   resolveLibreLaneProjectApiUrl,
@@ -390,12 +389,12 @@ export function LibreLaneProjectJourney() {
     }
   }
 
-  const requestProposal = async (strategy: LibreLaneRepairStrategy = 'density') => {
+  const requestProposal = async () => {
     if (!run || busy || run.state !== 'succeeded' || baselineWns === null || baselineWns >= 0) return
     setBusy('proposal')
     setError(null)
     try {
-      const next = await createLibreLaneRepairProposal(LIBRELANE_API_URL, run.runId, strategy)
+      const next = await createLibreLaneRepairProposal(LIBRELANE_API_URL, run.runId)
       setRun((current) => current ? {
         ...current,
         state: next.state,
@@ -570,9 +569,6 @@ export function LibreLaneProjectJourney() {
               </button>
               <button type="button" onClick={() => void requestProposal()} disabled={!run || busy !== null || run.state !== 'succeeded' || baselineWns === null || baselineWns >= 0} className="rounded-2xl border border-amber-400/40 px-4 py-3 text-sm font-semibold text-amber-100 transition hover:bg-amber-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-500">
                 {busy === 'proposal' ? t('librelane.journey.action.proposing') : t('librelane.journey.action.propose')}
-              </button>
-              <button type="button" onClick={() => void requestProposal('cts')} disabled={!run || busy !== null || run.state !== 'succeeded' || baselineWns === null || baselineWns >= 0} className="rounded-2xl border border-violet-400/40 px-4 py-3 text-sm font-semibold text-violet-100 transition hover:bg-violet-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-500">
-                {t('librelane.journey.action.proposeCts')}
               </button>
               {run?.decision && (run.state === 'candidate_accepted' || run.state === 'baseline_kept') && run.selectedExecution?.state !== 'succeeded' ? (
                 <button type="button" onClick={() => void executeSelected()} disabled={busy !== null || run.selectedExecution?.state === 'running'} className="rounded-2xl border border-cyan-400/40 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 disabled:cursor-wait disabled:border-slate-800 disabled:text-slate-500">

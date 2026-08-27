@@ -37,8 +37,6 @@ export interface LibreLaneBoundedProposal {
   tradeoffs: string[]
 }
 
-export type LibreLaneRepairStrategy = 'density' | 'cts'
-
 export interface LibreLaneComparison {
   baselineMetrics: LibreLaneMetricMap
   candidateMetrics: LibreLaneMetricMap
@@ -746,11 +744,9 @@ export async function executeLibreLaneProjectRun(apiUrl: string, runId: string):
 export async function createLibreLaneRepairProposal(
   apiUrl: string,
   runId: string,
-  strategy: LibreLaneRepairStrategy = 'density',
 ): Promise<LibreLaneProposalEnvelope> {
   return normalizeLibreLaneProposalEnvelope(await librelaneJsonRequest(`${apiUrl}/librelane-project-runs/${runId}/proposal`, {
     method: 'POST',
-    body: JSON.stringify({ strategy }),
   }))
 }
 

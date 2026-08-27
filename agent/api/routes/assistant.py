@@ -181,13 +181,9 @@ async def _librelane_status(run_id: str) -> dict:
     return _public_librelane_run(payload)
 
 
-async def _librelane_propose(run_id: str, strategy: Literal["density", "cts"]) -> dict:
+async def _librelane_propose(run_id: str) -> dict:
     run_root, payload = openroad_routes._load_librelane_run(run_id)
-    proposal = openroad_routes._create_librelane_proposal(
-        run_root,
-        payload,
-        strategy,
-    )
+    proposal = openroad_routes._create_librelane_proposal(run_root, payload)
     return _public_librelane_run(payload) | {"proposal": proposal}
 
 

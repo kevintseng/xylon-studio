@@ -135,12 +135,6 @@ class LibreLaneDecisionRequest(BaseModel):
     proposal_id: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
-class LibreLaneRepairProposalRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    strategy: Literal["density", "cts"] = "density"
-
-
 LIBRELANE_PROPOSAL_TTL_SECONDS = 15 * 60
 LIBRELANE_CANDIDATE_DENSITY = 0.65
 LIBRELANE_CTS_REPAIR_PARAMETER = "RUN_POST_CTS_RESIZER_TIMING"
@@ -626,7 +620,6 @@ def _librelane_setup_tns(payload: dict[str, Any]) -> float:
 def _create_librelane_proposal(
     run_root: Path,
     payload: dict[str, Any],
-    strategy: Literal["density", "cts"] = "density",
 ) -> dict[str, Any]:
     _hydrate_librelane_run_diagnosis(run_root, payload)
     if payload.get("state") != "succeeded":
@@ -663,6 +656,13 @@ def _create_librelane_proposal(
         raise ProjectStoreError("baseline LibreLane config is unreadable") from error
     if not isinstance(config, dict):
         raise ProjectStoreError("baseline LibreLane config is invalid")
+    baseline_diagnosis = _baseline_diagnosis(payload)
+    next_action = baseline_diagnosis.get("next_action") if isinstance(baseline_diagnosis, dict) else None
+    strategy = "cts" if (
+        baseline_diagnosis.get("status") == "available"
+        and isinstance(next_action, dict)
+        and next_action.get("strategy") == "cts"
+    ) else "density"
     if strategy == "density" and config.get("PL_TARGET_DENSITY") != 0.60:
         raise ProjectStoreError("baseline LibreLane density is outside the supported repair boundary")
     # Configs created before the CTS repair flag was introduced omit the key. Treat
@@ -670,16 +670,6 @@ def _create_librelane_proposal(
     # candidate staging still writes True only after the user approves the proposal.
     if strategy == "cts" and config.get(LIBRELANE_CTS_REPAIR_PARAMETER, False) is not False:
         raise ProjectStoreError("baseline LibreLane CTS timing repair is outside the supported repair boundary")
-    baseline_diagnosis = _baseline_diagnosis(payload)
-    if strategy == "cts":
-        next_action = baseline_diagnosis.get("next_action") if isinstance(baseline_diagnosis, dict) else None
-        if (
-            not isinstance(baseline_diagnosis, dict)
-            or baseline_diagnosis.get("status") != "available"
-            or not isinstance(next_action, dict)
-            or next_action.get("strategy") != "cts"
-        ):
-            raise ProjectStoreError("CTS timing repair requires a measured native max-path diagnosis on a supported setup stage")
     created_at = datetime.now(UTC)
     expires_at = created_at.timestamp() + LIBRELANE_PROPOSAL_TTL_SECONDS
     if strategy == "cts":
@@ -1144,12 +1134,11 @@ async def post_librelane_project_execution(
 @router.post("/openroad/librelane-project-runs/{run_id}/proposal")
 async def post_librelane_repair_proposal(
     run_id: str,
-    request: LibreLaneRepairProposalRequest | None = None,
 ) -> dict[str, Any]:
     """Persist one bounded repair proposal from a measured negative-WNS baseline."""
     try:
         run_root, payload = _load_librelane_run(run_id)
-        proposal = _create_librelane_proposal(run_root, payload, (request or LibreLaneRepairProposalRequest()).strategy)
+        proposal = _create_librelane_proposal(run_root, payload)
         return {
             "run_id": run_id,
             "state": payload["state"],

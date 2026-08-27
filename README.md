@@ -23,7 +23,9 @@ live at `/openroad` and `/pipeline` after `scripts/xylon start`.
 2. Ask: “Check setup timing, identify the worst path, and tell me how to improve it.”
 3. Xylon validates the input and local resources before starting OpenROAD.
 4. Review measured WNS, TNS, and the worst setup path.
-5. If a violation exists, review one exact `PL_TARGET_DENSITY 0.60 → 0.65` proposal.
+5. If a violation exists, Xylon uses the measured diagnosis to prepare one exact
+   bounded proposal: CTS timing repair when the native worst path supports it,
+   otherwise the existing placement-density fallback.
 6. Confirm it only if you want a candidate run, then compare the same metrics
    before and after.
 7. Choose **Keep candidate** or **Keep baseline**. Xylon records that choice and
@@ -45,17 +47,18 @@ The supported paths behind that journey are:
 
 - **Setup-timing assistant:** a local OpenAI-compatible model interprets one
   sentence. Deterministic tools validate RTL/SDC, run the built-in `sky130hd`
-  recipe, read WNS, TNS, and the worst setup path, then prepare one bounded
-  one allowlisted candidate when violations exist: either
+  recipe, read WNS, TNS, and the worst setup path, then select one allowlisted
+  candidate from that evidence when violations exist: either
   `PL_TARGET_DENSITY 0.60 → 0.65` or `RUN_POST_CTS_RESIZER_TIMING false → true`.
 - **Project assistant:** the primary LibreLane journey also accepts plain-language
   requests to inspect the current run, prepare one bounded proposal, review a
   comparison, or rerun the selected configuration. It never sends project source
   or measured metrics to the model, and selected reruns still require explicit approval.
 - **Human-controlled improvement:** the LibreLane API can create one expiring,
-  hash-bound proposal from a negative native WNS baseline. The only supported
-  strategies are placement density (`PL_TARGET_DENSITY 0.60 → 0.65`) and CTS
-  timing repair (`RUN_POST_CTS_RESIZER_TIMING false → true`). The exact proposal
+  hash-bound proposal from a negative native WNS baseline. The runtime, not the
+  model or user, selects between placement density (`PL_TARGET_DENSITY 0.60 → 0.65`)
+  and CTS timing repair (`RUN_POST_CTS_RESIZER_TIMING false → true`) from the
+  native diagnosis. The exact proposal
   ID and explicit approval are required before an isolated candidate rerun; the
   response compares native metrics before and after. After comparison, the user
   explicitly keeps the candidate or keeps the baseline; the selected config and

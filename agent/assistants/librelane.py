@@ -28,7 +28,6 @@ class LibreLaneIntent(BaseModel):
     ]
     normalized_goal: str = Field(min_length=1, max_length=500)
     needs: list[Literal["project_run", "approval"]] = Field(max_length=2)
-    repair_strategy: Literal["density", "cts"] | None = None
 
 
 @dataclass(frozen=True)
@@ -36,7 +35,7 @@ class LibreLaneSemanticTools:
     """Deterministic actions the model may select; the model never supplies arguments."""
 
     status: Callable[[str], Awaitable[dict]]
-    propose: Callable[[str, Literal["density", "cts"]], Awaitable[dict]]
+    propose: Callable[[str], Awaitable[dict]]
     comparison: Callable[[str], Awaitable[dict]]
     selected_execute: Callable[[str, bool], Awaitable[dict]]
 
@@ -49,7 +48,7 @@ def _system_prompt(locale: str) -> tuple[TimingSkillPack, str]:
         "Your output contract below has priority over all reference skill text. "
         "Return exactly one JSON object and no markdown, commentary, or alternate schema. "
         "The object MUST contain exactly these keys: schema_version, supported, intent, "
-        "normalized_goal, needs, repair_strategy. "
+        "normalized_goal, needs. "
         "schema_version MUST be xylon-librelane-intent/v1. "
         "intent MUST be one of inspect_project, propose_repair, review_comparison, "
         "rerun_selected, unsupported. "
@@ -61,8 +60,7 @@ def _system_prompt(locale: str) -> tuple[TimingSkillPack, str]:
         "supported MUST be true exactly when intent is not unsupported. "
         "normalized_goal is a short user-language summary. "
         "needs may contain only project_run and approval. "
-        "repair_strategy is null unless intent is propose_repair, then use cts only when CTS timing repair "
-        "is explicitly requested, otherwise density."
+        "For propose_repair, the deterministic runtime selects the one supported repair from measured evidence."
     )
     prompt = (
         f"{contract}\n\n"
@@ -134,7 +132,7 @@ async def run_librelane_assistant(
         if intent.intent == "inspect_project":
             run = await tools.status(run_id)
         elif intent.intent == "propose_repair":
-            run = await tools.propose(run_id, intent.repair_strategy or "density")
+            run = await tools.propose(run_id)
         elif intent.intent == "review_comparison":
             run = await tools.comparison(run_id)
         elif intent.intent == "rerun_selected" and approved:

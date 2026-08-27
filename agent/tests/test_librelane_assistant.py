@@ -24,14 +24,13 @@ class FakeProvider:
         return self.response
 
 
-def _intent(name: str, *, supported: bool = True, strategy: str | None = None) -> dict:
+def _intent(name: str, *, supported: bool = True) -> dict:
     return {
         "schema_version": "xylon-librelane-intent/v1",
         "supported": supported,
         "intent": name,
         "normalized_goal": "Inspect the current LibreLane project evidence.",
         "needs": ["project_run"] if supported else [],
-        "repair_strategy": strategy,
     }
 
 
@@ -40,8 +39,8 @@ def _tools(calls: list[str]) -> LibreLaneSemanticTools:
         calls.append(f"status:{run_id}")
         return {"run_id": run_id, "state": "succeeded", "next_action": "Review native metrics."}
 
-    async def propose(run_id: str, strategy: str) -> dict:
-        calls.append(f"propose:{run_id}:{strategy}")
+    async def propose(run_id: str) -> dict:
+        calls.append(f"propose:{run_id}")
         return {"run_id": run_id, "state": "proposal_ready", "next_action": "Review proposal."}
 
     async def comparison(run_id: str) -> dict:
@@ -116,19 +115,19 @@ def test_librelane_assistant_requires_approval_before_selected_execution():
     assert with_approval["observed"]["state"] == "baseline_kept"
 
 
-def test_librelane_assistant_passes_only_allowlisted_repair_strategy():
+def test_librelane_assistant_leaves_repair_selection_to_deterministic_runtime():
     calls: list[str] = []
     result = asyncio.run(
         run_librelane_assistant(
-            provider=FakeProvider(_intent("propose_repair", strategy="cts")),
-            message="請提出 CTS timing repair",
+            provider=FakeProvider(_intent("propose_repair")),
+            message="請依照量測證據提出一個改善",
             locale="zh-TW",
             run_id="run_12345678",
             approved=False,
             tools=_tools(calls),
         )
     )
-    assert calls == ["propose:run_12345678:cts"]
+    assert calls == ["propose:run_12345678"]
     assert result["state"] == "repair_proposal_ready"
 
 
