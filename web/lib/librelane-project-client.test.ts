@@ -452,7 +452,7 @@ test('LibreLane project client calls the exact bounded endpoints', async (contex
       project_id: 'counter-demo',
       state: 'prepared',
       source_revision: 'a'.repeat(64),
-      next_action: 'Use the exact saved config handoff with a future bounded LibreLane executor.',
+      next_action: 'Approve the prepared baseline to start one resource-checked LibreLane run.',
       failure: null,
       manifest: {
         top: 'counter',

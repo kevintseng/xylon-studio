@@ -78,6 +78,8 @@ def test_librelane_prompt_keeps_contract_ahead_of_reference_skill():
     assert prompt.index(contract_marker) < prompt.index(reference_marker)
     assert prompt.index(reminder_marker) > prompt.index(reference_marker)
     assert "schema_version MUST be xylon-librelane-intent/v1" in prompt
+    assert "use run_baseline whenever the user asks to check, analyze, measure, or run setup timing" in prompt
+    assert "deterministic runtime decides whether a baseline already exists or needs approval" in prompt
 
 
 def test_librelane_assistant_inspection_uses_canonical_run_and_safe_egress():

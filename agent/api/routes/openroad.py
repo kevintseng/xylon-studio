@@ -401,7 +401,7 @@ def _stage_librelane_preparation(
             },
             "failure": None,
             "next_action": (
-                "Use the exact saved config handoff with a future bounded LibreLane executor."
+                "Approve the prepared baseline to start one resource-checked LibreLane run."
                 if state == "prepared"
                 else "Resolve the listed LibreLane readiness blockers before starting any subprocess."
             ),

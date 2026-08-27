@@ -383,6 +383,9 @@ def test_execution_requires_explicit_approval(tmp_path: Path, monkeypatch) -> No
             json={"run_id": "run_approved", "project_id": "counter-librelane"},
         )
         assert prepared.status_code == 201
+        assert prepared.json()["next_action"] == (
+            "Approve the prepared baseline to start one resource-checked LibreLane run."
+        )
         response = client.post(
             "/api/openroad/librelane-project-runs/run_approved/execute",
             json={"approved": False},
