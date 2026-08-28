@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -326,6 +327,39 @@ def test_execute_plan_uses_only_fixed_launcher_and_requires_native_readback(tmp_
     assert result["readback"]["metrics"]["timing__setup__wns"] == 0.1
     assert calls[0][0] == [str(launcher), "run", str(run_dir.resolve()), "inputs/librelane/config.json"]
     assert calls[0][1]["cwd"] == tmp_path.resolve()
+
+
+def test_bounded_runner_drains_large_output_without_retaining_it_all(tmp_path: Path) -> None:
+    result = adapter._run_with_bounded_output(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.write('o' * 200000); sys.stderr.write('e' * 200000)",
+        ],
+        cwd=tmp_path,
+        env={},
+        timeout=5.0,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "o" * adapter.MAX_EXECUTION_OUTPUT_BYTES
+    assert result.stderr == "e" * adapter.MAX_EXECUTION_OUTPUT_BYTES
+
+
+def test_bounded_runner_kills_timed_out_process_with_bounded_evidence(tmp_path: Path) -> None:
+    with pytest.raises(subprocess.TimeoutExpired) as caught:
+        adapter._run_with_bounded_output(
+            [
+                sys.executable,
+                "-c",
+                "import sys,time; sys.stdout.write('o' * 200000); sys.stdout.flush(); time.sleep(5)",
+            ],
+            cwd=tmp_path,
+            env={},
+            timeout=0.1,
+        )
+
+    assert len(caught.value.output or b"") <= adapter.MAX_EXECUTION_OUTPUT_BYTES
 
 
 def test_execute_plan_preserves_native_readback_when_timing_violations_set_exit_code(

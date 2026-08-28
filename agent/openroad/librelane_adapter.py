@@ -9,6 +9,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -368,6 +369,60 @@ def _bounded_output(value: str | None) -> str:
     return text if len(text) <= MAX_EXECUTION_OUTPUT_BYTES else text[:MAX_EXECUTION_OUTPUT_BYTES] + "…"
 
 
+def _run_with_bounded_output(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout: float,
+) -> subprocess.CompletedProcess[str]:
+    """Drain child pipes continuously while retaining only bounded evidence."""
+
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    streams = {"stdout": process.stdout, "stderr": process.stderr}
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+
+    def drain(name: str) -> None:
+        stream = streams[name]
+        assert stream is not None
+        for chunk in iter(lambda: stream.read(8192), b""):
+            remaining = MAX_EXECUTION_OUTPUT_BYTES - len(buffers[name])
+            if remaining > 0:
+                buffers[name].extend(chunk[:remaining])
+        stream.close()
+
+    threads = [threading.Thread(target=drain, args=(name,), daemon=True) for name in streams]
+    for thread in threads:
+        thread.start()
+    try:
+        returncode = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        process.kill()
+        process.wait()
+        for thread in threads:
+            thread.join()
+        raise subprocess.TimeoutExpired(
+            command,
+            timeout,
+            output=bytes(buffers["stdout"]),
+            stderr=bytes(buffers["stderr"]),
+        ) from error
+    for thread in threads:
+        thread.join()
+    return subprocess.CompletedProcess(
+        command,
+        returncode,
+        stdout=bytes(buffers["stdout"]).decode("utf-8", errors="replace"),
+        stderr=bytes(buffers["stderr"]).decode("utf-8", errors="replace"),
+    )
+
+
 def _first_error_line(stderr: str, stdout: str) -> str | None:
     """Return the first actionable tool error, not a preflight/status banner."""
 
@@ -422,7 +477,7 @@ def execute_plan(
     run_dir: Path,
     plan: LibreLaneExecutionPlan,
     timeout_seconds: float = 3600.0,
-    runner=subprocess.run,
+    runner=None,
 ) -> dict[str, object]:
     """Execute only the fixed launcher, then require native LibreLane readback."""
 
@@ -442,15 +497,23 @@ def execute_plan(
         path.name for path in native_runs_root.iterdir() if path.is_dir()
     } if native_runs_root.is_dir() else set()
     try:
-        result = runner(
-            command,
-            cwd=root,
-            env=environment,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-        )
+        if runner is None:
+            result = _run_with_bounded_output(
+                command,
+                cwd=root,
+                env=environment,
+                timeout=timeout_seconds,
+            )
+        else:
+            result = runner(
+                command,
+                cwd=root,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
     except subprocess.TimeoutExpired as error:
         raise LibreLaneExecutionError(
             "LibreLane execution exceeded the bounded timeout",

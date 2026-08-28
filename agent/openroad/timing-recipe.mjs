@@ -8,8 +8,8 @@ export const TIMING_FLOW_RECIPE = Object.freeze({
   variant: 'base',
   coreUtilizationPercent: 35,
   coreAspectRatio: 1.0,
-  // Keep the bounded demo core wide enough for sky130hd PDN straps. A 10um
-  // margin made small, valid designs fail before timing analysis with PDN-0185.
+  // Use the upstream sky130hd-style die-to-core spacing. The supported timing
+  // fixture passes the pinned PDN stage with this exact recipe.
   coreMarginMicrons: 2,
   placeDensity: 0.60,
   tnsEndPercent: 100,
