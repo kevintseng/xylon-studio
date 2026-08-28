@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import signal
 import subprocess
 import threading
 from collections.abc import Mapping
@@ -384,6 +385,7 @@ def _run_with_bounded_output(
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        start_new_session=True,
     )
     streams = {"stdout": process.stdout, "stderr": process.stderr}
     buffers = {"stdout": bytearray(), "stderr": bytearray()}
@@ -403,10 +405,13 @@ def _run_with_bounded_output(
     try:
         returncode = process.wait(timeout=timeout)
     except subprocess.TimeoutExpired as error:
-        process.kill()
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         process.wait()
         for thread in threads:
-            thread.join()
+            thread.join(timeout=1.0)
         raise subprocess.TimeoutExpired(
             command,
             timeout,

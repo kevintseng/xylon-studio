@@ -8,8 +8,8 @@ export const TIMING_FLOW_RECIPE = Object.freeze({
   variant: 'base',
   coreUtilizationPercent: 35,
   coreAspectRatio: 1.0,
-  // Use the upstream sky130hd-style die-to-core spacing. The supported timing
-  // fixture passes the pinned PDN stage with this exact recipe.
+  // CORE_MARGIN is die-to-core spacing; keep the value aligned with common
+  // upstream sky130hd configurations rather than treating it as core sizing.
   coreMarginMicrons: 2,
   placeDensity: 0.60,
   tnsEndPercent: 100,

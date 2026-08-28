@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -360,6 +361,27 @@ def test_bounded_runner_kills_timed_out_process_with_bounded_evidence(tmp_path: 
         )
 
     assert len(caught.value.output or b"") <= adapter.MAX_EXECUTION_OUTPUT_BYTES
+
+
+def test_bounded_runner_kills_descendants_that_keep_output_pipe_open(tmp_path: Path) -> None:
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        adapter._run_with_bounded_output(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import subprocess,sys,time; "
+                    "subprocess.Popen([sys.executable,'-c','import time; time.sleep(5)']); "
+                    "time.sleep(5)"
+                ),
+            ],
+            cwd=tmp_path,
+            env={},
+            timeout=0.1,
+        )
+
+    assert time.monotonic() - started < 2.0
 
 
 def test_execute_plan_preserves_native_readback_when_timing_violations_set_exit_code(
