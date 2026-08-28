@@ -37,7 +37,7 @@ import {
   writeSnapshotAtomic,
 } from './state.mjs'
 
-const XYLON_VERSION = '0.5.0'
+const XYLON_VERSION = '0.6.0'
 const OPENROAD_MCP_VERSION = '0.6.1'
 const PREPARATION_TTL_MS = 5 * 60 * 1000
 const MAX_PENDING_PREPARATIONS = 8

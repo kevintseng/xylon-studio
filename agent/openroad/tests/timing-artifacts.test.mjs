@@ -13,6 +13,7 @@ import {
   writeJsonAtomic,
 } from '../timing-artifacts.mjs'
 import { TIMING_CANDIDATE_FLOW_RECIPE } from '../timing-recipe.mjs'
+import { buildTimingStageEvidence } from '../stage-evidence.mjs'
 
 const RTL = 'module demo(input clk, input d, output reg q); always @(posedge clk) q <= d; endmodule\n'
 const SDC = 'create_clock -name core_clock -period 2.0 [get_ports {clk}]\n'
@@ -51,7 +52,7 @@ test('stages private immutable timing inputs and a deterministic ORFS config', a
   assert.match(config, /NUM_CORES = 1/)
   assert.match(config, /CORE_UTILIZATION = 35/)
   assert.match(config, /CORE_ASPECT_RATIO = 1\.0/)
-  assert.match(config, /CORE_MARGIN = 10/)
+  assert.match(config, /CORE_MARGIN = 2/)
   assert.match(config, /SKIP_CTS_REPAIR_TIMING = 1/)
   assert.match(config, /LEC_CHECK = 0/)
   assert.doesNotMatch(config, /DIE_AREA|CORE_AREA/)
@@ -140,6 +141,17 @@ test('reads checksummed ORFS baseline artifacts and parses metrics', async (cont
   assert.equal(result.metrics.wns, -0.1)
   assert.match(result.artifacts.report.sha256, /^[a-f0-9]{64}$/)
   assert.match(result.artifacts.checkpoint.sha256, /^[a-f0-9]{64}$/)
+  assert.equal(result.stage_evidence.schema_version, 'xylon-timing-stage-evidence/v1')
+  assert.equal(result.stage_evidence.completed_stage, 'grt')
+  assert.equal(result.stage_evidence.stages[0].state, 'verified')
+  assert.equal(result.stage_evidence.stages[0].outputs.report.sha256, result.artifacts.report.sha256)
+})
+
+test('stage evidence fails closed when metrics are absent', () => {
+  assert.throws(
+    () => buildTimingStageEvidence({ metrics: null }),
+    /timing metrics are required/,
+  )
 })
 
 test('revalidates baseline inputs, metrics, report, checkpoint, and reported SDC before reuse', async (context) => {

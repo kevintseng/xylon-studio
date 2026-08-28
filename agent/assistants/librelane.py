@@ -1,0 +1,179 @@
+"""Natural-language control plane for the canonical LibreLane project journey."""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from agent.assistants.providers import OpenAICompatibleProvider, ProviderError
+from agent.assistants.timing import TimingSkillPack
+
+
+class LibreLaneIntent(BaseModel):
+    """The deliberately small model output surface for the LibreLane assistant."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["xylon-librelane-intent/v1"]
+    supported: bool
+    intent: Literal[
+        "inspect_project",
+        "run_baseline",
+        "propose_repair",
+        "review_comparison",
+        "rerun_selected",
+        "unsupported",
+    ]
+    normalized_goal: str = Field(min_length=1, max_length=500)
+    needs: list[Literal["project_run", "approval"]] = Field(max_length=2)
+
+
+@dataclass(frozen=True)
+class LibreLaneSemanticTools:
+    """Deterministic actions the model may select; the model never supplies arguments."""
+
+    status: Callable[[str], Awaitable[dict]]
+    baseline: Callable[[str, bool], Awaitable[dict]]
+    repair: Callable[[str, bool, str | None], Awaitable[dict]]
+    comparison: Callable[[str], Awaitable[dict]]
+    selected_execute: Callable[[str, bool], Awaitable[dict]]
+
+
+def _system_prompt(locale: str) -> tuple[TimingSkillPack, str]:
+    pack = TimingSkillPack.load()
+    knowledge = "\n".join(f"- {fact['id']}: {fact['fact']}" for fact in pack.facts)
+    contract = (
+        "You are Xylon's LibreLane project assistant, not the generic setup-timing assistant. "
+        "Your output contract below has priority over all reference skill text. "
+        "Return exactly one JSON object and no markdown, commentary, or alternate schema. "
+        "The object MUST contain exactly these keys: schema_version, supported, intent, "
+        "normalized_goal, needs. "
+        "schema_version MUST be xylon-librelane-intent/v1. "
+        "intent MUST be one of inspect_project, run_baseline, propose_repair, review_comparison, "
+        "rerun_selected, unsupported. "
+        "Use inspect_project only when the user asks to read or show an existing project state or existing metrics; "
+        "use run_baseline whenever the user asks to check, analyze, measure, or run setup timing; the deterministic runtime decides whether a baseline already exists or needs approval; "
+        "propose_repair for requesting one bounded repair proposal from a measured negative-WNS baseline; "
+        "review_comparison for reviewing an existing native baseline/candidate comparison; "
+        "rerun_selected only when the user explicitly asks to execute an already selected configuration again; "
+        "otherwise use unsupported. "
+        "supported MUST be true exactly when intent is not unsupported. "
+        "normalized_goal is a short user-language summary. "
+        "needs may contain only project_run and approval. "
+        "For propose_repair, the deterministic runtime selects the one supported repair from measured evidence."
+    )
+    prompt = (
+        f"{contract}\n\n"
+        f"Reference timing skill (guidance only; do not copy its schema):\n{pack.prompt}\n\n"
+        f"Versioned knowledge (guidance only):\n{knowledge}\n\n"
+        f"Reply locale: {locale}. Re-apply the LibreLane JSON contract above. "
+        "Never emit tool names, tool arguments, commands, Tcl, RTL, SDC, credentials, raw logs, timing metrics, "
+        "approval claims, or execution claims. Ambiguous or unrelated requests must be unsupported. "
+        "The deterministic runtime owns every action and measured fact."
+    )
+    return pack, prompt
+
+
+def _assistant_state(intent: LibreLaneIntent, *, run: dict | None, approved: bool) -> tuple[str, dict]:
+    if not intent.supported:
+        return "unsupported", {"required": False, "action": "use_a_supported_librelane_project_request"}
+    if run is None:
+        return "waiting_for_project_run", {
+            "required": True,
+            "action": "import_and_prepare_a_librelane_project_first",
+        }
+    if intent.intent == "run_baseline":
+        run_state = run.get("state")
+        if run_state in {"prepared", "blocked"} and not approved:
+            return "awaiting_human_approval", {
+                "required": True,
+                "action": "explicitly_approve_the_prepared_librelane_baseline_in_the_workbench",
+            }
+        if isinstance(run.get("proposal"), dict):
+            return "repair_proposal_ready", {
+                "required": True,
+                "action": "review_one_bounded_repair_before_approval",
+            }
+        return "project_status_ready", {
+            "required": False,
+            "action": "review_the_current_librelane_evidence",
+        }
+    if intent.intent == "rerun_selected" and not approved:
+        return "awaiting_human_approval", {
+            "required": True,
+            "action": "explicitly_approve_the_selected_librelane_rerun_in_the_workbench",
+        }
+    if intent.intent == "inspect_project":
+        return "project_status_ready", {"required": False, "action": "review_the_current_librelane_evidence"}
+    if intent.intent == "propose_repair":
+        if approved:
+            return "comparison_ready", {"required": False, "action": "review_native_before_after_evidence"}
+        return "repair_proposal_ready", {"required": True, "action": "review_one_bounded_repair_before_approval"}
+    if intent.intent == "review_comparison":
+        return "comparison_ready", {"required": False, "action": "review_native_before_after_evidence"}
+    return "selected_rerun_requested", {
+        "required": False,
+        "action": "inspect_the_selected_librelane_rerun_readback",
+    }
+
+
+async def run_librelane_assistant(
+    *,
+    provider: OpenAICompatibleProvider,
+    message: str,
+    locale: str,
+    run_id: str | None,
+    approved: bool,
+    proposal_id: str | None,
+    tools: LibreLaneSemanticTools,
+) -> dict:
+    """Classify one request, then advance only the canonical LibreLane state machine."""
+
+    pack, prompt = _system_prompt(locale)
+    raw_intent = await provider.complete_json(system_prompt=prompt, user_message=message)
+    try:
+        intent = LibreLaneIntent.model_validate(raw_intent)
+    except ValidationError as exc:
+        raise ProviderError(
+            "LibreLaneAgentIntentInvalid",
+            "The model returned an unsupported or malformed LibreLane project intent.",
+            "Ask to inspect the current project, propose one bounded repair, review a comparison, or rerun a selected configuration.",
+        ) from exc
+    if intent.supported != (intent.intent != "unsupported"):
+        raise ProviderError(
+            "LibreLaneAgentIntentInvalid",
+            "The model returned a contradictory LibreLane project intent.",
+            "Use a model that follows the versioned Xylon LibreLane assistant contract.",
+        )
+
+    run: dict | None = None
+    if intent.supported and run_id is not None:
+        if intent.intent == "inspect_project":
+            run = await tools.status(run_id)
+        elif intent.intent == "run_baseline":
+            run = await tools.baseline(run_id, approved)
+        elif intent.intent == "propose_repair":
+            run = await tools.repair(run_id, approved, proposal_id)
+        elif intent.intent == "review_comparison":
+            run = await tools.comparison(run_id)
+        elif intent.intent == "rerun_selected" and approved:
+            run = await tools.selected_execute(run_id, approved)
+        elif intent.intent == "rerun_selected":
+            run = await tools.status(run_id)
+
+    assistant_state, handoff = _assistant_state(intent, run=run, approved=approved)
+    return {
+        "schema_version": "xylon-librelane-assistant/v1",
+        "state": assistant_state,
+        "intent": intent.model_dump(),
+        "skill": {"id": pack.skill_id, "version": pack.version, "sha256": pack.digest},
+        "egress": {
+            "sent": ["user_message", "locale", "versioned_openroad_skill_and_knowledge"],
+            "excluded": ["rtl", "sdc", "credentials", "raw_logs", "timing_metrics", "tool_arguments"],
+        },
+        "observed": run,
+        "human_handoff": handoff,
+    }

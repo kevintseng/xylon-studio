@@ -3,6 +3,8 @@ import { normalizeTimingState, type TimingState } from './timing-contract.ts'
 
 export const MAX_TIMING_RTL_BYTES = 1024 * 1024
 export const MAX_TIMING_SDC_BYTES = 16 * 1024
+export const MAX_PROJECT_FILE_BYTES = 1024 * 1024
+export const MAX_PROJECT_FILES = 32
 
 export interface TimingReadiness {
   state: 'ready' | 'blocked'
@@ -49,6 +51,11 @@ export class TimingApiError extends Error {
 export function resolveTimingApiUrl(configured: string | undefined): string {
   const baseUrl = resolveLocalApiUrl(configured || DEFAULT_LOCAL_API_URL)
   return `${baseUrl.replace(/\/$/, '')}/api/timing`
+}
+
+export function resolveOpenroadApiUrl(configured: string | undefined): string {
+  const baseUrl = resolveLocalApiUrl(configured || DEFAULT_LOCAL_API_URL)
+  return `${baseUrl.replace(/\/$/, '')}/api/openroad`
 }
 
 export function createTimingRunId(randomValues = globalThis.crypto): string {
@@ -193,6 +200,72 @@ export function analyzeTiming(
       top_module: input.topModule,
       platform: 'sky130hd',
     }),
+    signal,
+  })
+}
+
+export interface ProjectBundleFile {
+  path: string
+  content: string
+}
+
+export interface ProjectPreflight {
+  state: 'ready' | 'needs_correction' | 'cannot_run'
+  manifest: { source_revision: string } | null
+  failure: { code: string; message: string; action: string } | null
+}
+
+export interface ProjectImportResult {
+  project_id: string
+  root: string
+  preflight: ProjectPreflight
+}
+
+export function importProjectBundle(
+  apiUrl: string,
+  input: {
+    projectId: string
+    top: string
+    rtl: string[]
+    includeDirs: string[]
+    sdc: string
+    clock: { name: string; port: string; periodNs: number }
+    files: ProjectBundleFile[]
+  },
+  signal?: AbortSignal,
+): Promise<ProjectImportResult> {
+  if (input.files.length < 1 || input.files.length > MAX_PROJECT_FILES) {
+    throw new TimingApiError('ProjectImportInvalid', `Choose 1 to ${MAX_PROJECT_FILES} project files.`, 'Select the RTL, include, and SDC files, then retry.', 422)
+  }
+  return timingJsonRequest(`${apiUrl}/projects`, {
+    method: 'POST',
+    body: JSON.stringify({
+      project_id: input.projectId,
+      top: input.top,
+      platform: 'sky130hd',
+      rtl: input.rtl,
+      include_dirs: input.includeDirs,
+      sdc: input.sdc,
+      clocks: [{
+        name: input.clock.name,
+        port: input.clock.port,
+        period_ns: input.clock.periodNs,
+      }],
+      macros: [],
+      files: input.files,
+    }),
+    signal,
+  }) as Promise<ProjectImportResult>
+}
+
+export function startProjectTimingRun(
+  apiUrl: string,
+  input: { runId: string; projectId: string },
+  signal?: AbortSignal,
+): Promise<TimingState> {
+  return timingRequest(`${apiUrl}/project-runs`, {
+    method: 'POST',
+    body: JSON.stringify({ run_id: input.runId, project_id: input.projectId }),
     signal,
   })
 }

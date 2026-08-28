@@ -17,20 +17,35 @@ Xylon 是在本機執行的 OpenROAD 時序助理。提供真實 RTL、SDC、頂
 
 ## 第一個實用流程
 
-1. 匯入大小受限的 RTL、SDC，或載入內建 `sky130hd` 時序範例。
+1. 選擇「匯入多檔專案」一次載入受限的 RTL／include／SDC 檔案。Xylon 只會把選取的文字檔保存到自己的本機工作區；舊版內建範例收在下方收起的參考畫面裡。
 2. 輸入：「檢查 setup 時序、找出最差路徑，並告訴我怎麼改善。」
 3. Xylon 會先驗證輸入與本機資源，通過後才啟動 OpenROAD。
 4. 查看實測 WNS、TNS 與最差 setup 路徑。
-5. 若有違規，審閱一個確切的 `PLACE_DENSITY 0.60 → 0.65` 提案。
+5. 若有違規，Xylon 會依實測診斷準備一個受限提案：最差路徑證據適用時採用 CTS timing
+   repair，否則使用既有的 placement density 改善。
 6. 只有確定要跑 candidate 才確認；完成後比較相同指標的前後差異。
+7. 選擇「保留 candidate」或「保留 baseline」。系統會記錄選擇與實際採用的設定，
+   不會默默覆蓋原本的 baseline；要再次量測時，再明確執行「重跑選定設定」。
+
+### LibreLane 執行流程
+
+Xylon v0.6 已建立固定版本的 LibreLane 3.0.10 後端介面。`/openroad` 的主要
+使用流程現在直接使用這個 API：先檢查本機 ARM64 映像檔、Python、sky130A PDK
+與可用資源；任何一項不符合時，只顯示第一個阻塞原因，不會啟動 EDA。下方
+收起的舊版 ORFS 畫面只作比較，不代表 LibreLane 的結果。
 
 支援這個流程的功能包括：
 
+- **多檔專案匯入：**工作台接受 `.v`、`.sv`、`.vh`、`.svh` 與 `.sdc`，會在啟動 EDA 前檢查頂層模組與 clock；preflight 後只要檔案被改動，就會拒絕啟動並要求重新匯入。
+
 - **Setup 時序助理：**支援 OpenAI API 格式的本機模型只負責理解一句需求。受限工具會
   驗證 RTL／SDC，執行內建 `sky130hd` 流程，讀回 WNS、TNS 與最差 setup 路徑；
-  量到違規時，準備一個 `PLACE_DENSITY 0.60 → 0.65` candidate。
-- **由使用者決定是否改善：**Xylon 顯示有期限的確切提案。使用者必須在本機頁面
-  輸入提案代碼，接著明確要求執行，Xylon 才能跑一次候選改善，並以相同指標比較前後結果。
+  量到負的 native setup WNS 時，系統會依診斷選擇 CTS timing repair，或在不適用時
+  使用 `PL_TARGET_DENSITY 0.60 → 0.65`，並準備一個有期限、綁定雜湊的 candidate 提案。
+- **由使用者決定是否改善：**API 要求使用者提交完全相同的提案 ID 並明確批准；
+  系統會再次檢查資源與輸入是否被改動，才建立隔離的 candidate，最後用 native
+  指標比較前後結果。比較後，使用者還要明確選擇保留 candidate 或 baseline；系統會
+  保存採用的設定路徑與兩份設定雜湊，供下一次明確批准的重跑使用。
 - **RTL 驗證：**固定版本的 Verilator lint、選用的獨立 C++ 自我檢查、實測覆蓋率、
   選用的 Yosys 結構統計，以及經雜湊檢查、可精確重跑的證據包。
 - **進階 OpenROAD MCP 紀錄：**獨立的受限 MCP 執行環境仍可用於診斷，但不可拿來
@@ -83,6 +98,7 @@ Xylon 不會自行下載或暗中選擇模型。
 4. 輸入：「檢查 setup 時序、找出最差路徑，並告訴我下一步怎麼改善。」
 5. 查看實測 WNS／TNS 與確切提案；只有確定要執行一次候選改善時才輸入代碼。
 6. 明確要求助理執行已確認的改善，或使用專用執行按鈕。只詢問狀態或說明不會啟動 EDA。
+7. 比較完成後選擇「保留 candidate」或「保留 baseline」；要再次量測時，明確執行「重跑選定設定」。
 
 ## OpenROAD 無法啟動時
 
@@ -113,7 +129,7 @@ scripts/xylon stop
 | --- | --- |
 | 以內建 `sky130hd` 執行受限 RTL／SDC setup 時序分析 | 任意 PDK 或元件庫匯入 |
 | 讀回 WNS、TNS、最差 max path 與清理結果 | Hold、多 corner、功耗、面積、DRC／LVS 或 signoff 判定 |
-| 一個綁定證據的 placement-density candidate | 通用的 OpenROAD 自主指令操作 |
+| 兩種綁定證據的 LibreLane candidate（密度或 CTS 時序修正） | 通用的 OpenROAD 自主指令操作 |
 | 支援 OpenAI API 格式的本機模型理解需求 | 遠端 BYOK 服務網址或保存 API key |
 | 綁定單一提案的本機確認動作 | 經身分驗證的使用者或審核紀錄 |
 
@@ -126,6 +142,8 @@ Candidate 有改善不等於 timing closure。目前 setup 邊界沒有違規，
 - `/pipeline`：RTL 驗證。
 - `POST /api/assistant/timing`：本機模型理解需求，再由受限程式執行時序流程；沒有確認工具。
 - `/api/timing/runs/*`：baseline、狀態、提案、確認與 candidate 的固定介面。
+- `POST /api/openroad/projects` 與 `POST /api/timing/project-runs`：受限專案匯入、重新驗證，以及從本機專案 ID 啟動時序分析。
+- `/api/openroad/librelane-project-runs/*`：固定版本 LibreLane 的準備、baseline 執行、受限改善提案、前後比較、保留 candidate／baseline 的明確決定，以及選定設定重跑。
 - `GET /api/openroad/snapshot`：唯讀 MCP 執行紀錄。
 
 詳細規格請見 [API 說明](docs/API.md)、[安全邊界](SECURITY.md) 與

@@ -7,6 +7,7 @@ import threading
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import AsyncMock
+from urllib.error import URLError
 
 import pytest
 from fastapi import HTTPException
@@ -15,7 +16,8 @@ from pydantic import ValidationError
 
 from agent.api.main import app
 from agent.api.routes import assistant as assistant_routes
-from agent.assistants.providers import OpenAICompatibleProvider, ProviderConfig
+from agent.assistants import providers as provider_module
+from agent.assistants.providers import OpenAICompatibleProvider, ProviderConfig, ProviderError
 from agent.assistants.timing import TimingSemanticTools, TimingSkillPack, run_timing_assistant
 
 
@@ -316,6 +318,13 @@ def test_local_provider_api_sends_no_design_and_advances_typed_tools(monkeypatch
     assert response.json()["state"] == "awaiting_human_confirmation"
     assert len(requests) == 1
     model_payload = json.dumps(requests[0])
+    assert requests[0]["max_tokens"] == 512
+    assert requests[0]["temperature"] == 0
+    assert requests[0]["reasoning_effort"] == "none"
+    assert requests[0]["response_format"]["type"] == "json_schema"
+    assert requests[0]["response_format"]["json_schema"]["name"] == "xylon_timing_intent"
+    assert requests[0]["response_format"]["json_schema"]["strict"] is True
+    assert requests[0]["response_format"]["json_schema"]["schema"]["title"] == "TimingIntent"
     assert "TOP_SECRET_RTL" not in model_payload
     assert "TOP_SECRET_SDC" not in model_payload
     assert "-0.4" not in model_payload
@@ -335,6 +344,44 @@ def test_local_provider_redirect_fails_closed_before_eda(monkeypatch):
     assert response.json()["detail"]["error"] == "TimingAgentProviderRedirectRejected"
     tools.analyze.assert_not_awaited()
     tools.propose.assert_not_awaited()
+
+
+def test_local_provider_rejects_a_second_in_flight_request(monkeypatch):
+    provider = OpenAICompatibleProvider(
+        ProviderConfig(
+            protocol="openai-compatible",
+            model="sandbox-model",
+            base_url="http://127.0.0.1:11434/v1",
+        )
+    )
+    assert provider_module._PROVIDER_SLOT.acquire(blocking=False)
+    try:
+        with pytest.raises(ProviderError, match="already using Xylon's provider slot"):
+            provider._complete_json_sync(system_prompt="{}", user_message="{}")
+    finally:
+        provider_module._PROVIDER_SLOT.release()
+
+
+def test_local_provider_releases_slot_after_provider_failure(monkeypatch):
+    provider = OpenAICompatibleProvider(
+        ProviderConfig(
+            protocol="openai-compatible",
+            model="sandbox-model",
+            base_url="http://127.0.0.1:11434/v1",
+        )
+    )
+
+    class FailingOpener:
+        def open(self, *_args, **_kwargs):
+            raise URLError("offline")
+
+    monkeypatch.setattr(provider_module, "build_opener", lambda *_args, **_kwargs: FailingOpener())
+
+    with pytest.raises(ProviderError, match="could not be reached"):
+        provider._complete_json_sync(system_prompt="{}", user_message="{}")
+
+    assert provider_module._PROVIDER_SLOT.acquire(blocking=False)
+    provider_module._PROVIDER_SLOT.release()
 
 
 def test_assistant_request_is_bounded_before_provider_or_eda(monkeypatch):

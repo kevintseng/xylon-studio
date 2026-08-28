@@ -8,7 +8,9 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from agent.api.routes import openroad as openroad_routes
 from agent.api.routes import timing as timing_routes
+from agent.assistants.librelane import LibreLaneSemanticTools, run_librelane_assistant
 from agent.assistants.providers import OpenAICompatibleProvider, ProviderConfig, ProviderError
 from agent.assistants.timing import TimingSemanticTools, run_timing_assistant
 
@@ -39,6 +41,18 @@ class TimingAssistantRequest(BaseModel):
         if self.design is not None and self.timing_run_id is not None:
             raise ValueError("provide either a new design or an existing timing_run_id, not both")
         return self
+
+
+class LibreLaneAssistantRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["xylon-librelane-assistant-request/v1"]
+    message: str = Field(min_length=3, max_length=2000)
+    locale: Literal["zh-TW", "en"] = "zh-TW"
+    provider: ProviderConfig
+    project_run_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$")
+    approved: bool = False
+    proposal_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 async def _analyze_design(design: dict) -> dict:
@@ -73,10 +87,167 @@ TIMING_TOOLS = TimingSemanticTools(
 )
 
 
+def _public_librelane_run(payload: dict) -> dict:
+    """Return state/evidence summaries without re-emitting project source files."""
+    failure = payload.get("failure")
+    public_failure = None
+    if isinstance(failure, dict):
+        public_failure = {
+            key: failure.get(key)
+            for key in ("code", "message", "recovery")
+            if isinstance(failure.get(key), str)
+        }
+    observed = {
+        "run_id": payload.get("run_id"),
+        "project_id": payload.get("project_id"),
+        "state": payload.get("state"),
+        "source_revision": payload.get("source_revision"),
+        "next_action": payload.get("next_action"),
+        "failure": public_failure,
+    }
+    readiness = payload.get("readiness")
+    if isinstance(readiness, dict):
+        observed["readiness"] = {
+            key: readiness.get(key)
+            for key in ("state", "blockers", "checks", "next_action")
+            if key in readiness
+        }
+    comparison = payload.get("comparison")
+    if isinstance(comparison, dict):
+        setup_wns = comparison.get("setup_wns")
+        setup_tns = comparison.get("setup_tns")
+        baseline_metrics = comparison.get("baseline_metrics")
+        candidate_metrics = comparison.get("candidate_metrics")
+        observed["comparison"] = {
+            "schema_version": comparison.get("schema_version"),
+            "setup_wns": setup_wns,
+            "setup_tns": setup_tns,
+            "baseline_metrics": {
+                metric: baseline_metrics[metric]
+                for metric in ("timing__setup__wns", "timing__setup__tns")
+                if isinstance(baseline_metrics, dict) and metric in baseline_metrics
+            },
+            "candidate_metrics": {
+                metric: candidate_metrics[metric]
+                for metric in ("timing__setup__wns", "timing__setup__tns")
+                if isinstance(candidate_metrics, dict) and metric in candidate_metrics
+            },
+        }
+    decision = payload.get("decision")
+    if isinstance(decision, dict):
+        observed["decision"] = {
+            key: decision.get(key)
+            for key in (
+                "state", "choice", "proposal_id", "source_revision",
+                "selected_config_path", "selected_config_sha256", "selected_inputs_sha256",
+            )
+            if key in decision
+        }
+    for key in ("execution", "candidate", "selected_execution"):
+        value = payload.get(key)
+        if not isinstance(value, dict):
+            continue
+        summary = {
+            field: value.get(field)
+            for field in (
+                "state",
+                "attempt",
+                "proposal_id",
+                "decision_choice",
+                "root",
+                "started_at",
+                "finished_at",
+                "runtime_identity",
+                "plan_identity_sha256",
+                "selected_config_sha256",
+                "selected_inputs_sha256",
+            )
+            if field in value
+        }
+        result = value.get("result")
+        readback = result.get("readback") if isinstance(result, dict) else None
+        metrics = readback.get("metrics") if isinstance(readback, dict) else None
+        if isinstance(metrics, dict):
+            summary["metrics"] = {
+                metric: metrics[metric]
+                for metric in ("timing__setup__wns", "timing__setup__tns", "timing__hold__wns", "timing__hold__tns")
+                if metric in metrics
+            }
+        observed[key] = summary
+    return observed
+
+
+async def _librelane_status(run_id: str) -> dict:
+    _, payload = openroad_routes._load_librelane_run(run_id)
+    return _public_librelane_run(payload)
+
+
+async def _librelane_baseline(run_id: str, approved: bool) -> dict:
+    _, current = openroad_routes._load_librelane_run(run_id)
+    if current.get("state") not in {"prepared", "blocked"}:
+        return _public_librelane_run(current)
+    if not approved:
+        return _public_librelane_run(current)
+
+    await openroad_routes.post_librelane_project_execution(
+        run_id,
+        openroad_routes.LibreLaneExecutionRequest(approved=True),
+    )
+    run_root, payload = openroad_routes._load_librelane_run(run_id)
+    if openroad_routes._librelane_setup_wns(payload) < 0:
+        proposal = openroad_routes._create_librelane_proposal(run_root, payload)
+        return _public_librelane_run(payload) | {"proposal": proposal}
+    return _public_librelane_run(payload)
+
+
+async def _librelane_repair(run_id: str, approved: bool, proposal_id: str | None) -> dict:
+    if not approved:
+        run_root, payload = openroad_routes._load_librelane_run(run_id)
+        proposal = openroad_routes._create_librelane_proposal(run_root, payload)
+        return _public_librelane_run(payload) | {"proposal": proposal}
+
+    _, payload = openroad_routes._load_librelane_run(run_id)
+    current = payload.get("proposal")
+    current_proposal_id = current.get("proposal_id") if isinstance(current, dict) else None
+    if not isinstance(proposal_id, str):
+        raise ValueError("the exact saved LibreLane proposal_id is required before repair approval")
+    if proposal_id != current_proposal_id:
+        raise ValueError("the approved LibreLane proposal_id does not match the current saved proposal")
+    return _public_librelane_run(
+        await openroad_routes.post_librelane_repair_execution(
+            run_id,
+            openroad_routes.LibreLaneRepairApprovalRequest(approved=True, proposal_id=proposal_id),
+        )
+    )
+
+
+async def _librelane_comparison(run_id: str) -> dict:
+    _, payload = openroad_routes._load_librelane_run(run_id)
+    return _public_librelane_run(payload)
+
+
+async def _librelane_selected_execute(run_id: str, approved: bool) -> dict:
+    return _public_librelane_run(
+        await openroad_routes.post_librelane_selected_execution(
+            run_id,
+            openroad_routes.LibreLaneExecutionRequest(approved=approved),
+        )
+    )
+
+
+LIBRELANE_TOOLS = LibreLaneSemanticTools(
+    status=_librelane_status,
+    baseline=_librelane_baseline,
+    repair=_librelane_repair,
+    comparison=_librelane_comparison,
+    selected_execute=_librelane_selected_execute,
+)
+
+
 def _provider_http_status(code: str) -> int:
-    if code == "TimingAgentIntentInvalid":
+    if code in {"TimingAgentIntentInvalid", "LibreLaneAgentIntentInvalid"}:
         return 422
-    if code == "TimingAgentProviderUnavailable":
+    if code in {"TimingAgentProviderUnavailable", "LibreLaneAgentProviderUnavailable"}:
         return 503
     return 502
 
@@ -110,5 +281,37 @@ async def timing_assistant(request: TimingAssistantRequest) -> dict:
                 "error": code,
                 "message": message,
                 "recovery": "Restore the versioned timing skill and start a new assistant request.",
+            },
+        ) from exc
+
+
+@router.post("/assistant/librelane")
+async def librelane_assistant(request: LibreLaneAssistantRequest) -> dict:
+    """Interpret one sentence and advance only the canonical LibreLane project journey."""
+
+    try:
+        return await run_librelane_assistant(
+            provider=OpenAICompatibleProvider(request.provider),
+            message=request.message,
+            locale=request.locale,
+            run_id=request.project_run_id,
+            approved=request.approved,
+            proposal_id=request.proposal_id,
+            tools=LIBRELANE_TOOLS,
+        )
+    except ProviderError as exc:
+        raise HTTPException(
+            status_code=_provider_http_status(exc.code),
+            detail={"error": exc.code, "message": exc.message, "recovery": exc.recovery},
+        ) from exc
+    except HTTPException:
+        raise
+    except (OSError, KeyError, ValueError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "LibreLaneAgentStateInvalid",
+                "message": "The assistant could not read or advance the saved LibreLane project state.",
+                "recovery": "Open the primary OpenROAD journey, refresh the run, and retry the supported request.",
             },
         ) from exc

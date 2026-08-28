@@ -19,23 +19,50 @@ live at `/openroad` and `/pipeline` after `scripts/xylon start`.
 
 ## The first useful journey
 
-1. Import bounded RTL and SDC or load the included `sky130hd` timing example.
+1. Choose **Import a project bundle** to select a bounded multi-file RTL/SDC bundle. Xylon stores only the selected text files inside its local workspace; the older built-in example is available inside the collapsed reference fixture.
 2. Ask: “Check setup timing, identify the worst path, and tell me how to improve it.”
 3. Xylon validates the input and local resources before starting OpenROAD.
 4. Review measured WNS, TNS, and the worst setup path.
-5. If a violation exists, review one exact `PLACE_DENSITY 0.60 → 0.65` proposal.
+5. If a violation exists, Xylon uses the measured diagnosis to prepare one exact
+   bounded proposal: CTS timing repair when the native worst path supports it,
+   otherwise the existing placement-density fallback.
 6. Confirm it only if you want a candidate run, then compare the same metrics
    before and after.
+7. Choose **Keep candidate** or **Keep baseline**. Xylon records that choice and
+   the selected configuration; it never silently replaces the baseline. Use the
+   explicit selected-rerun action when you want to measure that choice again.
+
+### LibreLane execution boundary
+
+Xylon v0.6 exposes a pinned LibreLane 3.0.10 backend path for an imported project.
+The primary `/openroad` journey now uses that API: it checks the local ARM64 image,
+Python environment, sky130A PDK, and available resources before any EDA subprocess.
+When the gate is blocked, it records the first blocker and gives one next action.
+The older ORFS screen is collapsed below as a comparison fixture; it is not the
+LibreLane result path.
 
 The supported paths behind that journey are:
 
+- **Multi-file project import:** the workbench accepts `.v`, `.sv`, `.vh`, `.svh`, and `.sdc` files, checks the declared top module and clock before EDA, and refuses to start if any file changes after preflight.
+
 - **Setup-timing assistant:** a local OpenAI-compatible model interprets one
   sentence. Deterministic tools validate RTL/SDC, run the built-in `sky130hd`
-  recipe, read WNS, TNS, and the worst setup path, then prepare one bounded
-  `PLACE_DENSITY 0.60 → 0.65` candidate when violations exist.
-- **Human-controlled improvement:** Xylon shows the exact expiring proposal. A
-  person must type its code in the local page, then explicitly request execution,
-  before Xylon can run the candidate and compare the same metrics before and after.
+  recipe, read WNS, TNS, and the worst setup path, then select one allowlisted
+  candidate from that evidence when violations exist: either
+  `PL_TARGET_DENSITY 0.60 → 0.65` or `RUN_POST_CTS_RESIZER_TIMING false → true`.
+- **Project assistant:** the primary LibreLane journey also accepts plain-language
+  requests to inspect the current run, prepare one bounded proposal, review a
+  comparison, or rerun the selected configuration. It never sends project source
+  or measured metrics to the model, and selected reruns still require explicit approval.
+- **Human-controlled improvement:** the LibreLane API can create one expiring,
+  hash-bound proposal from a negative native WNS baseline. The runtime, not the
+  model or user, selects between placement density (`PL_TARGET_DENSITY 0.60 → 0.65`)
+  and CTS timing repair (`RUN_POST_CTS_RESIZER_TIMING false → true`) from the
+  native diagnosis. The exact proposal
+  ID and explicit approval are required before an isolated candidate rerun; the
+  response compares native metrics before and after. After comparison, the user
+  explicitly keeps the candidate or keeps the baseline; the selected config and
+  both config hashes are persisted for the next explicitly approved rerun.
 - **RTL verification:** pinned Verilator lint, optional independent C++
   self-check, measured coverage, optional Yosys structure, and a checksummed
   exact-rerun bundle.
@@ -93,6 +120,8 @@ OpenROAD. Xylon does not download or silently select a model.
    candidate run.
 6. Explicitly ask the assistant to execute the confirmed change, or use the
    dedicated candidate button. Status and explanation requests never start EDA.
+7. After the comparison, choose **Keep candidate** or **Keep baseline** so the
+   next explicitly approved rerun has an explicit configuration choice.
 
 ## When OpenROAD cannot start
 
@@ -124,7 +153,7 @@ scripts/xylon stop
 | --- | --- |
 | Bounded RTL/SDC setup timing on built-in `sky130hd` | Arbitrary PDK or library import |
 | WNS, TNS, worst max path, and cleanup readback | Hold, multi-corner, power, area, DRC/LVS, or signoff claims |
-| One evidence-bound placement-density candidate | General autonomous OpenROAD command execution |
+| Two evidence-bound LibreLane repair candidates (density or CTS timing repair) | General autonomous OpenROAD command execution |
 | Loopback OpenAI-compatible intent model | Remote BYOK endpoints or stored API keys |
 | Local confirmation gesture bound to one proposal | Authenticated user identity or approval audit |
 
@@ -139,8 +168,15 @@ or inconclusive evidence never becomes a completed stage.
 - `/pipeline` — RTL verification.
 - `POST /api/assistant/timing` — loopback-model intent plus deterministic timing
   orchestration; there is no confirmation tool.
+- `POST /api/assistant/librelane` — loopback-model intent plus deterministic
+  LibreLane project status, proposal, comparison, and explicitly approved selected rerun.
 - `/api/timing/runs/*` — typed baseline, status, proposal, confirmation, and
   candidate endpoints.
+- `/api/openroad/librelane-project-runs/*` — pinned LibreLane preparation,
+  approved baseline execution, bounded repair proposal, candidate comparison,
+  explicit keep-candidate/keep-baseline decision, and selected-configuration rerun.
+- `POST /api/openroad/projects` and `POST /api/timing/project-runs` — bounded
+  project import, revalidation, and timing start from a local project ID.
 - `GET /api/openroad/snapshot` — read-only MCP execution record.
 
 See [API contract](docs/API.md), [security boundary](SECURITY.md), and

@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd -- "${script_dir}/.." && pwd)"
+image="ghcr.io/librelane/librelane@sha256:322b81f76d22053e5b92f9eaa6e4fb0440084fd02d77a4de0caa4ba7644c88c3"
+python_bin="${XYLON_LIBRELANE_PYTHON:-${repo_root}/.xylon/librelane/venv/bin/python}"
+pdk_root="${XYLON_LIBRELANE_PDK_ROOT:-${repo_root}/.xylon/librelane/pdk}"
+runtime_bin="${repo_root}/runtime/librelane/bin"
+
+die() { echo "BLOCKED: $*" >&2; exit 1; }
+
+require_python() {
+  [[ -n "${python_bin}" && -x "${python_bin}" ]] || die "set XYLON_LIBRELANE_PYTHON to an executable LibreLane 3.0.10 Python environment"
+}
+
+version() {
+  require_python
+  local actual
+  actual="$("${python_bin}" -m librelane --bare-version 2>/dev/null)" || die "LibreLane cannot be imported by the configured Python"
+  [[ "${actual}" == "3.0.10" ]] || die "LibreLane 3.0.10 is required; found ${actual:-unknown}"
+}
+
+resource_preflight() {
+  local resource_python="${repo_root}/agent/venv/bin/python"
+  if [[ ! -x "${resource_python}" ]]; then
+    resource_python="$(command -v python3)" || die "Python is required for local resource admission"
+  fi
+  PYTHONPATH="${repo_root}" "${resource_python}" -m agent.openroad.resource --repo "${repo_root}" --cpus 1
+}
+
+doctor() {
+  version
+  resource_preflight || die "local resource admission blocked LibreLane"
+  docker info >/dev/null || die "Docker is unavailable; start Docker and retry"
+  docker image inspect "${image}" >/dev/null || die "pinned LibreLane image is missing; pull it only after resource preflight allows it"
+  echo "READY: pinned LibreLane 3.0.10 identity and local capacity are available"
+}
+
+run_flow() {
+  [[ "$#" -eq 2 ]] || die "usage: scripts/xylon-librelane run RUN_DIR CONFIG_PATH"
+  local run_dir="$1"
+  local config_path="$2"
+  version
+  [[ -d "${run_dir}" && ! -L "${run_dir}" ]] || die "run directory must be a regular directory"
+  local runs_root_abs run_abs config_abs
+  runs_root_abs="$(mkdir -p "${repo_root}/.xylon/timing/runs" && cd -- "${repo_root}/.xylon/timing/runs" && pwd -P)"
+  run_abs="$(cd -- "${run_dir}" && pwd -P)"
+  case "${run_abs}" in
+    "${runs_root_abs}"/*) ;;
+    *) die "run directory must stay inside .xylon/timing/runs" ;;
+  esac
+  case "${config_path}" in
+    /*|../*|*/../*|.|./*) die "LibreLane config path must be relative and stay inside the run directory" ;;
+  esac
+  config_abs="$(realpath "${run_abs}/${config_path}")" || die "LibreLane config is missing"
+  [[ -f "${config_abs}" && ! -L "${run_abs}/${config_path}" ]] || die "LibreLane config must be a regular file"
+  case "${config_abs}" in
+    "${run_abs}"/*) ;;
+    *) die "LibreLane config must stay inside the owned run directory" ;;
+  esac
+  [[ "${config_abs}" == *.json || "${config_abs}" == *.yaml || "${config_abs}" == *.yml ]] || die "LibreLane config must be JSON or YAML"
+  resource_preflight || die "local resource admission blocked LibreLane"
+  docker image inspect "${image}" >/dev/null || die "pinned LibreLane image is missing; pull it only after resource preflight allows it"
+  [[ -d "${pdk_root}" && ! -L "${pdk_root}" ]] || die "XYLON_LIBRELANE_PDK_ROOT must name a regular local PDK directory"
+  local real_docker
+  real_docker="$(command -v docker)" || die "Docker is unavailable; start Docker and retry"
+  mkdir -p "${run_abs}/home"
+  rm -f -- "${run_abs}/container.cid"
+  (cd -- "${run_abs}" && \
+    HOME="${run_abs}/home" \
+    PYTHONNOUSERSITE=1 \
+    LIBRELANE_IMAGE_OVERRIDE="${image}" \
+    XYLON_LIBRELANE_DOCKER_REAL="${real_docker}" \
+    XYLON_LIBRELANE_RUN_ID="$(basename -- "${run_abs}")" \
+    XYLON_LIBRELANE_CIDFILE="${run_abs}/container.cid" \
+    PATH="${runtime_bin}:${PATH}" \
+    "${python_bin}" -m librelane --docker-no-tty --pdk-root "${pdk_root}" --dockerized "${config_abs}")
+}
+
+case "${1:-}" in
+  doctor) doctor ;;
+  run) shift; run_flow "$@" ;;
+  *) echo "Usage: scripts/xylon-librelane {doctor|run RUN_DIR CONFIG_PATH}" >&2; exit 2 ;;
+esac

@@ -37,6 +37,29 @@ def test_openroad_snapshot_returns_stopped_state_when_snapshot_is_absent(
     }
 
 
+def test_librelane_readiness_is_truthful_and_does_not_start_a_flow(tmp_path, monkeypatch):
+    _configure_repo_root(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        openroad_routes,
+        "collect_librelane_readiness",
+        lambda _repo_root: {
+            "schema_version": "xylon-librelane-readiness/v1",
+            "state": "blocked",
+            "checks": {"python": True, "docker": True, "image": False, "pdk": False, "resources": False},
+            "blockers": ["the pinned LibreLane image is not present locally"],
+            "next_action": "Resolve the first listed blocker, then check LibreLane readiness again.",
+        },
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/openroad/librelane-readiness")
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "blocked"
+    assert response.json()["checks"]["image"] is False
+    assert response.json()["next_action"].startswith("Resolve the first listed blocker")
+
+
 def test_openroad_snapshot_returns_the_canonical_snapshot_payload(
     tmp_path: Path,
     monkeypatch,

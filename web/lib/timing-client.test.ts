@@ -1,11 +1,54 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { cancelTimingRun, createTimingRunId, normalizeTimingReadiness, resolveTimingApiUrl } from './timing-client.ts'
+import { cancelTimingRun, createTimingRunId, importProjectBundle, normalizeTimingReadiness, resolveOpenroadApiUrl, resolveTimingApiUrl } from './timing-client.ts'
 
 test('timing client uses only the selected local API root', () => {
   assert.equal(resolveTimingApiUrl(undefined), 'http://127.0.0.1:5001/api/timing')
   assert.equal(resolveTimingApiUrl('http://localhost:5100/'), 'http://localhost:5100/api/timing')
+  assert.equal(resolveOpenroadApiUrl(undefined), 'http://127.0.0.1:5001/api/openroad')
+})
+
+test('project import sends bounded files and manifest metadata to the OpenROAD API', async (context) => {
+  const originalFetch = globalThis.fetch
+  let observedUrl = ''
+  let observedPayload: Record<string, unknown> | null = null
+  globalThis.fetch = (async (input, init) => {
+    observedUrl = String(input)
+    observedPayload = JSON.parse(String(init?.body)) as Record<string, unknown>
+    return new Response(JSON.stringify({
+      schema_version: 'xylon-project-import/v1',
+      project_id: 'counter-demo',
+      root: '.xylon/projects/counter-demo',
+      preflight: { schema_version: 'xylon-project-preflight/v1', state: 'ready', manifest: { source_revision: 'a'.repeat(64) }, failure: null },
+    }), { status: 201, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
+  context.after(() => { globalThis.fetch = originalFetch })
+
+  const result = await importProjectBundle('http://127.0.0.1:5001/api/openroad', {
+    projectId: 'counter-demo',
+    top: 'counter',
+    rtl: ['rtl/counter.sv'],
+    includeDirs: ['include'],
+    sdc: 'constraints/counter.sdc',
+    clock: { name: 'clk', port: 'clk', periodNs: 10 },
+    files: [{ path: 'rtl/counter.sv', content: 'module counter; endmodule' }],
+  })
+
+  assert.equal(observedUrl, 'http://127.0.0.1:5001/api/openroad/projects')
+  const payload = observedPayload as unknown as Record<string, unknown>
+  assert.deepEqual(payload, {
+    project_id: 'counter-demo',
+    top: 'counter',
+    platform: 'sky130hd',
+    rtl: ['rtl/counter.sv'],
+    include_dirs: ['include'],
+    sdc: 'constraints/counter.sdc',
+    clocks: [{ name: 'clk', port: 'clk', period_ns: 10 }],
+    macros: [],
+    files: [{ path: 'rtl/counter.sv', content: 'module counter; endmodule' }],
+  })
+  assert.equal(result.preflight.state, 'ready')
 })
 
 test('timing client creates a bounded random recoverable run identity', () => {

@@ -240,6 +240,33 @@ def test_macos_memory_probe_returns_unknown_for_invalid_total_memory():
         assert local_app._read_macos_memory() == (None, None, None)
 
 
+def test_macos_memory_probe_uses_memory_pressure_total_when_sysctl_is_blocked():
+    pressure = subprocess.CompletedProcess(
+        ["memory_pressure", "-Q"],
+        0,
+        stdout=(
+            "The system has 17179869184 (1048576 pages with a page size of 16384).\n"
+            "System-wide memory free percentage: 46%\n"
+        ),
+        stderr="",
+    )
+    total = subprocess.CompletedProcess(
+        ["sysctl", "-n", "hw.memsize"],
+        1,
+        stdout="",
+        stderr="Operation not permitted\n",
+    )
+    with (
+        patch("agent.local_app.shutil.which", side_effect=lambda command: f"/usr/bin/{command}"),
+        patch("agent.local_app.subprocess.run", side_effect=[pressure, total]),
+    ):
+        assert local_app._read_macos_memory() == (
+            17179869184,
+            7902739824,
+            46,
+        )
+
+
 def test_resource_snapshot_keeps_load_failures_visible_as_unknown(tmp_path: Path):
     with (
         patch("agent.local_app.os.getloadavg", side_effect=OSError("unavailable")),
@@ -767,7 +794,7 @@ def _unused_port() -> int:
 
 def _http_service_command(port: int, marker: str, *, api: bool) -> list[str]:
     response = (
-        b'{"status":"healthy","service":"xylonstudio-api","version":"0.5.0"}'
+        b'{"status":"healthy","service":"xylonstudio-api","version":"0.6.0"}'
         if api
         else b"XylonStudio"
     )

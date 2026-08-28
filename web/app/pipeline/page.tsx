@@ -359,7 +359,7 @@ export default function PipelinePage() {
 
         <div className="grid lg:grid-cols-5 gap-8">
           {/* Left: Input form */}
-          <div className="lg:col-span-2 space-y-4">
+          <div className="min-w-0 lg:col-span-2 space-y-4">
             <LocalReadinessCard
               readiness={readiness}
               loading={readinessLoading}
@@ -604,7 +604,7 @@ export default function PipelinePage() {
           </div>
 
           {/* Right: Pipeline visualization */}
-          <div className="lg:col-span-3">
+          <div className="min-w-0 lg:col-span-3">
             <section className="mb-4" aria-labelledby="gate-flow-title">
               <div className="flex items-end justify-between gap-3">
                 <div>

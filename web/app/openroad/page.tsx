@@ -1,6 +1,8 @@
 'use client'
 
 import { CircuitBackground } from '@/components/circuit-bg'
+import { LibreLaneProjectJourney } from '@/components/librelane-project-journey'
+import { LibreLaneReadinessCard } from '@/components/librelane-readiness-card'
 import { OpenroadActivityLog } from '@/components/openroad-activity-log'
 import { TimingWorkbench } from '@/components/timing-workbench'
 import { useI18n } from '@/lib/i18n'
@@ -25,7 +27,17 @@ export default function OpenroadPage() {
         </div>
       </section>
 
-      <TimingWorkbench />
+      <LibreLaneReadinessCard />
+      <LibreLaneProjectJourney />
+      <section className="container mx-auto px-4 py-6 sm:px-6 lg:px-8">
+        <details className="rounded-3xl border border-slate-800 bg-slate-950/50 p-5">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-100">{t('openroad.reference.summary')}</summary>
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-400">{t('openroad.reference.detail')}</p>
+          <div className="mt-5">
+            <TimingWorkbench />
+          </div>
+        </details>
+      </section>
       <OpenroadActivityLog />
     </div>
   )

@@ -1,6 +1,6 @@
 # XylonStudio Local API
 
-Version: 0.5.0
+Version: 0.6.0
 Local base URL used by the web app: `http://127.0.0.1:5001`
 
 The API exposes the canonical local RTL-verification pipeline, a bounded
@@ -21,7 +21,7 @@ The supported API binds to `127.0.0.1`; it is not an authenticated network servi
 {
   "status": "healthy",
   "service": "xylonstudio-api",
-  "version": "0.5.0"
+  "version": "0.6.0"
 }
 ```
 
@@ -185,6 +185,63 @@ Unsupported fields return an error without starting EDA work:
 }
 ```
 
+## Project preflight (v0.6 foundation)
+
+`POST /api/openroad/project-preflight` checks a normalized `xylon-project/v1`
+manifest before any heavy EDA work. The manifest names a project directory inside
+the local Xylon workspace, multiple `.v`/`.sv` sources, an SDC, top module, clocks,
+include directories, and optional macro names. Preflight rejects path traversal,
+escaping symlinks, missing files, unsupported platforms/HDL, duplicate tops,
+missing clocks, invalid SDC units, and undeclared macros. It returns `ready`,
+`needs_correction`, or `cannot_run` with one plain-language action. This endpoint
+does not acquire the OpenROAD resource lease or start a container.
+
+`POST /api/openroad/projects` is the user-facing import boundary. It accepts a
+bounded list of project text files, stores them under the Xylon-owned local
+workspace, persists the preflight result, and never accepts an arbitrary host
+path. A ready import can be sent to `POST /api/timing/project-runs` with only a
+project ID and run ID. Xylon reopens the saved manifest, expands only declared
+local includes into the existing timing input contract, and then uses the same
+resource admission and pinned ORFS baseline path as an inline run. This is still
+the bounded `sky130hd` timing slice, not a general LibreLane flow.
+
+## LibreLane project handoff (v0.6)
+
+The v0.6 LibreLane boundary is explicit and fail-closed:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/openroad/librelane-readiness` | Measure the pinned LibreLane 3.0.10 image, Python, sky130A PDK, and local resource gate without starting a flow |
+| `POST /api/openroad/librelane-project-runs` | Copy one imported project into an owned run directory and persist the exact config/provenance |
+| `POST /api/openroad/librelane-project-runs/{run_id}/execute` | Start the prepared run only when the request contains `approved: true` and readiness is still `ready` |
+| `POST /api/openroad/librelane-project-runs/{run_id}/proposal` | Create one expiring, hash-bound repair proposal from a succeeded baseline with negative native setup WNS |
+| `POST /api/openroad/librelane-project-runs/{run_id}/repair` | After exact approval, rerun one isolated allowlisted density or CTS timing-repair candidate and persist the native comparison |
+| `POST /api/openroad/librelane-project-runs/{run_id}/decision` | After a measured comparison, persist an explicit `accept_candidate` or `keep_baseline` choice and the selected config identity |
+| `POST /api/openroad/librelane-project-runs/{run_id}/selected-execute` | After that decision, explicitly approve one rerun of the selected config and persist its native result and provenance |
+
+If readiness is blocked, preparation records the first blocker and starts no
+subprocess. Execution rechecks the same gate immediately before launch. A
+successful response contains the pinned runtime identity, plan hash, native
+LibreLane resolved configuration, and native metrics readback. No timing result
+is inferred from logs or mocked output.
+
+When the baseline native setup WNS is negative, the proposal endpoint persists a
+single 15-minute proposal bound to the run ID, source revision, baseline config
+hash, and staged input-tree hash. The repair endpoint requires the exact proposal
+ID and `approved: true`; it rechecks readiness and those bindings before copying
+the inputs into an owned candidate directory. The only supported changes are
+`PL_TARGET_DENSITY 0.60 -> 0.65` or `RUN_POST_CTS_RESIZER_TIMING false -> true`.
+A blocked readiness check leaves the proposal retryable and starts no subprocess.
+A successful candidate response includes baseline metrics, candidate metrics, and
+the measured setup-WNS delta. The run then requires one explicit decision: send
+`decision=accept_candidate` to select the candidate, or `decision=keep_baseline` to
+retain the original configuration. The response records both config hashes, the
+selected path, the proposal ID, and the source revision; it does not overwrite the
+baseline. A later `POST .../{run_id}/selected-execute` with `approved=true` copies
+only that selected config and its bound inputs into a new owned rerun directory,
+rechecks both hashes and readiness, then runs the same pinned LibreLane boundary.
+This is a bounded experiment, not timing closure or signoff.
+
 ## Setup-timing journey
 
 The timing API accepts bounded inline RTL and SDC, one top module, and the
@@ -193,6 +250,8 @@ OpenROAD commands, PDK paths, or model parameters.
 
 | Endpoint | Purpose |
 | --- | --- |
+| `POST /api/openroad/projects` | Store a bounded multi-file project and return its preflight state |
+| `POST /api/timing/project-runs` | Start a pinned baseline from a previously imported ready project |
 | `POST /api/timing/runs` | Validate inputs, pass resource admission, run one pinned baseline, and read back WNS/TNS/worst max path or an actionable failure |
 | `GET /api/timing/runs/{run_id}` | Read the persisted public timing state |
 | `POST /api/timing/runs/{run_id}/proposal` | Prepare the single supported evidence-bound candidate after a measured setup violation |
@@ -218,8 +277,40 @@ cleanup all fail closed.
 
 The public state uses `xylon-timing-api/v1` and may contain measured `metrics`,
 one `proposal`, a local `confirmation`, a `comparison`, or an actionable
-`failure`. Improvement remains separate from `timing_clean`; neither state is a
-signoff claim.
+`failure`. A successful run also exposes `evidence.stage_evidence` using
+`xylon-timing-stage-evidence/v1`: it names the OpenROAD stage that actually
+completed (`grt`) and the checksummed report, checkpoint, and effective SDC read
+back from that stage. Improvement remains separate from `timing_clean`; neither
+state is a signoff claim.
+
+## LibreLane project assistant
+
+`POST /api/assistant/librelane` accepts one plain-language request and a loopback
+OpenAI-compatible model configuration. The model returns only a versioned intent;
+Xylon then invokes deterministic project tools using the saved `project_run_id`.
+Supported intents are `inspect_project`, `propose_repair`, `review_comparison`, and
+`rerun_selected`. A selected rerun requires `approved: true`; no other model output
+can start EDA.
+
+The model receives only the user message, locale, and versioned OpenROAD skill and
+knowledge. RTL, SDC, credentials, raw logs, timing metrics, and tool arguments are
+excluded. The response includes public run state, next action, skill digest, and an
+egress record; source and reports remain in the local owned run directory.
+
+```json
+{
+  "schema_version": "xylon-librelane-assistant-request/v1",
+  "message": "Inspect the current timing result and suggest one bounded repair.",
+  "locale": "en",
+  "provider": {
+    "protocol": "openai-compatible",
+    "model": "an-installed-local-model",
+    "base_url": "http://127.0.0.1:11434/v1"
+  },
+  "project_run_id": "run_aaaaaaaaaaaaaaaa",
+  "approved": false
+}
+```
 
 ## Local timing assistant
 

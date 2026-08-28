@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+real_docker="${XYLON_LIBRELANE_DOCKER_REAL:?XYLON_LIBRELANE_DOCKER_REAL is required}"
+[[ -x "${real_docker}" ]] || { echo "LibreLane Docker engine is not executable" >&2; exit 2; }
+pinned_image="ghcr.io/librelane/librelane@sha256:322b81f76d22053e5b92f9eaa6e4fb0440084fd02d77a4de0caa4ba7644c88c3"
+
+case "${1:-}" in
+  --version)
+    [[ "$#" -eq 1 ]] || { echo "LibreLane Docker shim rejects unexpected --version arguments" >&2; exit 2; }
+    exec "${real_docker}" --version
+    ;;
+  info)
+    [[ "$#" -eq 3 && "${2:-}" == "--format" && "${3:-}" == "{{json .}}" ]] || {
+      echo "LibreLane Docker shim allows only 'docker info --format {{json .}}'" >&2
+      exit 2
+    }
+    exec "${real_docker}" info --format "{{json .}}"
+    ;;
+  images)
+    [[ "${LIBRELANE_IMAGE_OVERRIDE:-}" == "${pinned_image}" ]] || {
+      echo "LibreLane Docker shim permits image probes only for the pinned LibreLane image" >&2
+      exit 2
+    }
+    [[ "$#" -eq 2 && "${2:-}" == "${pinned_image}" ]] || {
+      echo "LibreLane Docker shim allows only 'docker images' for the pinned LibreLane image" >&2
+      exit 2
+    }
+    "${real_docker}" image inspect "${pinned_image}" >/dev/null || exit 1
+    printf 'REPOSITORY TAG IMAGE ID CREATED SIZE\n%s\n' "${pinned_image}"
+    exit 0
+    ;;
+  run)
+    shift
+    ;;
+  *)
+    echo "LibreLane Docker shim allows only bounded 'run' invocations and exact read-only probes" >&2
+    exit 2
+    ;;
+esac
+
+image_arg=""
+skip_next=0
+for argument in "$@"; do
+  if [[ "${skip_next}" -eq 1 ]]; then
+    skip_next=0
+    continue
+  fi
+  case "${argument}" in
+    --name|--volume|-v|--env|-e|--label|--workdir|-w|--user|-u|--entrypoint|--hostname|-h|--add-host|--device|--mount|--publish|-p|--expose|--link|--log-driver|--log-opt|--shm-size|--ulimit|--stop-signal|--stop-timeout)
+      skip_next=1
+      ;;
+    --*=*)
+      ;;
+    --*)
+      ;;
+    -*)
+      ;;
+    *)
+      image_arg="${argument}"
+      break
+      ;;
+  esac
+done
+[[ "${image_arg}" == "${pinned_image}" ]] || {
+  echo "LibreLane Docker shim permits only the pinned LibreLane image" >&2
+  exit 2
+}
+
+run_id="${XYLON_LIBRELANE_RUN_ID:?XYLON_LIBRELANE_RUN_ID is required}"
+cidfile="${XYLON_LIBRELANE_CIDFILE:?XYLON_LIBRELANE_CIDFILE is required}"
+[[ "${run_id}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$ ]] || {
+  echo "LibreLane run identity is invalid" >&2
+  exit 2
+}
+[[ "${cidfile}" == /* && -d "$(dirname -- "${cidfile}")" && ! -L "${cidfile}" ]] || {
+  echo "LibreLane container identity file is invalid" >&2
+  exit 2
+}
+
+for argument in "$@"; do
+  case "${argument}" in
+    --privileged|--privileged=*|--network|--network=*|--cpus|--cpus=*|--memory|--memory=*|--memory-swap|--memory-swap=*|--pids-limit|--pids-limit=*|--platform|--platform=*|--read-only|--read-only=*|--cap-add|--cap-add=*|--security-opt|--security-opt=*|--tmpfs|--tmpfs=*)
+      echo "LibreLane Docker resource/security override is not allowed: ${argument}" >&2
+      exit 2
+      ;;
+  esac
+done
+
+exec "${real_docker}" run \
+  --cidfile "${cidfile}" \
+  --label io.xylon.owner=librelane \
+  --label "io.xylon.run_id=${run_id}" \
+  --platform linux/arm64 \
+  --cpus 1 \
+  --memory 8g \
+  --memory-swap 8g \
+  --pids-limit 256 \
+  --network none \
+  --read-only \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --tmpfs /tmp:rw,noexec,nosuid,size=512m \
+  "$@"

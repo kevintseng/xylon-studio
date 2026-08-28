@@ -1,6 +1,6 @@
 {
   "name": "xylonstudio-web",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "XylonStudio Web UI - local OpenROAD timing assistant",
   "private": true,
   "scripts": {

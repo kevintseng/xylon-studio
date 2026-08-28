@@ -20,6 +20,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from agent.api import LOCAL_WEB_ORIGINS
 from agent.api.execution import run_in_local_eda_slot
 from agent.local_app import ManagedProcess, collect_resource_snapshot, terminate_managed_process
+from agent.openroad.project_manifest import preflight_project_manifest
+from agent.openroad.project_store import ProjectStoreError, materialize_timing_input
 from agent.openroad.resource import (
     MINIMUM_DISK_FREE_GIB,
     MINIMUM_MEMORY_AVAILABLE_GIB,
@@ -154,7 +156,7 @@ def _pending_public_state(command: str, payload: dict, current: dict | None = No
         "phase": "queued",
         "platform": payload.get("platform", "sky130hd"),
         "top_module": payload.get("top_module"),
-        "source_revision": os.environ.get("XYLON_SOURCE_REVISION"),
+        "source_revision": payload.get("source_revision") or os.environ.get("XYLON_SOURCE_REVISION"),
         "clock": None,
         "metrics": None,
         "evidence": None,
@@ -206,6 +208,13 @@ class TimingRunRequest(BaseModel):
     @classmethod
     def validate_sdc_bytes(cls, value: str) -> str:
         return _bounded_utf8("sdc", value, MAX_TIMING_SDC_BYTES)
+
+
+class TimingProjectRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    project_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,63}$")
 
 
 class TimingConfirmationRequest(BaseModel):
@@ -699,6 +708,43 @@ async def create_timing_run(request: TimingRunRequest) -> dict:
     return job.public_state
 
 
+@router.post("/timing/project-runs", status_code=202)
+async def create_project_timing_run(request: TimingProjectRunRequest) -> dict:
+    """Start the existing pinned timing flow from an imported project bundle."""
+    project_root = REPO_ROOT / ".xylon" / "projects" / request.project_id
+    manifest_path = project_root / "manifest.json"
+    try:
+        if not manifest_path.is_file() or manifest_path.is_symlink():
+            raise ProjectStoreError("imported project manifest is unavailable; import the bundle again")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict) or manifest.get("project_id") != request.project_id:
+            raise ProjectStoreError("imported project manifest identity is invalid")
+        if manifest.get("state") != "ready":
+            raise ProjectStoreError("project preflight is not ready; correct the bundle before timing")
+        declared_manifest = manifest.get("manifest")
+        if not isinstance(declared_manifest, dict):
+            raise ProjectStoreError("imported project manifest payload is invalid")
+        current_preflight = preflight_project_manifest(REPO_ROOT, declared_manifest)
+        if current_preflight["state"] != "ready" or current_preflight["manifest"] is None:
+            failure = current_preflight.get("failure") or {}
+            raise ProjectStoreError(
+                str(failure.get("message", "the imported project changed after preflight"))
+            )
+        if current_preflight["manifest"].get("source_revision") != declared_manifest.get("source_revision"):
+            raise ProjectStoreError("imported project source revision changed after preflight")
+        timing_input = materialize_timing_input(REPO_ROOT, current_preflight["manifest"])
+    except (OSError, json.JSONDecodeError, KeyError, ProjectStoreError) as error:
+        raise HTTPException(status_code=422, detail={
+            "error": "ProjectTimingInputInvalid",
+            "message": str(error),
+            "recovery": "Import the project again and wait for a ready preflight before starting timing.",
+            "project_id": request.project_id,
+        }) from error
+    await _reject_nonretryable_timing_admission()
+    job = await _start_timing_job("analyze", {"run_id": request.run_id, **timing_input})
+    return job.public_state
+
+
 @router.get("/timing/runs/{run_id}")
 async def get_timing_run(run_id: str) -> dict:
     if len(run_id) != 32 or any(character not in "0123456789abcdef" for character in run_id):
@@ -768,7 +814,8 @@ async def cancel_timing_run(run_id: str, request: Request) -> dict:
 
 
 @router.post("/timing/runs/{run_id}/proposal")
-async def create_timing_proposal(run_id: str) -> dict:
+async def create_timing_proposal(run_id: str, request: Request) -> dict:
+    _require_local_browser_origin(request)
     return await _invoke_timing_bridge("propose", {"run_id": run_id})
 
 
@@ -783,7 +830,8 @@ async def confirm_timing_proposal(
 
 
 @router.post("/timing/runs/{run_id}/candidate", status_code=202)
-async def execute_timing_candidate(run_id: str, request: TimingCandidateRequest) -> dict:
+async def execute_timing_candidate(run_id: str, request: TimingCandidateRequest, browser_request: Request) -> dict:
+    _require_local_browser_origin(browser_request)
     current = await get_timing_run(run_id)
     await _reject_nonretryable_timing_admission()
     job = await _start_timing_job(

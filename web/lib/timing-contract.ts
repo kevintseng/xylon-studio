@@ -104,6 +104,7 @@ export interface TimingState {
     message: string
     recovery: string
     candidateRunId: string | null
+    blockingEvidence: { source: 'stderr' | 'stdout'; detail: string } | null
   } | null
 }
 
@@ -320,6 +321,14 @@ export function normalizeTimingState(value: unknown): TimingState {
       candidateRunId: failureInput.candidate_run_id === null || failureInput.candidate_run_id === undefined
         ? null
         : exactId(failureInput.candidate_run_id, TIMING_RUN_ID_PATTERN, 'failure.candidate_run_id'),
+      blockingEvidence: failureInput.blocking_evidence === null || failureInput.blocking_evidence === undefined
+        ? null
+        : (() => {
+          const evidence = record(failureInput.blocking_evidence, 'failure.blocking_evidence')
+          const source = evidence.source
+          if (source !== 'stderr' && source !== 'stdout') throw new TimingContractError('failure.blocking_evidence.source is invalid')
+          return { source, detail: string(evidence.detail, 'failure.blocking_evidence.detail', 512) }
+        })(),
     },
   }
 

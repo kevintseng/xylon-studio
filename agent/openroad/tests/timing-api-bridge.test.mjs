@@ -41,6 +41,30 @@ test('timing API state exposes decision evidence without report or runtime text'
   assert.doesNotMatch(JSON.stringify(state), /private report body|private runtime output/)
 })
 
+test('blocked timing state exposes only the first bounded runtime blocker', () => {
+  const state = publicTimingState({
+    manifest: {
+      run_id: 'a'.repeat(32),
+      state: 'blocked',
+      error: 'TimingFloorplanCapacityExceeded',
+      recovery: 'Adjust the bounded floorplan recipe, then rerun after review.',
+      platform: 'sky130hd',
+      top_module: 'counter',
+      source_revision: 'b'.repeat(64),
+      blocking_evidence: {
+        source: 'stderr',
+        detail: '[ERROR PDN-0185] Insufficient width to add straps on layer met4',
+      },
+      cleanup: { verified: true, cleanup_verified: true },
+    },
+  })
+  assert.equal(state.failure.code, 'TimingFloorplanCapacityExceeded')
+  assert.deepEqual(state.failure.blocking_evidence, {
+    source: 'stderr',
+    detail: '[ERROR PDN-0185] Insufficient width to add straps on layer met4',
+  })
+})
+
 test('cancelled candidate state binds cleanup-only evidence to the exact candidate run', () => {
   const state = publicTimingState({
     manifest: {
