@@ -81,6 +81,17 @@ def test_invalid_sdc_units_fail_before_execution(tmp_path: Path):
     assert result["failure"]["code"] == "INVALID_SDC_UNIT"
 
 
+def test_unsupported_additional_create_clock_fails_closed(tmp_path: Path):
+    root, payload = _project(tmp_path)
+    (root / "constraints" / "counter.sdc").write_text(
+        "create_clock -name clk -period 10 [get_ports clk]\n"
+        "create_clock -period 5 [get_ports aux]\n",
+        encoding="utf-8",
+    )
+    result = preflight_project_manifest(tmp_path, payload)
+    assert result["failure"]["code"] == "UNSUPPORTED_CREATE_CLOCK"
+
+
 def test_manifest_clock_must_match_sdc_declaration(tmp_path: Path):
     _root, payload = _project(tmp_path)
     payload["clocks"] = [{"name": "clk", "port": "clk", "period_ns": 5}]

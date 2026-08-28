@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import threading
@@ -428,6 +429,98 @@ def _run_with_bounded_output(
     )
 
 
+def _cleanup_owned_containers(
+    run_dir: Path,
+    run_id: str,
+    *,
+    docker: str | None = None,
+    runner=subprocess.run,
+) -> list[str]:
+    """Remove only containers carrying this exact Xylon LibreLane run identity."""
+
+    if not IDENTITY_RE.fullmatch(run_id):
+        raise LibreLaneAdapterError("invalid LibreLane run identity during cleanup")
+    docker_bin = docker or shutil.which("docker")
+    if docker_bin is None:
+        raise LibreLaneAdapterError("Docker is unavailable, so LibreLane cleanup cannot be verified")
+
+    query = runner(
+        [
+            docker_bin,
+            "container",
+            "ls",
+            "-aq",
+            "--no-trunc",
+            "--filter",
+            "label=io.xylon.owner=librelane",
+            "--filter",
+            f"label=io.xylon.run_id={run_id}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15.0,
+    )
+    if query.returncode != 0:
+        raise LibreLaneAdapterError("Docker did not confirm the owned LibreLane container set")
+    container_ids = [line.strip() for line in query.stdout.splitlines() if line.strip()]
+    if len(container_ids) > 4 or any(not re.fullmatch(r"[a-f0-9]{64}", value) for value in container_ids):
+        raise LibreLaneAdapterError("Docker returned an invalid owned LibreLane container set")
+
+    removed: list[str] = []
+    for container_id in container_ids:
+        inspected = runner(
+            [docker_bin, "inspect", "--format", "{{json .Config.Labels}}", container_id],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15.0,
+        )
+        try:
+            labels = json.loads(inspected.stdout) if inspected.returncode == 0 else None
+        except json.JSONDecodeError as error:
+            raise LibreLaneAdapterError("Docker returned invalid LibreLane ownership labels") from error
+        if not isinstance(labels, dict) or labels.get("io.xylon.owner") != "librelane" or labels.get("io.xylon.run_id") != run_id:
+            raise LibreLaneAdapterError("Docker container ownership did not match the LibreLane run")
+        removed_result = runner(
+            [docker_bin, "rm", "-f", container_id],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+        )
+        if removed_result.returncode != 0:
+            raise LibreLaneAdapterError("Docker could not remove an owned LibreLane container")
+        removed.append(container_id)
+
+    verify = runner(
+        [
+            docker_bin,
+            "container",
+            "ls",
+            "-aq",
+            "--no-trunc",
+            "--filter",
+            "label=io.xylon.owner=librelane",
+            "--filter",
+            f"label=io.xylon.run_id={run_id}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15.0,
+    )
+    if verify.returncode != 0 or verify.stdout.strip():
+        raise LibreLaneAdapterError("LibreLane container cleanup could not be verified")
+
+    cidfile = run_dir / "container.cid"
+    if cidfile.is_symlink():
+        raise LibreLaneAdapterError("LibreLane container identity file must not be a symbolic link")
+    if cidfile.exists():
+        cidfile.unlink()
+    return removed
+
+
 def _first_error_line(stderr: str, stdout: str) -> str | None:
     """Return the first actionable tool error, not a preflight/status banner."""
 
@@ -520,9 +613,20 @@ def execute_plan(
                 timeout=timeout_seconds,
             )
     except subprocess.TimeoutExpired as error:
+        try:
+            removed = _cleanup_owned_containers(owned_run, plan.project.request["run_id"])
+        except (OSError, subprocess.SubprocessError, LibreLaneAdapterError) as cleanup_error:
+            raise LibreLaneExecutionError(
+                "LibreLane timed out and container cleanup could not be verified",
+                evidence=_failure_evidence(stage="container_cleanup", plan=plan, error=cleanup_error),
+            ) from cleanup_error
         raise LibreLaneExecutionError(
             "LibreLane execution exceeded the bounded timeout",
-            evidence=_failure_evidence(stage="execution_timeout", plan=plan, error=error),
+            evidence={
+                **_failure_evidence(stage="execution_timeout", plan=plan, error=error),
+                "cleanup_verified": True,
+                "removed_container_count": len(removed),
+            },
         ) from error
     except OSError as error:
         raise LibreLaneExecutionError(
@@ -531,6 +635,14 @@ def execute_plan(
         ) from error
     stdout = _bounded_output(result.stdout)
     stderr = _bounded_output(result.stderr)
+    if runner is None:
+        try:
+            _cleanup_owned_containers(owned_run, plan.project.request["run_id"])
+        except (OSError, subprocess.SubprocessError, LibreLaneAdapterError) as error:
+            raise LibreLaneExecutionError(
+                "LibreLane container cleanup could not be verified",
+                evidence=_failure_evidence(stage="container_cleanup", plan=plan, error=error),
+            ) from error
     try:
         fresh_native_runs = {
             path.name for path in native_runs_root.iterdir() if path.is_dir()

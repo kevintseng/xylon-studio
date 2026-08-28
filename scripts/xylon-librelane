@@ -66,11 +66,14 @@ run_flow() {
   local real_docker
   real_docker="$(command -v docker)" || die "Docker is unavailable; start Docker and retry"
   mkdir -p "${run_abs}/home"
+  rm -f -- "${run_abs}/container.cid"
   (cd -- "${run_abs}" && \
     HOME="${run_abs}/home" \
     PYTHONNOUSERSITE=1 \
     LIBRELANE_IMAGE_OVERRIDE="${image}" \
     XYLON_LIBRELANE_DOCKER_REAL="${real_docker}" \
+    XYLON_LIBRELANE_RUN_ID="$(basename -- "${run_abs}")" \
+    XYLON_LIBRELANE_CIDFILE="${run_abs}/container.cid" \
     PATH="${runtime_bin}:${PATH}" \
     "${python_bin}" -m librelane --docker-no-tty --pdk-root "${pdk_root}" --dockerized "${config_abs}")
 }

@@ -428,6 +428,13 @@ def _parse_sdc_clocks(sdc_text: str) -> list[dict[str, Any]]:
         parsed = _parse_create_clock(line)
         if parsed is not None:
             clocks.append(parsed)
+        elif re.match(r"^create_clock\b", line):
+            _fail(
+                "UNSUPPORTED_CREATE_CLOCK",
+                "every create_clock command must use one -name, one -period, and one get_ports target",
+                field="sdc",
+                action="Rewrite every create_clock command using the supported named-clock form before rerunning preflight.",
+            )
     if not clocks:
         _fail(
             "MISSING_CLOCK",

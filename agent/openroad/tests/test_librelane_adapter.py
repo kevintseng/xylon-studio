@@ -384,6 +384,111 @@ def test_bounded_runner_kills_descendants_that_keep_output_pipe_open(tmp_path: P
     assert time.monotonic() - started < 2.0
 
 
+def test_cleanup_removes_only_exact_owned_librelane_container(tmp_path: Path) -> None:
+    run_id = "run_12345678"
+    container_id = "a" * 64
+    calls: list[list[str]] = []
+    listed = False
+
+    def fake_runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal listed
+        calls.append(command)
+        if command[1:3] == ["container", "ls"]:
+            stdout = "" if listed else f"{container_id}\n"
+            return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+        if command[1] == "inspect":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps({"io.xylon.owner": "librelane", "io.xylon.run_id": run_id}),
+                stderr="",
+            )
+        if command[1:3] == ["rm", "-f"]:
+            listed = True
+            return subprocess.CompletedProcess(command, 0, stdout=f"{container_id}\n", stderr="")
+        raise AssertionError(command)
+
+    (tmp_path / "container.cid").write_text(f"{container_id}\n", encoding="utf-8")
+    removed = adapter._cleanup_owned_containers(
+        tmp_path,
+        run_id,
+        docker="/usr/bin/docker",
+        runner=fake_runner,
+    )
+
+    assert removed == [container_id]
+    assert not (tmp_path / "container.cid").exists()
+    assert ["/usr/bin/docker", "rm", "-f", container_id] in calls
+
+
+def test_cleanup_fails_closed_on_mismatched_container_ownership(tmp_path: Path) -> None:
+    container_id = "b" * 64
+
+    def fake_runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        if command[1:3] == ["container", "ls"]:
+            return subprocess.CompletedProcess(command, 0, stdout=f"{container_id}\n", stderr="")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps({"io.xylon.owner": "other", "io.xylon.run_id": "run_12345678"}),
+            stderr="",
+        )
+
+    with pytest.raises(adapter.LibreLaneAdapterError, match="ownership did not match"):
+        adapter._cleanup_owned_containers(
+            tmp_path,
+            "run_12345678",
+            docker="/usr/bin/docker",
+            runner=fake_runner,
+        )
+
+
+def test_execute_timeout_verifies_container_cleanup_before_returning_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = "run_12345678"
+    run_dir = tmp_path / ".xylon" / "timing" / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    config = run_dir / "config.json"
+    config.write_text("{}\n", encoding="utf-8")
+    launcher = tmp_path / "scripts" / "xylon-librelane"
+    launcher.parent.mkdir()
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o700)
+    project = adapter.LibreLaneMaterializedProject(
+        request={"platform": "sky130hd", "run_id": run_id, "config_path": "config.json"},
+        top="counter",
+        source_revision="a" * 40,
+        design_path="inputs/design.v",
+        sdc_path="inputs/design.sdc",
+        config_path="config.json",
+    )
+    plan = adapter.build_execution_plan(
+        adapter.LibreLaneProbe("available", "/opt/librelane/python", "3.0.10", "ok"),
+        run_dir=run_dir,
+        project=project,
+    )
+    cleanup_calls: list[tuple[Path, str]] = []
+
+    def timeout_runner(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired([str(launcher)], 0.1)
+
+    def cleanup(owned_run: Path, owned_id: str) -> list[str]:
+        cleanup_calls.append((owned_run, owned_id))
+        return ["c" * 64]
+
+    monkeypatch.setattr(adapter, "_run_with_bounded_output", timeout_runner)
+    monkeypatch.setattr(adapter, "_cleanup_owned_containers", cleanup)
+
+    with pytest.raises(adapter.LibreLaneExecutionError, match="bounded timeout") as caught:
+        adapter.execute_plan(tmp_path, run_dir=run_dir, plan=plan, timeout_seconds=0.1)
+
+    assert cleanup_calls == [(run_dir.resolve(), run_id)]
+    assert caught.value.evidence["cleanup_verified"] is True
+    assert caught.value.evidence["removed_container_count"] == 1
+
+
 def test_execute_plan_preserves_native_readback_when_timing_violations_set_exit_code(
     tmp_path: Path,
 ) -> None:

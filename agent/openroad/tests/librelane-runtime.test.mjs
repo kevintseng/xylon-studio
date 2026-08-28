@@ -13,6 +13,15 @@ const dockerShim = path.join(repoRoot, 'runtime/librelane/bin/docker')
 const launcher = path.join(repoRoot, 'scripts/xylon-librelane')
 const pinnedImage = 'ghcr.io/librelane/librelane@sha256:322b81f76d22053e5b92f9eaa6e4fb0440084fd02d77a4de0caa4ba7644c88c3'
 
+function shimEnv(fakeDocker, temp) {
+  return {
+    ...process.env,
+    XYLON_LIBRELANE_DOCKER_REAL: fakeDocker,
+    XYLON_LIBRELANE_RUN_ID: 'run_12345678',
+    XYLON_LIBRELANE_CIDFILE: path.join(temp, 'container.cid'),
+  }
+}
+
 test('LibreLane Docker shim injects fixed resource and network limits', async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'xylon-librelane-docker-'))
   const fakeDocker = path.join(temp, 'docker')
@@ -21,17 +30,20 @@ test('LibreLane Docker shim injects fixed resource and network limits', async ()
   await chmod(fakeDocker, 0o700)
   try {
     await execFileAsync('bash', [dockerShim, 'run', '--name', 'test', pinnedImage, 'command'], {
-      env: { ...process.env, XYLON_LIBRELANE_DOCKER_REAL: fakeDocker },
+      env: shimEnv(fakeDocker, temp),
     })
     const args = await readFile(log, 'utf8')
     assert.match(args, /--platform linux\/arm64/)
     assert.match(args, /--cpus 1/)
     assert.match(args, /--memory 8g/)
     assert.match(args, /--network none/)
+    assert.match(args, /--cidfile .*container\.cid/)
+    assert.match(args, /--label io\.xylon\.owner=librelane/)
+    assert.match(args, /--label io\.xylon\.run_id=run_12345678/)
     for (const override of ['--network', '--network=host', '--cpus=2', '--memory=16g', '--platform=linux/amd64', '--tmpfs=/tmp:rw']) {
       await assert.rejects(
         execFileAsync('bash', [dockerShim, 'run', override, pinnedImage, 'command'], {
-          env: { ...process.env, XYLON_LIBRELANE_DOCKER_REAL: fakeDocker },
+          env: shimEnv(fakeDocker, temp),
         }),
         /resource\/security override is not allowed/,
       )
@@ -49,7 +61,7 @@ test('LibreLane Docker shim rejects an unpinned run image', async () => {
   try {
     await assert.rejects(
       execFileAsync('bash', [dockerShim, 'run', '--name', 'test', 'evil/image:latest', 'command'], {
-        env: { ...process.env, XYLON_LIBRELANE_DOCKER_REAL: fakeDocker },
+        env: shimEnv(fakeDocker, temp),
       }),
       /permits only the pinned LibreLane image/,
     )
